@@ -1,0 +1,12 @@
+[package]
+name = "nextboot-boot"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+uefi.workspace = true
+uefi-services.workspace = true
+log.workspace = true
+nextboot-fs.workspace = true
+nextboot-virtio.workspace = true
+nextboot-menu.workspace = true

@@ -1,0 +1,8 @@
+[package]
+name = "nextboot-menu"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+uefi.workspace = true
+log.workspace = true

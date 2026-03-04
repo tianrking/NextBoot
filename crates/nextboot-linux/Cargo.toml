@@ -1,0 +1,8 @@
+[package]
+name = "nextboot-linux"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+uefi.workspace = true
+log.workspace = true

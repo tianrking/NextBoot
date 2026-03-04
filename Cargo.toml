@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nextboot-boot",
+    "crates/nextboot-fs",
+    "crates/nextboot-virtio",
+    "crates/nextboot-menu",
+    "crates/nextboot-linux",
+    "crates/nextboot-windows",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nextboot/nextboot"
+authors = ["NextBoot Team"]
+
+[workspace.dependencies]
+# UEFI 核心
+uefi = { version = "0.28", features = ["global_allocator", "panic_handler"] }
+uefi-services = "0.25"
+
+# 日志
+log = "0.4"
+
+# GPT 分区表
+gpt = "4.0"
+
+# 工具库
+bitflags = "2.4"
+byteorder = { version = "1.5", default-features = false }
+
+# 内部 crate
+nextboot-fs = { path = "crates/nextboot-fs" }
+nextboot-virtio = { path = "crates/nextboot-virtio" }
+nextboot-menu = { path = "crates/nextboot-menu" }
+nextboot-linux = { path = "crates/nextboot-linux" }
+nextboot-windows = { path = "crates/nextboot-windows" }
+
+[profile.dev]
+opt-level = 1
+debug = true
+
+[profile.release]
+opt-level = "z"      # 优化大小
+lto = true           # Link-time optimization
+codegen-units = 1    # 更好的优化
+panic = "abort"      # 减少 panic 处理代码
+strip = true         # 移除符号

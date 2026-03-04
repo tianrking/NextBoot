@@ -1,0 +1,9 @@
+[package]
+name = "nextboot-virtio"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+uefi.workspace = true
+log.workspace = true
+bitflags.workspace = true

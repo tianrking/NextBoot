@@ -1,0 +1,16 @@
+# UEFI 编译目标配置
+
+[build]
+target = "x86_64-unknown-uefi"
+
+[target.x86_64-unknown-uefi]
+runner = "qemu-system-x86_64"
+rustflags = [
+    # UEFI 调用约定
+    "-C", "link-arg=/subsystem:efi_application",
+]
+
+[unstable]
+# 启用 build-std 以支持 no_std
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]

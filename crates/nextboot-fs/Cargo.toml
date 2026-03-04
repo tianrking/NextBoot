@@ -1,0 +1,16 @@
+[package]
+name = "nextboot-fs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+uefi.workspace = true
+log.workspace = true
+byteorder.workspace = true
+bitflags.workspace = true
+
+[features]
+default = ["fat32", "exfat", "iso9660"]
+fat32 = []
+exfat = []
+iso9660 = []
