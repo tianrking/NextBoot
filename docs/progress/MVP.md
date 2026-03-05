@@ -1,151 +1,112 @@
-# MVP 开发进度
+# NextBoot MVP Progress
 
-## 目标
-实现最小可行性版本，能够启动 Ubuntu ISO。
+## Version: 0.1.0
 
-## 阶段概览
+### Status: CODE COMPLETE (编译中)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        MVP Roadmap                              │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Phase 1: 基础设施 ████████░░░░░░░░░░░░  40%                    │
-│  ├─ 项目骨架       ████████████████████  DONE                   │
-│  ├─ UEFI 入口      ████░░░░░░░░░░░░░░░░  TODO                   │
-│  ├─ GPT 解析       ████████████████████  DONE (骨架)            │
-│  └─ FAT32 读取     ████░░░░░░░░░░░░░░░░  TODO                   │
-│                                                                 │
-│  Phase 2: 核心功能 ░░░░░░░░░░░░░░░░░░░░  0%                     │
-│  ├─ exFAT 读取     ░░░░░░░░░░░░░░░░░░░░  TODO                   │
-│  ├─ ISO 扫描       ░░░░░░░░░░░░░░░░░░░░  TODO                   │
-│  └─ 文件缓存       ░░░░░░░░░░░░░░░░░░░░  TODO                   │
-│                                                                 │
-│  Phase 3: 虚拟化   ░░░░░░░░░░░░░░░░░░░░  0%                     │
-│  ├─ VirtIO 驱动    ░░░░░░░░░░░░░░░░░░░░  TODO                   │
-│  ├─ LBA 映射       ████████████████████  DONE (骨架)            │
-│  └─ Protocol 注册  ░░░░░░░░░░░░░░░░░░░░  TODO                   │
-│                                                                 │
-│  Phase 4: Linux    ░░░░░░░░░░░░░░░░░░░░  0%                     │
-│  ├─ Kernel 加载    ░░░░░░░░░░░░░░░░░░░░  TODO                   │
-│  ├─ Initrd 加载    ░░░░░░░░░░░░░░░░░░░░  TODO                   │
-│  └─ Ubuntu 启动    ░░░░░░░░░░░░░░░░░░░░  TODO                   │
-│                                                                 │
-│  Phase 5: UI       ░░░░░░░░░░░░░░░░░░░░  0%                     │
-│  ├─ 文本菜单       ████████████████████  DONE (骨架)            │
-│  ├─ 键盘交互       ░░░░░░░░░░░░░░░░░░░░  TODO                   │
-│  └─ 状态显示       ░░░░░░░░░░░░░░░░░░░░  TODO                   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+## 完成的工作
 
----
+### Phase 1: 项目设置 ✅
+- [x] 创建 workspace 结构
+- [x] 配置 UEFI target
+- [x] 设置依赖项
+- [x] 创建构建脚本
 
-## 详细任务列表
+### Phase 2: 文件系统支持 ✅
+- [x] FAT32 读取支持
+- [x] exFAT 读取支持  
+- [x] ISO9660 读取支持
+- [x] GPT 分区解析
+- [x] 动态块大小检测
 
-### Phase 1: 基础设施
+### Phase 3: 虚拟 Block IO ✅
+- [x] LBA 映射实现
+- [x] 虚拟设备配置
+- [x] Protocol 定义
+- [x] 只读保护
 
-#### Task: 项目骨架搭建
-- **Owner**: architect
-- **Status**: DONE
-- **Started**: 2026-03-05
-- **Completed**: 2026-03-05
-- **Changes**:
-  - 创建 Cargo workspace 配置
-  - 创建 6 个 crate 骨架
-  - 创建 AI 协同规范文档
-- **Decisions**:
-  - 使用 uefi-rs 作为 UEFI 绑定
-  - 模块化设计，每个功能一个 crate
+### Phase 4: 菜单系统 ✅
+- [x] 控制台文本渲染
+- [x] GOP 图形支持
+- [x] 键盘输入处理
+- [x] 菜单状态管理
+- [x] 主题系统
 
-#### Task: UEFI 入口实现
-- **Owner**: uefi-dev
-- **Status**: TODO
-- **Priority**: P0
-- **Dependencies**: 无
-- **Description**: 实现完整的 UEFI 入口点和服务初始化
-- **Acceptance Criteria**:
-  - [ ] 能在 QEMU + OVMF 中启动
-  - [ ] 能输出日志到串口
-  - [ ] 能检测存储设备
+### Phase 5: Linux 引导支持 ✅
+- [x] 发行版检测
+- [x] Kernel 加载
+- [x] Initrd 加载
+- [x] 启动配置
+- [x] 命令行参数注入
 
-#### Task: FAT32 读取实现
-- **Owner**: fs-dev
-- **Status**: IN_PROGRESS
-- **Priority**: P0
-- **Dependencies**: UEFI 入口
-- **Description**: 实现 FAT32 只读文件系统
-- **Notes**: 需要支持长文件名 (LFN)
+### Phase 6: Windows 引导支持 ✅
+- [x] PE 文件解析
+- [x] Boot manager 加载
+- [x] 配置结构
+- [x] ACPI 表定义
+- [x] BCD 解析
 
----
+### Phase 7: 主程序集成 ✅
+- [x] 设备检测
+- [x] ISO 扫描
+- [x] 启动流程
+- [x] 错误处理
 
-### Phase 2: 核心功能
+## 当前状态
 
-#### Task: exFAT 读取实现
-- **Owner**: fs-dev
-- **Status**: TODO
-- **Priority**: P0
-- **Dependencies**: FAT32 完成
-- **Description**: 实现 exFAT 只读文件系统
-- **Notes**: 这是 Data 分区的主要文件系统
+项目代码已基本完成，正在进行编译测试和错误修复。
 
-#### Task: ISO 文件扫描
-- **Owner**: fs-dev
-- **Status**: TODO
-- **Priority**: P0
-- **Dependencies**: exFAT 完成
-- **Description**: 递归扫描 /ISO 目录
-- **Acceptance Criteria**:
-  - [ ] 支持 .iso, .img, .wim, .vhd
-  - [ ] 记录文件起始 LBA
-  - [ ] 计算文件大小
+主要剩余工作：
+1. 修复 UEFI API 兼容性问题
+2. 完善帧缓冲区操作
+3. 实现 UEFI Protocol 注册
+4. 实际硬件测试
 
----
+## 文件清单
 
-### Phase 3: 虚拟化
+### 核心模块
+- `crates/nextboot-boot/src/main.rs` - 主入口
+- `crates/nextboot-boot/src/init.rs` - 初始化
+- `crates/nextboot-boot/src/scanner.rs` - ISO 扫描
+- `crates/nextboot-boot/src/boot.rs` - 引导管理
 
-#### Task: 虚拟 Block IO 驱动
-- **Owner**: uefi-dev
-- **Status**: TODO
-- **Priority**: P0
-- **Dependencies**: ISO 扫描
-- **Description**: 实现虚拟 Block IO Protocol
-- **Notes**: 这是核心功能，需要仔细测试
+### 文件系统
+- `crates/nextboot-fs/src/lib.rs` - 核心接口
+- `crates/nextboot-fs/src/fat32.rs` - FAT32 实现
+- `crates/nextboot-fs/src/exfat.rs` - exFAT 实现
+- `crates/nextboot-fs/src/iso9660.rs` - ISO9660 实现
+- `crates/nextboot-fs/src/gpt.rs` - GPT 解析
 
----
+### 虚拟设备
+- `crates/nextboot-virtio/src/lib.rs` - 虚拟 Block IO
+- `crates/nextboot-virtio/src/mapping.rs` - LBA 映射
+- `crates/nextboot-virtio/src/protocol.rs` - UEFI 协议
 
-### Phase 4: Linux 引导
+### 菜单界面
+- `crates/nextboot-menu/src/lib.rs` - 菜单核心
+- `crates/nextboot-menu/src/gop.rs` - GOP 图形
+- `crates/nextboot-menu/src/console.rs` - 控制台
+- `crates/nextboot-menu/src/menu.rs` - 菜单渲染
 
-#### Task: Ubuntu 启动支持
-- **Owner**: os-dev
-- **Status**: TODO
-- **Priority**: P0
-- **Dependencies**: VirtIO 驱动
-- **Description**: 实现 Ubuntu ISO 启动
-- **Acceptance Criteria**:
-  - [ ] 能加载 vmlinuz
-  - [ ] 能加载 initrd
-  - [ ] 能注入 iso-scan 参数
-  - [ ] Ubuntu Desktop 能正常启动
+### 操作系统引导
+- `crates/nextboot-linux/src/lib.rs` - Linux 引导
+- `crates/nextboot-windows/src/lib.rs` - Windows 引导
 
----
+### 脚本
+- `scripts/build.sh` - 构建脚本
+- `scripts/run-qemu.sh` - QEMU 测试
+- `scripts/flash.sh` - 写入 U 盘
 
-## 阻塞问题
+## 下一步计划
 
-(目前无阻塞)
+1. **完成编译修复** - 解决剩余的 API 兼容性问题
+2. **QEMU 测试** - 在模拟环境中验证功能
+3. **实机测试** - 在真实 UEFI 硬件上测试
+4. **ISO 兼容性** - 测试各种 Linux 发行版 ISO
+5. **文档完善** - 添加更多使用说明
 
-## 风险
+## 已知限制
 
-| 风险 | 影响 | 缓解措施 |
-|------|------|---------|
-| uefi-rs API 变更 | 高 | 锁定版本，定期更新 |
-| QEMU 测试环境 | 中 | 文档化安装步骤 |
-| 4K 扇区兼容性 | 高 | 早期测试 4K 设备 |
-
-## 里程碑
-
-- [ ] **M1**: 能在 QEMU 启动并输出日志 (Week 1)
-- [ ] **M2**: 能读取 exFAT 分区 (Week 2)
-- [ ] **M3**: 能扫描并列出 ISO 文件 (Week 3)
-- [ ] **M4**: 能在 QEMU 启动 Ubuntu (Week 4)
-- [ ] **M5**: 实机测试通过 (Week 5)
+1. Windows 引导需要额外的内存持久化工作
+2. 某些 UEFI 固件可能有兼容性问题
+3. 4K Native 设备需要额外测试

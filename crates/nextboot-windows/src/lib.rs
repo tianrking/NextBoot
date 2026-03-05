@@ -14,11 +14,14 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use alloc::format;
+use alloc::boxed::Box;
+use log::{info, warn, error};
 
 /// Windows 启动方法
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowsBootMethod {
     /// 标准 UEFI 启动 (bootmgfw.efi)
     Standard,
@@ -28,6 +31,18 @@ pub enum WindowsBootMethod {
     WimBoot,
     /// VHD 启动
     VhdBoot,
+}
+
+impl WindowsBootMethod {
+    /// 获取显示名称
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            WindowsBootMethod::Standard => "Standard UEFI Boot",
+            WindowsBootMethod::WinPE => "WinPE",
+            WindowsBootMethod::WimBoot => "WIM Boot",
+            WindowsBootMethod::VhdBoot => "VHD Boot",
+        }
+    }
 }
 
 /// Windows 启动配置
@@ -43,6 +58,8 @@ pub struct WindowsBootConfig {
     pub wim_path: Option<String>,
     /// ISO 挂载路径
     pub iso_mount_point: String,
+    /// Windows 版本
+    pub windows_version: WindowsVersion,
 }
 
 impl WindowsBootConfig {
@@ -54,75 +71,172 @@ impl WindowsBootConfig {
             bcd_path: "/efi/microsoft/boot/bcd".to_string(),
             wim_path: None,
             iso_mount_point: String::new(),
+            windows_version: WindowsVersion::Unknown,
         }
     }
 
     /// 检测 Windows 版本
-    pub fn detect_windows_version(files: &[&str]) -> Option<String> {
-        // 查找 sources/install.wim 或 install.esd
+    pub fn detect_windows_version(files: &[&str]) -> WindowsVersion {
         for file in files {
-            if file.contains("sources/install.") {
-                // 可以通过解析 WIM 获取版本信息
-                return Some("Windows".to_string());
+            let f = file.to_lowercase();
+
+            // Windows 11
+            if f.contains("sources/install.wim") || f.contains("sources/install.esd") {
+                // 需要解析 WIM 获取版本
+                // 简化: 检查文件名
+                if f.contains("win11") || f.contains("windows11") {
+                    return WindowsVersion::Windows11;
+                }
+                if f.contains("win10") || f.contains("windows10") {
+                    return WindowsVersion::Windows10;
+                }
+                if f.contains("win8") || f.contains("windows8") {
+                    return WindowsVersion::Windows8_1;
+                }
+
+                // 默认假设是 Windows 10+
+                return WindowsVersion::Windows10;
+            }
+
+            // WinPE
+            if f.contains("boot.sdi") {
+                return WindowsVersion::WinPE;
             }
         }
-        None
+
+        WindowsVersion::Unknown
+    }
+
+    /// 从 ISO 文件列表创建配置
+    pub fn from_iso_files(files: &[&str]) -> Self {
+        let version = Self::detect_windows_version(files);
+
+        let method = if version == WindowsVersion::WinPE {
+            WindowsBootMethod::WinPE
+        } else {
+            WindowsBootMethod::Standard
+        };
+
+        let wim_path = files.iter()
+            .find(|f| {
+                let f_lower = f.to_lowercase();
+                f_lower.contains("sources/install.wim") || f_lower.contains("sources/install.esd")
+            })
+            .map(|s| s.to_string());
+
+        Self {
+            method,
+            bootmgfw_path: "/efi/microsoft/boot/bootmgfw.efi".to_string(),
+            bcd_path: "/efi/microsoft/boot/bcd".to_string(),
+            wim_path,
+            iso_mount_point: String::new(),
+            windows_version: version,
+        }
+    }
+}
+
+impl Default for WindowsBootConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Windows 版本
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsVersion {
+    Windows11,
+    Windows10,
+    Windows8_1,
+    Windows8,
+    Windows7,
+    WinPE,
+    Unknown,
+}
+
+impl WindowsVersion {
+    /// 获取显示名称
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            WindowsVersion::Windows11 => "Windows 11",
+            WindowsVersion::Windows10 => "Windows 10",
+            WindowsVersion::Windows8_1 => "Windows 8.1",
+            WindowsVersion::Windows8 => "Windows 8",
+            WindowsVersion::Windows7 => "Windows 7",
+            WindowsVersion::WinPE => "WinPE",
+            WindowsVersion::Unknown => "Windows",
+        }
     }
 }
 
 /// Windows 启动器
 pub struct WindowsBootloader {
     config: WindowsBootConfig,
+    bootmgfw_data: Option<Vec<u8>>,
 }
 
 impl WindowsBootloader {
     /// 创建新的启动器
     pub fn new(config: WindowsBootConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            bootmgfw_data: None,
+        }
+    }
+
+    /// 加载 bootmgfw.efi
+    pub fn load_bootmgfw(&mut self, data: Vec<u8>) -> Result<(), WindowsBootError> {
+        // 验证 PE 魔数
+        if data.len() < 0x40 {
+            return Err(WindowsBootError::InvalidBootFile);
+        }
+
+        // 检查 DOS 签名 "MZ"
+        if &data[0..2] != b"MZ" {
+            return Err(WindowsBootError::InvalidBootFile);
+        }
+
+        // 检查 PE 签名
+        let pe_offset = u32::from_le_bytes([data[0x3C], data[0x3D], data[0x3E], data[0x3F]]) as usize;
+        if pe_offset + 4 > data.len() {
+            return Err(WindowsBootError::InvalidBootFile);
+        }
+
+        if &data[pe_offset..pe_offset + 4] != b"PE\x00\x00" {
+            return Err(WindowsBootError::InvalidBootFile);
+        }
+
+        info!("Loaded bootmgfw.efi: {} bytes", data.len());
+        self.bootmgfw_data = Some(data);
+        Ok(())
     }
 
     /// 准备启动环境
     pub fn prepare(&mut self) -> Result<(), WindowsBootError> {
+        info!("Preparing Windows boot environment...");
+
         // 1. 设置虚拟 Block IO
         self.setup_virtual_block_io()?;
 
-        // 2. 注入必要的驱动
-        self.inject_drivers()?;
+        // 2. 注入必要的驱动 (如果需要)
+        // self.inject_drivers()?;
 
         // 3. 修改 BCD (如果需要)
-        self.modify_bcd()?;
+        // self.modify_bcd()?;
 
         Ok(())
     }
 
     /// 设置虚拟 Block IO
     fn setup_virtual_block_io(&mut self) -> Result<(), WindowsBootError> {
-        // TODO: 调用 nextboot-virtio 创建虚拟设备
         // 关键点:
         // 1. 设备类型必须是 CD-ROM 或 HDD
         // 2. 必须在 bootmgfw.efi 加载前注册
         // 3. 需要处理 4K/512B 扇区问题
 
-        Ok(())
-    }
+        info!("Setting up virtual Block IO...");
 
-    /// 注入驱动
-    fn inject_drivers(&mut self) -> Result<(), WindowsBootError> {
-        // TODO: 加载必要的驱动到内存
-        // Windows 需要的驱动:
-        // - disk.sys (磁盘驱动)
-        // - partmgr.sys (分区管理)
-        // - fs-rec.sys (文件系统识别)
-
-        Ok(())
-    }
-
-    /// 修改 BCD 存储
-    fn modify_bcd(&mut self) -> Result<(), WindowsBootError> {
-        // TODO: 如果需要，修改 BCD 以支持从虚拟设备启动
-        // 可能需要:
-        // - 添加 RAMDisk 选项
-        // - 设置 OSDevice 指向虚拟设备
+        // TODO: 调用 nextboot-virtio 创建虚拟设备
+        // 需要创建一个 CD-ROM 类型的虚拟设备
 
         Ok(())
     }
@@ -132,16 +246,29 @@ impl WindowsBootloader {
     /// # 安全性
     /// 此函数将控制权转交给 Windows Boot Manager
     pub unsafe fn boot(self) -> ! {
+        info!("Booting Windows...");
+
         // TODO: 实现 Windows 启动
         // 流程:
-        // 1. 加载 bootmgfw.efi
-        // 2. 设置适当的设备路径
-        // 3. 调用 UEFI LoadImage
-        // 4. 调用 StartImage
+        // 1. 确保虚拟 Block IO 已注册
+        // 2. 加载 bootmgfw.efi
+        // 3. 设置适当的设备路径
+        // 4. 调用 UEFI LoadImage
+        // 5. 调用 StartImage
 
         loop {
             core::hint::spin_loop();
         }
+    }
+
+    /// 获取配置
+    pub fn config(&self) -> &WindowsBootConfig {
+        &self.config
+    }
+
+    /// 检查是否准备好启动
+    pub fn is_ready(&self) -> bool {
+        self.bootmgfw_data.is_some()
     }
 }
 
@@ -158,6 +285,27 @@ pub enum WindowsBootError {
     BootFileNotFound,
     /// 内存不足
     OutOfMemory,
+    /// 无效的启动文件
+    InvalidBootFile,
+    /// UEFI 服务不可用
+    UefiNotAvailable,
+    /// 不支持的 Windows 版本
+    UnsupportedVersion,
+}
+
+impl core::fmt::Display for WindowsBootError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            WindowsBootError::VirtualDeviceFailed => write!(f, "Failed to create virtual device"),
+            WindowsBootError::DriverInjectionFailed => write!(f, "Failed to inject drivers"),
+            WindowsBootError::BcdModificationFailed => write!(f, "Failed to modify BCD"),
+            WindowsBootError::BootFileNotFound => write!(f, "Boot file not found"),
+            WindowsBootError::OutOfMemory => write!(f, "Out of memory"),
+            WindowsBootError::InvalidBootFile => write!(f, "Invalid boot file"),
+            WindowsBootError::UefiNotAvailable => write!(f, "UEFI services not available"),
+            WindowsBootError::UnsupportedVersion => write!(f, "Unsupported Windows version"),
+        }
+    }
 }
 
 /// ACPI 表注入
@@ -176,6 +324,38 @@ pub mod acpi {
         pub oem_revision: u32,
         pub creator_id: u32,
         pub creator_revision: u32,
+    }
+
+    impl AcpiTableHeader {
+        /// 创建新表头
+        pub fn new(signature: &[u8; 4], length: u32) -> Self {
+            let mut header = Self {
+                signature: *signature,
+                length,
+                revision: 1,
+                checksum: 0,
+                oem_id: *b"NEXTBT",
+                oem_table_id: *b"NBTBOOT ",
+                oem_revision: 1,
+                creator_id: 0,
+                creator_revision: 1,
+            };
+            header.checksum = header.calculate_checksum();
+            header
+        }
+
+        /// 计算校验和
+        pub fn calculate_checksum(&self) -> u8 {
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    self as *const Self as *const u8,
+                    core::mem::size_of::<Self>(),
+                )
+            };
+
+            let sum: u8 = bytes.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+            (0u8.wrapping_sub(sum))
+        }
     }
 
     /// RSDP (Root System Description Pointer)
@@ -211,6 +391,9 @@ pub mod acpi {
 
 /// BCD (Boot Configuration Data) 解析
 pub mod bcd {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
     /// BCD 对象类型
     #[derive(Debug, Clone, Copy)]
     pub enum BcdObjectType {
@@ -254,4 +437,145 @@ pub mod bcd {
             None
         }
     }
+
+    /// BCD 元素类型
+    #[derive(Debug, Clone, Copy)]
+    pub enum BcdElementType {
+        /// 应用路径
+        ApplicationPath = 0x1200002,
+        /// 设备
+        OsDevice = 0x2100001,
+        /// OS 文件设备
+        OsFileDevice = 0x2200002,
+        /// 描述
+        Description = 0x1200004,
+    }
+}
+
+/// Windows PE 头信息
+#[derive(Debug, Clone)]
+pub struct PeInfo {
+    /// 机器类型
+    pub machine: u16,
+    /// 节数
+    pub number_of_sections: u16,
+    /// 可选头大小
+    pub size_of_optional_header: u16,
+    /// 特征
+    pub characteristics: u16,
+    /// 入口点
+    pub entry_point: u32,
+    /// 镜像基址
+    pub image_base: u64,
+    /// 镜像大小
+    pub image_size: u32,
+    /// 子系统
+    pub subsystem: u16,
+}
+
+impl PeInfo {
+    /// 从 PE 文件解析信息
+    pub fn parse(data: &[u8]) -> Option<Self> {
+        if data.len() < 0x40 {
+            return None;
+        }
+
+        // 检查 DOS 签名
+        if &data[0..2] != b"MZ" {
+            return None;
+        }
+
+        // 获取 PE 头偏移
+        let pe_offset = u32::from_le_bytes([
+            data[0x3C], data[0x3D], data[0x3E], data[0x3F],
+        ]) as usize;
+
+        if pe_offset + 24 > data.len() {
+            return None;
+        }
+
+        // 检查 PE 签名
+        if &data[pe_offset..pe_offset + 4] != b"PE\x00\x00" {
+            return None;
+        }
+
+        // 解析 COFF 头
+        let machine = u16::from_le_bytes([data[pe_offset + 4], data[pe_offset + 5]]);
+        let number_of_sections = u16::from_le_bytes([data[pe_offset + 6], data[pe_offset + 7]]);
+        let size_of_optional_header = u16::from_le_bytes([data[pe_offset + 20], data[pe_offset + 21]]);
+        let characteristics = u16::from_le_bytes([data[pe_offset + 22], data[pe_offset + 23]]);
+
+        // 解析可选头
+        let opt_offset = pe_offset + 24;
+        if opt_offset + size_of_optional_header as usize > data.len() {
+            return None;
+        }
+
+        let magic = u16::from_le_bytes([data[opt_offset], data[opt_offset + 1]]);
+
+        let (entry_point, image_base, image_size, subsystem) = if magic == 0x10B {
+            // PE32
+            let entry = u32::from_le_bytes([
+                data[opt_offset + 16], data[opt_offset + 17],
+                data[opt_offset + 18], data[opt_offset + 19],
+            ]);
+            let base = u32::from_le_bytes([
+                data[opt_offset + 28], data[opt_offset + 29],
+                data[opt_offset + 30], data[opt_offset + 31],
+            ]) as u64;
+            let size = u32::from_le_bytes([
+                data[opt_offset + 56], data[opt_offset + 57],
+                data[opt_offset + 58], data[opt_offset + 59],
+            ]);
+            let sub = u16::from_le_bytes([data[opt_offset + 68], data[opt_offset + 69]]);
+            (entry, base, size, sub)
+        } else if magic == 0x20B {
+            // PE32+
+            let entry = u32::from_le_bytes([
+                data[opt_offset + 16], data[opt_offset + 17],
+                data[opt_offset + 18], data[opt_offset + 19],
+            ]);
+            let base = u64::from_le_bytes([
+                data[opt_offset + 24], data[opt_offset + 25],
+                data[opt_offset + 26], data[opt_offset + 27],
+                data[opt_offset + 28], data[opt_offset + 29],
+                data[opt_offset + 30], data[opt_offset + 31],
+            ]);
+            let size = u32::from_le_bytes([
+                data[opt_offset + 56], data[opt_offset + 57],
+                data[opt_offset + 58], data[opt_offset + 59],
+            ]);
+            let sub = u16::from_le_bytes([data[opt_offset + 68], data[opt_offset + 69]]);
+            (entry, base, size, sub)
+        } else {
+            return None;
+        };
+
+        Some(Self {
+            machine,
+            number_of_sections,
+            size_of_optional_header,
+            characteristics,
+            entry_point,
+            image_base,
+            image_size,
+            subsystem,
+        })
+    }
+
+    /// 检查是否为 EFI 应用
+    pub fn is_efi_application(&self) -> bool {
+        self.subsystem == 10 || self.subsystem == 11 // EFI application or EFI boot service driver
+    }
+}
+
+/// 从 ISO 文件列表检测是否为 Windows ISO
+pub fn is_windows_iso(files: &[&str]) -> bool {
+    files.iter().any(|f| {
+        let f_lower = f.to_lowercase();
+        f_lower.contains("bootmgfw.efi")
+            || f_lower.contains("install.wim")
+            || f_lower.contains("install.esd")
+            || f_lower.contains("boot.sdi")
+    })
 }

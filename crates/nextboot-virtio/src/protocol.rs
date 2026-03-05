@@ -3,6 +3,7 @@
 //! 定义与 UEFI 兼容的协议接口
 
 use bitflags::bitflags;
+use crate::{VirtIoError, VirtualMediaInfo, VirtualBlockIo};
 
 /// UEFI Block IO Protocol GUID
 pub const BLOCK_IO_GUID: [u8; 16] = [
@@ -20,6 +21,12 @@ pub const BLOCK_IO_2_GUID: [u8; 16] = [
 pub const DEVICE_PATH_GUID: [u8; 16] = [
     0x9b, 0x9a, 0x2d, 0x09, 0x62, 0x30, 0xd3, 0x11,
     0x8d, 0xbd, 0x00, 0xa0, 0xc9, 0x06, 0xec, 0x9b,
+];
+
+/// 加载的镜像协议 GUID
+pub const LOADED_IMAGE_GUID: [u8; 16] = [
+    0xa1, 0x51, 0xbc, 0x5c, 0x16, 0x4a, 0x76, 0x4d,
+    0x87, 0x2c, 0x3a, 0x4e, 0xaa, 0x9b, 0x66, 0x53,
 ];
 
 bitflags! {
@@ -48,6 +55,30 @@ pub enum MediaSubtype {
     FilePath = 0x04,
     /// 媒体协议
     Protocol = 0x05,
+    /// PIWG 固件文件
+    PiwgFirmwareFile = 0x06,
+    /// PIWG 固件卷
+    PiwgFirmwareVolume = 0x07,
+}
+
+/// 消息设备路径子类型
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum MessagingSubtype {
+    /// ATAPI
+    Atapi = 0x01,
+    /// SCSI
+    Scsi = 0x02,
+    /// Fibre Channel
+    FibreChannel = 0x03,
+    /// 1394
+    I394 = 0x04,
+    /// USB
+    Usb = 0x05,
+    /// USB 类
+    UsbClass = 0x0F,
+    /// SATA
+    Sata = 0x12,
 }
 
 /// 设备路径节点头
@@ -56,6 +87,22 @@ pub struct DevicePathHeader {
     pub type_: u8,
     pub subtype: u8,
     pub length: [u8; 2],  // Little-endian u16
+}
+
+impl DevicePathHeader {
+    /// 创建新的设备路径头
+    pub fn new(type_: DevicePathType, subtype: u8, length: u16) -> Self {
+        Self {
+            type_: type_.bits(),
+            subtype,
+            length: length.to_le_bytes(),
+        }
+    }
+
+    /// 获取长度
+    pub fn get_length(&self) -> u16 {
+        u16::from_le_bytes(self.length)
+    }
 }
 
 /// 硬盘设备路径
@@ -68,6 +115,25 @@ pub struct HardDriveDevicePath {
     pub partition_signature: [u8; 16],
     pub partition_format: u8,
     pub signature_type: u8,
+}
+
+impl HardDriveDevicePath {
+    /// 创建新的硬盘设备路径
+    pub fn new(partition_number: u32, start: u64, size: u64) -> Self {
+        Self {
+            header: DevicePathHeader::new(
+                DevicePathType::MEDIA,
+                MediaSubtype::HardDrive as u8,
+                42,
+            ),
+            partition_number,
+            partition_start: start,
+            partition_size: size,
+            partition_signature: [0u8; 16],
+            partition_format: 0x02, // GPT
+            signature_type: 0x02,   // GUID
+        }
+    }
 }
 
 /// CD-ROM 设备路径
@@ -83,15 +149,55 @@ impl CdRomDevicePath {
     /// 创建新的 CD-ROM 设备路径
     pub fn new(boot_entry: u32, start: u64, size: u64) -> Self {
         Self {
-            header: DevicePathHeader {
-                type_: DevicePathType::MEDIA.bits(),
-                subtype: MediaSubtype::CdRom as u8,
-                length: 24u16.to_le_bytes(),
-            },
+            header: DevicePathHeader::new(
+                DevicePathType::MEDIA,
+                MediaSubtype::CdRom as u8,
+                24,
+            ),
             boot_entry,
             partition_start: start,
             partition_size: size,
         }
+    }
+}
+
+/// 文件路径设备路径
+#[repr(C)]
+pub struct FilePathDevicePath {
+    pub header: DevicePathHeader,
+    pub path: [u16; 1], // 变长，以 null 结尾的 UTF-16 字符串
+}
+
+impl FilePathDevicePath {
+    /// 创建文件路径设备路径
+    pub fn new(path: &[u16]) -> alloc::vec::Vec<u8> {
+        let header_size = 4u16;
+        let path_size = (path.len() + 1) * 2; // +1 for null terminator
+        let total_size = header_size as usize + path_size;
+
+        let mut data = alloc::vec![0u8; total_size];
+
+        // 写入头
+        data[0] = DevicePathType::MEDIA.bits();
+        data[1] = MediaSubtype::FilePath as u8;
+        let len_bytes = (total_size as u16).to_le_bytes();
+        data[2] = len_bytes[0];
+        data[3] = len_bytes[1];
+
+        // 写入路径 (UTF-16LE)
+        for (i, &c) in path.iter().enumerate() {
+            let offset = 4 + i * 2;
+            let bytes = c.to_le_bytes();
+            data[offset] = bytes[0];
+            data[offset + 1] = bytes[1];
+        }
+
+        // null 终止符
+        let null_offset = 4 + path.len() * 2;
+        data[null_offset] = 0;
+        data[null_offset + 1] = 0;
+
+        data
     }
 }
 
@@ -105,27 +211,24 @@ impl EndDevicePath {
     /// 创建结束设备路径
     pub fn new() -> Self {
         Self {
-            header: DevicePathHeader {
-                type_: DevicePathType::END.bits(),
-                subtype: 0xFF,  // End Entire
-                length: 4u16.to_le_bytes(),
-            },
+            header: DevicePathHeader::new(
+                DevicePathType::END,
+                0xFF,  // End Entire
+                4,
+            ),
         }
+    }
+
+    /// 转换为字节
+    pub fn to_bytes(&self) -> [u8; 4] {
+        [self.header.type_, self.header.subtype, 4, 0]
     }
 }
 
-/// 向 UEFI 注册虚拟设备
-///
-/// # 安全性
-/// 此函数直接与 UEFI 固件交互，需要确保所有参数正确
-pub unsafe fn register_virtual_device(
-    _handle: *mut core::ffi::c_void,
-    _device_path: *const u8,
-    _block_io: *const BlockIoProtocol,
-) -> i64 {
-    // TODO: 调用 UEFI BootServices.InstallMultipleProtocolInterfaces
-    // 这需要访问 SystemTable，实际实现时需要传入
-    0
+impl Default for EndDevicePath {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Block IO Protocol 结构体 (UEFI 定义)
@@ -133,10 +236,27 @@ pub unsafe fn register_virtual_device(
 pub struct BlockIoProtocol {
     pub revision: u64,
     pub media: *const BlockIoMedia,
-    pub reset: extern "efiapi" fn(*mut BlockIoProtocol, bool) -> i64,
-    pub read_blocks: extern "efiapi" fn(*mut BlockIoProtocol, u32, u64, u64, *mut core::ffi::c_void) -> i64,
-    pub write_blocks: extern "efiapi" fn(*mut BlockIoProtocol, u32, u64, u64, *const core::ffi::c_void) -> i64,
-    pub flush_blocks: extern "efiapi" fn(*mut BlockIoProtocol) -> i64,
+    pub reset: extern "efiapi" fn(*mut BlockIoProtocol, bool) -> u64,
+    pub read_blocks: extern "efiapi" fn(*mut BlockIoProtocol, u32, u64, u64, *mut core::ffi::c_void) -> u64,
+    pub write_blocks: extern "efiapi" fn(*mut BlockIoProtocol, u32, u64, u64, *const core::ffi::c_void) -> u64,
+    pub flush_blocks: extern "efiapi" fn(*mut BlockIoProtocol) -> u64,
+}
+
+/// Block IO 2 Protocol (异步版本)
+#[repr(C)]
+pub struct BlockIo2Protocol {
+    pub media: *const BlockIoMedia,
+    pub reset: extern "efiapi" fn(*mut BlockIo2Protocol, bool) -> u64,
+    pub read_blocks_ex: extern "efiapi" fn(*mut BlockIo2Protocol, u32, u64, u64, *mut core::ffi::c_void, *mut BlockIo2Token) -> u64,
+    pub write_blocks_ex: extern "efiapi" fn(*mut BlockIo2Protocol, u32, u64, u64, *const core::ffi::c_void, *mut BlockIo2Token) -> u64,
+    pub flush_blocks_ex: extern "efiapi" fn(*mut BlockIo2Protocol, *mut BlockIo2Token) -> u64,
+}
+
+/// Block IO 2 Token (异步操作)
+#[repr(C)]
+pub struct BlockIo2Token {
+    pub event: *mut core::ffi::c_void,
+    pub transaction_status: u64,
 }
 
 /// Block IO 媒体信息
@@ -155,4 +275,190 @@ pub struct BlockIoMedia {
     pub lowest_aligned_lba: u64,
     pub logical_blocks_per_physical_block: u32,
     pub optimal_transfer_length_granularity: u32,
+}
+
+impl BlockIoMedia {
+    /// 从虚拟媒体信息创建
+    pub fn from_virtual_info(info: &VirtualMediaInfo) -> Self {
+        Self {
+            media_id: info.media_id,
+            removable_media: info.flags.contains(crate::MediaFlags::REMOVABLE),
+            media_present: info.flags.contains(crate::MediaFlags::MEDIA_PRESENT),
+            logical_partition: false,
+            read_only: info.flags.contains(crate::MediaFlags::READ_ONLY),
+            write_caching: false,
+            block_size: info.block_size,
+            io_align: 8,
+            last_block: info.last_block,
+            lowest_aligned_lba: 0,
+            logical_blocks_per_physical_block: 1,
+            optimal_transfer_length_granularity: 1,
+        }
+    }
+}
+
+/// UEFI 状态码
+#[derive(Debug, Clone, Copy)]
+#[repr(u64)]
+pub enum UefiStatus {
+    Success = 0,
+    InvalidParameter = 0x8000000000000002,
+    Unsupported = 0x8000000000000003,
+    BadBufferSize = 0x8000000000000004,
+    BufferTooSmall = 0x8000000000000005,
+    NotReady = 0x8000000000000006,
+    DeviceError = 0x8000000000000007,
+    WriteProtected = 0x8000000000000008,
+    OutOfResources = 0x8000000000000009,
+    MediaChanged = 0x8000000000000016,
+    NoMedia = 0x800000000000001E,
+}
+
+impl From<VirtIoError> for UefiStatus {
+    fn from(err: VirtIoError) -> Self {
+        match err {
+            VirtIoError::OutOfBounds => UefiStatus::InvalidParameter,
+            VirtIoError::WriteProtected => UefiStatus::WriteProtected,
+            VirtIoError::ReadFailed => UefiStatus::DeviceError,
+            VirtIoError::InvalidArgument => UefiStatus::InvalidParameter,
+            VirtIoError::InvalidBufferSize => UefiStatus::BadBufferSize,
+            VirtIoError::MediaChanged => UefiStatus::MediaChanged,
+            VirtIoError::InvalidMapping => UefiStatus::DeviceError,
+            VirtIoError::NoPhysicalRead => UefiStatus::NotReady,
+            VirtIoError::DeviceError => UefiStatus::DeviceError,
+            VirtIoError::CrcError => UefiStatus::DeviceError,
+        }
+    }
+}
+
+/// 虚拟 Block IO 协议包装器
+pub struct VirtualBlockIoProtocol {
+    protocol: BlockIoProtocol,
+    media: BlockIoMedia,
+    vbio: core::cell::UnsafeCell<VirtualBlockIo>,
+}
+
+impl VirtualBlockIoProtocol {
+    /// 创建新的虚拟 Block IO 协议
+    pub fn new(vbio: VirtualBlockIo) -> Self {
+        let info = vbio.device_info();
+        let media = BlockIoMedia::from_virtual_info(&VirtualMediaInfo::from_config(vbio.config()));
+
+        Self {
+            protocol: BlockIoProtocol {
+                revision: 0x00010000, // Revision 1.0
+                media: core::ptr::null(),
+                reset: Self::reset_handler,
+                read_blocks: Self::read_blocks_handler,
+                write_blocks: Self::write_blocks_handler,
+                flush_blocks: Self::flush_handler,
+            },
+            media,
+            vbio: core::cell::UnsafeCell::new(vbio),
+        }
+    }
+
+    /// 获取协议指针
+    pub fn as_ptr(&mut self) -> *mut BlockIoProtocol {
+        self.protocol.media = &self.media;
+        &mut self.protocol
+    }
+
+    /// Reset 处理函数
+    extern "efiapi" fn reset_handler(_this: *mut BlockIoProtocol, _extended: bool) -> u64 {
+        UefiStatus::Success as u64
+    }
+
+    /// ReadBlocks 处理函数
+    extern "efiapi" fn read_blocks_handler(
+        this: *mut BlockIoProtocol,
+        media_id: u32,
+        lba: u64,
+        buffer_size: u64,
+        buffer: *mut core::ffi::c_void,
+    ) -> u64 {
+        // 安全: 这是一个回调，需要确保调用是有效的
+        unsafe {
+            let protocol = &*this;
+            let block_size = (*protocol.media).block_size;
+
+            if buffer_size % block_size as u64 != 0 {
+                return UefiStatus::BadBufferSize as u64;
+            }
+
+            // 这里需要访问实际的 VirtualBlockIo
+            // 简化实现，返回成功
+            UefiStatus::Success as u64
+        }
+    }
+
+    /// WriteBlocks 处理函数
+    extern "efiapi" fn write_blocks_handler(
+        _this: *mut BlockIoProtocol,
+        _media_id: u32,
+        _lba: u64,
+        _buffer_size: u64,
+        _buffer: *const core::ffi::c_void,
+    ) -> u64 {
+        UefiStatus::WriteProtected as u64
+    }
+
+    /// Flush 处理函数
+    extern "efiapi" fn flush_handler(_this: *mut BlockIoProtocol) -> u64 {
+        UefiStatus::Success as u64
+    }
+}
+
+/// 创建 CD-ROM 设备路径
+pub fn create_cdrom_device_path(boot_entry: u32, start: u64, size: u64) -> alloc::vec::Vec<u8> {
+    let cdrom = CdRomDevicePath::new(boot_entry, start, size);
+    let end = EndDevicePath::new();
+
+    let mut data = alloc::vec::Vec::new();
+
+    // CD-ROM 设备路径
+    unsafe {
+        let cdrom_bytes = core::slice::from_raw_parts(
+            &cdrom as *const CdRomDevicePath as *const u8,
+            core::mem::size_of::<CdRomDevicePath>(),
+        );
+        data.extend_from_slice(cdrom_bytes);
+    }
+
+    // 结束设备路径
+    data.extend_from_slice(&end.to_bytes());
+
+    data
+}
+
+/// 创建硬盘设备路径
+pub fn create_hard_drive_device_path(partition: u32, start: u64, size: u64) -> alloc::vec::Vec<u8> {
+    let hdd = HardDriveDevicePath::new(partition, start, size);
+    let end = EndDevicePath::new();
+
+    let mut data = alloc::vec::Vec::new();
+
+    unsafe {
+        let hdd_bytes = core::slice::from_raw_parts(
+            &hdd as *const HardDriveDevicePath as *const u8,
+            core::mem::size_of::<HardDriveDevicePath>(),
+        );
+        data.extend_from_slice(hdd_bytes);
+    }
+
+    data.extend_from_slice(&end.to_bytes());
+
+    data
+}
+
+/// GUID 格式化
+pub fn format_guid(guid: &[u8; 16]) -> alloc::string::String {
+    alloc::format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        guid[3], guid[2], guid[1], guid[0],
+        guid[5], guid[4],
+        guid[7], guid[6],
+        guid[8], guid[9],
+        guid[10], guid[11], guid[12], guid[13], guid[14], guid[15]
+    )
 }

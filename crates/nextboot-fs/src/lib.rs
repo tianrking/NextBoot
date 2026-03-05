@@ -11,8 +11,9 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use alloc::boxed::Box;
 
 pub mod fat32;
 pub mod exfat;
@@ -36,6 +37,38 @@ pub enum FsError {
     InvalidPath,
     /// 不支持的文件系统
     UnsupportedFs,
+    /// 无效参数
+    InvalidArgument,
+    /// 目录不存在
+    DirectoryNotFound,
+    /// 不是目录
+    NotDirectory,
+    /// 不是文件
+    NotFile,
+    /// 文件太大
+    FileTooLarge,
+    /// 损坏的文件系统
+    Corrupted,
+}
+
+impl core::fmt::Display for FsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            FsError::InvalidSignature => write!(f, "Invalid filesystem signature"),
+            FsError::BlockSizeMismatch => write!(f, "Block size mismatch"),
+            FsError::FileNotFound => write!(f, "File not found"),
+            FsError::ReadError => write!(f, "Read error"),
+            FsError::OutOfMemory => write!(f, "Out of memory"),
+            FsError::InvalidPath => write!(f, "Invalid path"),
+            FsError::UnsupportedFs => write!(f, "Unsupported filesystem"),
+            FsError::InvalidArgument => write!(f, "Invalid argument"),
+            FsError::DirectoryNotFound => write!(f, "Directory not found"),
+            FsError::NotDirectory => write!(f, "Not a directory"),
+            FsError::NotFile => write!(f, "Not a file"),
+            FsError::FileTooLarge => write!(f, "File too large"),
+            FsError::Corrupted => write!(f, "Corrupted filesystem"),
+        }
+    }
 }
 
 /// 文件系统类型
@@ -48,6 +81,31 @@ pub enum FileSystemType {
     Unknown,
 }
 
+impl core::fmt::Display for FileSystemType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            FileSystemType::Fat32 => write!(f, "FAT32"),
+            FileSystemType::ExFat => write!(f, "exFAT"),
+            FileSystemType::Iso9660 => write!(f, "ISO9660"),
+            FileSystemType::Ntfs => write!(f, "NTFS"),
+            FileSystemType::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
+/// 文件属性标志
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct FileAttributes: u8 {
+        const READ_ONLY = 0x01;
+        const HIDDEN = 0x02;
+        const SYSTEM = 0x04;
+        const VOLUME_ID = 0x08;
+        const DIRECTORY = 0x10;
+        const ARCHIVE = 0x20;
+    }
+}
+
 /// 文件信息
 #[derive(Debug, Clone)]
 pub struct FileInfo {
@@ -57,8 +115,82 @@ pub struct FileInfo {
     pub size: u64,
     /// 是否为目录
     pub is_dir: bool,
-    /// 起始 LBA (用于虚拟 Block IO)
-    pub start_lba: u64,
+    /// 文件属性
+    pub attributes: FileAttributes,
+    /// 起始簇号 (FAT) 或 LBA (ISO9660)
+    pub start_cluster: u64,
+}
+
+impl FileInfo {
+    /// 创建新的文件信息
+    pub fn new(name: String, size: u64, is_dir: bool, start_cluster: u64) -> Self {
+        Self {
+            name,
+            size,
+            is_dir,
+            attributes: if is_dir {
+                FileAttributes::DIRECTORY
+            } else {
+                FileAttributes::empty()
+            },
+            start_cluster,
+        }
+    }
+
+    /// 检查是否为隐藏文件
+    pub fn is_hidden(&self) -> bool {
+        self.attributes.contains(FileAttributes::HIDDEN)
+    }
+
+    /// 检查是否为系统文件
+    pub fn is_system(&self) -> bool {
+        self.attributes.contains(FileAttributes::SYSTEM)
+    }
+}
+
+/// Block IO 操作抽象
+///
+/// 用于解耦文件系统与具体 Block IO 实现
+pub trait BlockIoOps {
+    /// 获取块大小
+    fn block_size(&self) -> u32;
+
+    /// 获取总块数
+    fn total_blocks(&self) -> u64;
+
+    /// 读取块
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError>;
+}
+
+/// 动态分发的 Block IO
+pub struct DynBlockIo {
+    block_size: u32,
+    total_blocks: u64,
+    read_fn: fn(u64, &mut [u8]) -> Result<(), FsError>,
+}
+
+impl DynBlockIo {
+    pub fn new(block_size: u32, total_blocks: u64, read_fn: fn(u64, &mut [u8]) -> Result<(), FsError>) -> Self {
+        Self {
+            block_size,
+            total_blocks,
+            read_fn,
+        }
+    }
+}
+
+impl BlockIoOps for DynBlockIo {
+    fn block_size(&self) -> u32 {
+        self.block_size
+    }
+
+    fn total_blocks(&self) -> u64 {
+        self.total_blocks
+    }
+
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        (self.read_fn)(lba, buf)
+    }
 }
 
 /// 文件系统 trait - 所有文件系统必须实现
@@ -80,20 +212,55 @@ pub trait FileSystem: Sized {
 
     /// 获取块大小
     fn block_size(&self) -> u32;
-}
 
-/// Block IO 操作抽象
-///
-/// 用于解耦文件系统与具体 Block IO 实现
-pub trait BlockIoOps {
-    /// 获取块大小
-    fn block_size(&self) -> u32;
+    /// 递归扫描目录获取所有文件
+    fn scan_files(&self, path: &str, extensions: &[&str]) -> Result<Vec<FileInfo>, FsError> {
+        let mut result = Vec::new();
+        self.scan_files_recursive(path, extensions, &mut result)?;
+        Ok(result)
+    }
 
-    /// 获取总块数
-    fn total_blocks(&self) -> u64;
+    /// 递归扫描辅助函数
+    fn scan_files_recursive(
+        &self,
+        path: &str,
+        extensions: &[&str],
+        result: &mut Vec<FileInfo>,
+    ) -> Result<(), FsError> {
+        let entries = self.read_dir(path)?;
 
-    /// 读取块
-    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError>;
+        for entry in entries {
+            // 跳过隐藏和系统文件
+            if entry.is_hidden() || entry.is_system() {
+                continue;
+            }
+
+            let full_path = if path == "/" || path.is_empty() {
+                alloc::format!("/{}", entry.name)
+            } else {
+                alloc::format!("{}/{}", path, entry.name)
+            };
+
+            if entry.is_dir {
+                // 递归扫描子目录
+                self.scan_files_recursive(&full_path, extensions, result)?;
+            } else {
+                // 检查扩展名
+                let name_lower = entry.name.to_ascii_lowercase();
+                let matches = extensions.is_empty() || extensions.iter().any(|ext| {
+                    name_lower.ends_with(ext)
+                });
+
+                if matches {
+                    let mut file_info = entry.clone();
+                    file_info.name = full_path;
+                    result.push(file_info);
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// ISO 镜像类型检测
@@ -116,8 +283,15 @@ pub fn detect_fs_type(data: &[u8]) -> FileSystemType {
         // 检查引导签名
         if data[510] == 0x55 && data[511] == 0xAA {
             // FAT 签名在偏移 0x52 (FAT32) 或 0x03 (FAT12/16)
-            if &data[0x52..0x56] == b"FAT32" {
+            if data.len() >= 0x56 && &data[0x52..0x56] == b"FAT32" {
                 return FileSystemType::Fat32;
+            }
+            // FAT12/16 签名
+            if data.len() >= 0x08 && &data[0x03..0x08] == b"FAT12" {
+                return FileSystemType::Fat32; // 简化处理
+            }
+            if data.len() >= 0x08 && &data[0x03..0x08] == b"FAT16" {
+                return FileSystemType::Fat32; // 简化处理
             }
         }
     }
@@ -127,11 +301,61 @@ pub fn detect_fs_type(data: &[u8]) -> FileSystemType {
         // exFAT 跳转指令和签名
         if data[0] == 0xEB && data[1] == 0x76 && data[2] == 0x90 {
             // 完整签名在偏移 3: "EXFAT"
-            if data.len() >= 8 && &data[3..8] == b"EXFAT" {
+            if data.len() >= 11 && &data[3..11] == b"EXFAT   " {
                 return FileSystemType::ExFat;
             }
         }
     }
 
-    FileSystemType::Unknown
+    // ISO9660 检测
+    detect_iso_type(data)
+}
+
+/// 路径规范化
+pub fn normalize_path(path: &str) -> String {
+    let mut result = String::new();
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    for part in parts {
+        if part == "." {
+            continue;
+        }
+        if part == ".." {
+            // 简化处理，不支持 ..
+            continue;
+        }
+        if !result.is_empty() && !result.ends_with('/') {
+            result.push('/');
+        }
+        result.push_str(part);
+    }
+
+    if result.is_empty() {
+        String::from("/")
+    } else {
+        result
+    }
+}
+
+/// 分割路径为目录和文件名
+pub fn split_path(path: &str) -> (String, String) {
+    let normalized = normalize_path(path);
+    if let Some(pos) = normalized.rfind('/') {
+        let dir = &normalized[..pos];
+        let name = &normalized[pos + 1..];
+        (
+            if dir.is_empty() { String::from("/") } else { dir.to_string() },
+            name.to_string()
+        )
+    } else {
+        (String::from("/"), normalized)
+    }
+}
+
+/// 全局分配器辅助函数
+pub fn alloc_buffer(size: usize) -> Result<Vec<u8>, FsError> {
+    let mut buf = Vec::new();
+    buf.try_reserve(size).map_err(|_| FsError::OutOfMemory)?;
+    buf.resize(size, 0);
+    Ok(buf)
 }

@@ -5,4 +5,5 @@ edition.workspace = true
 
 [dependencies]
 uefi.workspace = true
+uefi-raw = "0.5"
 log.workspace = true

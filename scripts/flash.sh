@@ -1,111 +1,164 @@
 #!/bin/bash
-# 写入 U 盘脚本
-# 用法: ./scripts/flash.sh /dev/sdX
+# NextBoot Flash Script
+#
+# Write NextBoot to a USB drive
+#
+# Usage:
+#   ./scripts/flash.sh <device>    - Flash to specified device
+#   ./scripts/flash.sh list        - List available devices
+#
+# Example:
+#   ./scripts/flash.sh /dev/sdX
 
 set -e
 
-DEVICE="$1"
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-if [ -z "$DEVICE" ]; then
-    echo "用法: $0 /dev/sdX"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+echo -e "${GREEN}NextBoot Flash Tool${NC}"
+echo "===================="
+
+# Function to list devices
+list_devices() {
+    echo -e "${BLUE}Available storage devices:${NC}"
     echo ""
-    echo "可用设备:"
-    lsblk -d -o NAME,SIZE,MODEL,TRAN | grep -E "disk|NAME"
-    exit 1
-fi
 
-# 安全检查
-if [[ "$DEVICE" =~ ^/dev/(sd[a-z]|nvme[0-9]n[0-9]|mmcblk[0-9])$ ]]; then
-    echo "⚠️  警告: 这将清除 $DEVICE 上的所有数据!"
-    read -p "确认继续? (yes/no): " confirm
-    if [ "$confirm" != "yes" ]; then
-        echo "已取消"
-        exit 0
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        diskutil list external | grep -E "^/dev/disk" || echo "No external drives found"
+    else
+        # Linux
+        lsblk -o NAME,SIZE,TYPE,MOUNTPOINT -d | grep -E "disk|sd|usb" || echo "No drives found"
     fi
-else
-    echo "❌ 无效的设备路径: $DEVICE"
-    exit 1
-fi
 
-# 检查设备是否存在
-if [ ! -b "$DEVICE" ]; then
-    echo "❌ 设备不存在: $DEVICE"
-    exit 1
-fi
-
-# 检查是否已挂载
-if mount | grep -q "$DEVICE"; then
-    echo "❌ 设备已挂载，请先卸载:"
-    mount | grep "$DEVICE"
-    exit 1
-fi
-
-echo "📦 准备分区表..."
-
-# 创建 GPT 分区表
-parted -s "$DEVICE" mklabel gpt
-
-# 创建 ESP 分区 (200MB)
-parted -s "$DEVICE" mkpart ESP fat32 1MiB 201MiB
-parted -s "$DEVICE" set 1 esp on
-
-# 创建 Data 分区 (剩余空间)
-parted -s "$DEVICE" mkpart Data ext4 201MiB 100%
-
-# 等待设备节点出现
-sleep 2
-
-# 确定分区设备名
-if [[ "$DEVICE" =~ nvme|mmcblk ]]; then
-    PART1="${DEVICE}p1"
-    PART2="${DEVICE}p2"
-else
-    PART1="${DEVICE}1"
-    PART2="${DEVICE}2"
-fi
-
-echo "📦 格式化分区..."
-
-# 格式化 ESP
-mkfs.vfat -F 32 -n "NEXTBOOT-EFI" "$PART1"
-
-# 格式化 Data 分区
-mkfs.exfat -n "NEXTBOOT-DATA" "$PART2" || {
-    echo "exFAT 不支持，使用 NTFS..."
-    mkfs.ntfs -f -L "NEXTBOOT-DATA" "$PART2"
+    echo ""
+    echo -e "${YELLOW}Usage: $0 /dev/sdX${NC}"
 }
 
-echo "📦 安装 Bootloader..."
+# Check if no arguments
+if [ $# -eq 0 ]; then
+    list_devices
+    exit 0
+fi
 
-# 挂载 ESP
-MOUNT_DIR=$(mktemp -d)
-mount "$PART1" "$MOUNT_DIR"
+# List devices if requested
+if [ "$1" = "list" ]; then
+    list_devices
+    exit 0
+fi
 
-# 创建目录结构
-mkdir -p "$MOUNT_DIR/EFI/BOOT"
+DEVICE="$1"
 
-# 复制 bootloader
-if [ -f "output/BOOTX64.EFI" ]; then
-    cp "output/BOOTX64.EFI" "$MOUNT_DIR/EFI/BOOT/"
-else
-    echo "❌ Bootloader 不存在，请先运行 ./scripts/build.sh"
-    umount "$MOUNT_DIR"
-    rmdir "$MOUNT_DIR"
+# Verify device exists
+if [ ! -e "$DEVICE" ]; then
+    echo -e "${RED}Error: Device not found: ${DEVICE}${NC}"
     exit 1
 fi
 
-# 创建 ISO 目录结构 (在 Data 分区)
-umount "$MOUNT_DIR"
-mount "$PART2" "$MOUNT_DIR"
-mkdir -p "$MOUNT_DIR/ISO"
-umount "$MOUNT_DIR"
-rmdir "$MOUNT_DIR"
+# EFI file
+EFI_FILE="${PROJECT_DIR}/target/x86_64-unknown-uefi/release/nextboot-boot.efi"
+if [ ! -f "$EFI_FILE" ]; then
+    EFI_FILE="${PROJECT_DIR}/target/x86_64-unknown-uefi/debug/nextboot-boot.efi"
+fi
 
-echo "✅ 安装完成!"
+if [ ! -f "$EFI_FILE" ]; then
+    echo -e "${RED}Error: EFI file not found${NC}"
+    echo "Please run ./scripts/build.sh first"
+    exit 1
+fi
+
+echo -e "${YELLOW}EFI file: ${EFI_FILE}${NC}"
+echo -e "${YELLOW}Target device: ${DEVICE}${NC}"
 echo ""
-echo "下一步:"
-echo "1. 将 ISO 文件复制到 Data 分区的 /ISO 目录"
-echo "2. 从此 U 盘启动"
+
+# Confirm
+echo -e "${RED}WARNING: This will ERASE ALL DATA on ${DEVICE}${NC}"
+echo -n "Are you sure? (yes/no): "
+read -r CONFIRM
+
+if [ "$CONFIRM" != "yes" ]; then
+    echo "Aborted"
+    exit 0
+fi
+
+# Unmount device if mounted
+echo -e "${YELLOW}Unmounting device...${NC}"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    diskutil unmountDisk "$DEVICE" 2>/dev/null || true
+else
+    sudo umount "$DEVICE"* 2>/dev/null || true
+fi
+
+# Create partition table
+echo -e "${YELLOW}Creating GPT partition table...${NC}"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    sudo diskutil partitionDisk "$DEVICE" GPT FAT32 NEXBOOT 100%
+else
+    # Linux
+    sudo parted -s "$DEVICE" mklabel gpt
+    sudo parted -s "$DEVICE" mkpart primary fat32 1MiB 100%
+    sudo parted -s "$DEVICE" set 1 esp on
+    sudo mkfs.vfat -F 32 "${DEVICE}1"
+fi
+
+# Mount and copy files
+echo -e "${YELLOW}Copying files...${NC}"
+MOUNT_DIR="/tmp/nextboot_flash"
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS - the partition is already mounted by diskutil
+    PARTITION="${DEVICE}s1"
+    if [ ! -e "$PARTITION" ]; then
+        PARTITION="${DEVICE}"
+    fi
+
+    # Find mount point
+    MOUNT_POINT=$(df | grep "$PARTITION" | awk '{print $NF}')
+
+    if [ -z "$MOUNT_POINT" ]; then
+        echo -e "${RED}Error: Could not find mount point${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Mounted at: ${MOUNT_POINT}${NC}"
+
+    # Create directory structure
+    mkdir -p "${MOUNT_POINT}/EFI/BOOT"
+    cp "$EFI_FILE" "${MOUNT_POINT}/EFI/BOOT/BOOTX64.EFI"
+
+    # Create ISO directory
+    mkdir -p "${MOUNT_POINT}/ISO"
+
+    # Sync and unmount
+    sync
+    diskutil unmount "$PARTITION"
+else
+    # Linux
+    sudo mkdir -p "$MOUNT_DIR"
+    sudo mount "${DEVICE}1" "$MOUNT_DIR"
+
+    # Create directory structure
+    sudo mkdir -p "${MOUNT_DIR}/EFI/BOOT"
+    sudo cp "$EFI_FILE" "${MOUNT_DIR}/EFI/BOOT/BOOTX64.EFI"
+
+    # Create ISO directory
+    sudo mkdir -p "${MOUNT_DIR}/ISO"
+
+    # Sync and unmount
+    sync
+    sudo umount "$MOUNT_DIR"
+fi
+
 echo ""
-echo "分区信息:"
-parted -s "$DEVICE" print
+echo -e "${GREEN}Flash complete!${NC}"
+echo ""
+echo "Your USB drive is now ready."
+echo "Copy your ISO files to the /ISO directory and boot from USB."
