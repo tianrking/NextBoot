@@ -4,6 +4,7 @@
 
 use crate::init::StorageDevice;
 use crate::scanner::{ImageFormat, IsoFile, OsType};
+use crate::vdi;
 use crate::vhdx;
 use crate::virtual_fs::{IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem};
 use alloc::rc::Rc;
@@ -748,6 +749,8 @@ impl<'a> BootManager<'a> {
             self.build_dynamic_vhd_block_io(config, source_block_io)?
         } else if self.iso.image_format == ImageFormat::Vhdx {
             self.build_vhdx_block_io(config, source_block_io)?
+        } else if self.iso.image_format == ImageFormat::Vdi {
+            self.build_vdi_block_io(config, source_block_io)?
         } else if self.iso.extents.is_empty() {
             warn!(
                 "No extent map for {}, falling back to contiguous LBA {}",
@@ -999,6 +1002,106 @@ impl<'a> BootManager<'a> {
         Ok(VirtualBlockIo::with_byte_mapping(config, byte_mapping))
     }
 
+    fn build_vdi_block_io(
+        &self,
+        mut config: VirtualDeviceConfig,
+        source_block_io: &BlockIO,
+    ) -> uefi::Result<VirtualBlockIo> {
+        let file_vbio = self.build_image_file_block_io(source_block_io)?;
+        let metadata = self.read_vdi_metadata(&file_vbio)?;
+
+        config.iso_size = metadata.virtual_disk_size;
+        config.block_size = metadata.sector_size;
+
+        let map_bytes =
+            vdi::block_map_bytes(metadata.block_count).ok_or(uefi::Status::LOAD_ERROR)?;
+        if metadata
+            .offset_blocks
+            .checked_add(map_bytes)
+            .map_or(true, |end| {
+                end > self.iso.size || end > metadata.offset_data
+            })
+        {
+            return Err(uefi::Status::LOAD_ERROR.into());
+        }
+
+        let map_len = usize::try_from(map_bytes).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        let mut block_map = Vec::new();
+        block_map
+            .try_reserve_exact(map_len)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        block_map.resize(map_len, 0);
+        read_vhd_file_bytes(&file_vbio, metadata.offset_blocks, &mut block_map)?;
+
+        let block_size = u64::from(metadata.block_size);
+        let mut byte_mapping = ByteMappingTable::empty();
+        let mut allocated_blocks = 0u64;
+        let mut zero_blocks = 0u64;
+
+        for block_index in 0..metadata.block_count {
+            let virtual_start = u64::from(block_index)
+                .checked_mul(block_size)
+                .ok_or(uefi::Status::LOAD_ERROR)?;
+            if virtual_start >= metadata.virtual_disk_size {
+                break;
+            }
+
+            let byte_count = block_size.min(metadata.virtual_disk_size - virtual_start);
+            let map_entry = vdi::read_block_map_entry(&block_map, block_index)
+                .ok_or(uefi::Status::LOAD_ERROR)?;
+            if !vdi::is_allocated_block(map_entry) {
+                zero_blocks += 1;
+                continue;
+            }
+
+            if map_entry >= metadata.block_count {
+                warn!(
+                    "Invalid VDI block map entry {} at virtual block {} in {}",
+                    map_entry, block_index, self.iso.path
+                );
+                return Err(uefi::Status::LOAD_ERROR.into());
+            }
+
+            let file_offset = metadata
+                .offset_data
+                .checked_add(
+                    u64::from(map_entry)
+                        .checked_mul(block_size)
+                        .ok_or(uefi::Status::LOAD_ERROR)?,
+                )
+                .ok_or(uefi::Status::LOAD_ERROR)?;
+            if file_offset
+                .checked_add(byte_count)
+                .map_or(true, |end| end > self.iso.size)
+            {
+                return Err(uefi::Status::DEVICE_ERROR.into());
+            }
+
+            self.map_image_file_range_to_physical(
+                &mut byte_mapping,
+                virtual_start,
+                file_offset,
+                byte_count,
+            )?;
+            allocated_blocks += 1;
+        }
+
+        byte_mapping.truncate(metadata.virtual_disk_size);
+        byte_mapping.optimize();
+        info!(
+            "Mapped VDI {}: virtual={} bytes, block={} bytes, sector={} bytes, allocated_blocks={}, zero_blocks={}, physical_segments={}",
+            self.iso.path,
+            metadata.virtual_disk_size,
+            block_size,
+            metadata.sector_size,
+            allocated_blocks,
+            zero_blocks,
+            byte_mapping.segment_count()
+        );
+
+        Ok(VirtualBlockIo::with_byte_mapping(config, byte_mapping))
+    }
+
     fn read_vhdx_layout(
         &self,
         file_vbio: &VirtualBlockIo,
@@ -1022,6 +1125,12 @@ impl<'a> BootManager<'a> {
         let metadata = vhdx::parse_vhdx_metadata(&metadata).ok_or(uefi::Status::LOAD_ERROR)?;
 
         Ok((regions, metadata))
+    }
+
+    fn read_vdi_metadata(&self, file_vbio: &VirtualBlockIo) -> uefi::Result<vdi::VdiMetadata> {
+        let mut header = [0u8; vdi::VDI_HEADER_SIZE];
+        read_vhd_file_bytes(file_vbio, 0, &mut header)?;
+        vdi::parse_vdi_metadata(&header).ok_or(uefi::Status::LOAD_ERROR.into())
     }
 
     fn build_image_file_block_io(&self, source_block_io: &BlockIO) -> uefi::Result<VirtualBlockIo> {

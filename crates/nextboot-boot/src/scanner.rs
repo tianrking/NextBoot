@@ -3,6 +3,7 @@
 //! 负责扫描存储设备上的 ISO 文件
 
 use crate::init::StorageDevice;
+use crate::vdi;
 use crate::vhdx;
 use alloc::format;
 use alloc::rc::Rc;
@@ -114,6 +115,7 @@ pub enum ImageFormat {
     DynamicVhd,
     DifferencingVhd,
     Vhdx,
+    Vdi,
     Unknown,
 }
 
@@ -132,6 +134,8 @@ impl ImageFormat {
             Self::Vhd
         } else if lower.ends_with(".vhdx") {
             Self::Vhdx
+        } else if lower.ends_with(".vdi") {
+            Self::Vdi
         } else {
             Self::Unknown
         }
@@ -153,12 +157,15 @@ impl ImageFormat {
     pub fn supports_virtual_disk_boot(self) -> bool {
         matches!(
             self,
-            Self::Iso | Self::RawDisk | Self::FixedVhd | Self::DynamicVhd | Self::Vhdx
+            Self::Iso | Self::RawDisk | Self::FixedVhd | Self::DynamicVhd | Self::Vhdx | Self::Vdi
         )
     }
 
     pub fn uses_512_byte_virtual_sectors(self) -> bool {
-        matches!(self, Self::RawDisk | Self::FixedVhd | Self::DynamicVhd)
+        matches!(
+            self,
+            Self::RawDisk | Self::FixedVhd | Self::DynamicVhd | Self::Vdi
+        )
     }
 }
 
@@ -174,6 +181,7 @@ impl core::fmt::Display for ImageFormat {
             ImageFormat::DynamicVhd => "Dynamic VHD",
             ImageFormat::DifferencingVhd => "Differencing VHD",
             ImageFormat::Vhdx => "VHDX",
+            ImageFormat::Vdi => "VDI",
             ImageFormat::Unknown => "Unknown",
         };
         write!(f, "{}", name)
@@ -241,7 +249,7 @@ impl<'a> IsoScanner<'a> {
         let mut iso_files = Vec::new();
 
         // 支持的文件扩展名
-        let extensions = [".iso", ".wim", ".img", ".vhd", ".vhdx", ".esd"];
+        let extensions = [".iso", ".wim", ".img", ".vhd", ".vhdx", ".vdi", ".esd"];
 
         // 扫描常见目录
         let search_paths = [
@@ -538,6 +546,20 @@ impl<'a> IsoScanner<'a> {
                     file_size,
                     default_virtual_block_size(image_format),
                 )),
+            ImageFormat::Vdi => self
+                .read_vdi_virtual_metadata(block_io, source_block_size, file_size, extents)
+                .map(|metadata| {
+                    (
+                        image_format,
+                        metadata.virtual_disk_size,
+                        Some(metadata.sector_size),
+                    )
+                })
+                .unwrap_or((
+                    image_format,
+                    file_size,
+                    default_virtual_block_size(image_format),
+                )),
             _ => (
                 image_format,
                 file_size,
@@ -574,6 +596,24 @@ impl<'a> IsoScanner<'a> {
             regions.metadata_length as usize,
         )?;
         vhdx::parse_vhdx_metadata(&metadata)
+    }
+
+    fn read_vdi_virtual_metadata(
+        &self,
+        block_io: &BlockIO,
+        source_block_size: u32,
+        file_size: u64,
+        extents: &[IsoExtent],
+    ) -> Option<vdi::VdiMetadata> {
+        let header = self.read_image_bytes(
+            block_io,
+            source_block_size,
+            file_size,
+            extents,
+            0,
+            vdi::VDI_HEADER_SIZE,
+        )?;
+        vdi::parse_vdi_metadata(&header)
     }
 
     fn read_image_tail(
