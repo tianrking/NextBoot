@@ -3,6 +3,10 @@
 //! 负责扫描存储设备上的 ISO 文件
 
 use crate::init::StorageDevice;
+use crate::source_disk::{
+    build_source_disk_identity, parent_device_path_bytes, parse_last_hard_drive_device_path,
+    SourceDiskIdentity,
+};
 use crate::vdi;
 use crate::vhdx;
 use crate::wim;
@@ -10,7 +14,7 @@ use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::{read_efi_eltorito_boot_info, ElToritoBootInfo};
@@ -19,6 +23,7 @@ use nextboot_virtio::{
     PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
 };
 use uefi::data_types::CString16;
+use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
 use uefi::proto::media::file::{Directory, File, FileAttribute, FileMode};
 use uefi::proto::media::fs::SimpleFileSystem;
@@ -56,6 +61,8 @@ pub struct IsoFile {
     pub boot_info: Option<IsoBootInfo>,
     /// WIM/ESD 启动元数据。
     pub wim_info: Option<WimBootInfo>,
+    /// 文件所在源盘/分区身份，用于 Ventoy 兼容 OS 参数。
+    pub source_disk: Option<SourceDiskIdentity>,
 }
 
 /// ISO 文件在所在卷上的物理区段。
@@ -445,9 +452,11 @@ impl<'a> IsoScanner<'a> {
         };
 
         let mut files = Vec::new();
+        let source_disk = self.resolve_source_disk_identity(volume_handle);
         self.scan_directory_entries(
             volume_handle,
             volume_index,
+            source_disk,
             &mut dir,
             &normalized,
             extensions,
@@ -461,6 +470,7 @@ impl<'a> IsoScanner<'a> {
         &self,
         volume_handle: Handle,
         volume_index: usize,
+        source_disk: Option<SourceDiskIdentity>,
         dir: &mut Directory,
         display_path: &str,
         extensions: &[&str],
@@ -485,6 +495,7 @@ impl<'a> IsoScanner<'a> {
                     let _ = self.scan_directory_entries(
                         volume_handle,
                         volume_index,
+                        source_disk,
                         &mut child,
                         &full_path,
                         extensions,
@@ -538,6 +549,7 @@ impl<'a> IsoScanner<'a> {
                     image_format,
                     boot_info,
                     wim_info,
+                    source_disk,
                 });
             }
         }
@@ -600,6 +612,59 @@ impl<'a> IsoScanner<'a> {
             virtual_size,
             virtual_block_size,
         })
+    }
+
+    fn resolve_source_disk_identity(&self, volume_handle: Handle) -> Option<SourceDiskIdentity> {
+        let volume_device_path = self.handle_device_path_bytes(volume_handle);
+        let hard_drive = volume_device_path
+            .as_deref()
+            .and_then(parse_last_hard_drive_device_path);
+        let parent_handle = match (volume_device_path.as_deref(), hard_drive.as_ref()) {
+            (Some(path), Some(info)) => self.locate_parent_block_io(path, info)?,
+            (_, None) => volume_handle,
+            _ => return None,
+        };
+
+        let block_io = self
+            .bt
+            .open_protocol_exclusive::<BlockIO>(parent_handle)
+            .ok()?;
+        let media = block_io.media();
+        if hard_drive.is_none() && media.is_logical_partition() {
+            return None;
+        }
+
+        let block_size = media.block_size();
+        if block_size < 512 {
+            return None;
+        }
+        let total_blocks = media.last_block().checked_add(1)?;
+        let disk_size = total_blocks.checked_mul(u64::from(block_size))?;
+        let block_len = usize::try_from(block_size).ok()?;
+        let mut first_block = Vec::new();
+        first_block.try_reserve_exact(block_len).ok()?;
+        first_block.resize(block_len, 0);
+        block_io
+            .read_blocks(media.media_id(), 0, &mut first_block)
+            .ok()?;
+
+        build_source_disk_identity(&first_block, disk_size, block_size, hard_drive)
+    }
+
+    fn locate_parent_block_io(
+        &self,
+        volume_device_path: &[u8],
+        hard_drive: &crate::source_disk::HardDriveDevicePathInfo,
+    ) -> Option<Handle> {
+        let parent_path = parent_device_path_bytes(volume_device_path, hard_drive)?;
+        let mut device_path =
+            unsafe { DevicePath::from_ffi_ptr(parent_path.as_ptr().cast::<FfiDevicePath>()) };
+        self.bt.locate_device_path::<BlockIO>(&mut device_path).ok()
+    }
+
+    fn handle_device_path_bytes(&self, handle: Handle) -> Option<Vec<u8>> {
+        let device_path = self.bt.open_protocol_exclusive::<DevicePath>(handle).ok()?;
+        device_path_to_vec(&device_path)
     }
 
     fn detect_image_virtual_metadata(
@@ -844,6 +909,37 @@ impl<'a> IsoScanner<'a> {
             .ok()
             .flatten()
             .map(IsoBootInfo::from)
+    }
+}
+
+fn device_path_to_vec(device_path: &DevicePath) -> Option<Vec<u8>> {
+    let ptr = device_path.as_ffi_ptr().cast::<u8>();
+    let len = unsafe { device_path_byte_len(ptr) }?;
+    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+    Some(bytes.to_vec())
+}
+
+unsafe fn device_path_byte_len(ptr: *const u8) -> Option<usize> {
+    if ptr.is_null() {
+        return None;
+    }
+
+    let mut offset = 0usize;
+    loop {
+        let node = unsafe { ptr.add(offset) };
+        let node_type = unsafe { ptr::read_unaligned(node) };
+        let node_subtype = unsafe { ptr::read_unaligned(node.add(1)) };
+        let len_lo = unsafe { ptr::read_unaligned(node.add(2)) };
+        let len_hi = unsafe { ptr::read_unaligned(node.add(3)) };
+        let node_len = u16::from_le_bytes([len_lo, len_hi]) as usize;
+        if node_len < 4 {
+            return None;
+        }
+
+        offset = offset.checked_add(node_len)?;
+        if node_type == 0x7f && node_subtype == 0xff {
+            return Some(offset);
+        }
     }
 }
 

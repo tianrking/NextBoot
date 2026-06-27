@@ -1085,29 +1085,40 @@ impl<'a> BootManager<'a> {
     }
 
     fn publish_ventoy_os_param(&self, config: &VirtualDeviceConfig) -> uefi::Result<()> {
-        let (image_sector_size, image_regions) = self.build_ventoy_image_regions(config)?;
+        let (image_sector_size, disk_sector_size, image_regions) =
+            self.build_ventoy_image_regions(config)?;
         let image_location = crate::ventoy::build_ventoy_image_location(
             image_sector_size,
-            self.iso.block_size,
+            disk_sector_size,
             &image_regions,
         )
         .map_err(ventoy_error_to_uefi_status)?;
         let image_location_addr =
             self.copy_to_runtime_pool_aligned(&image_location, VENTOY_RUNTIME_ALIGNMENT)?;
+        let source_disk = self.iso.source_disk;
         let disk_part_type = self
             .detect_ventoy_source_partition_type()
             .unwrap_or(crate::ventoy::VENTOY_PART_TYPE_OTHER);
+        let disk_part_id = source_disk
+            .and_then(|disk| {
+                if disk.partition_number == 0 {
+                    None
+                } else {
+                    Some(disk.partition_number)
+                }
+            })
+            .unwrap_or(usize_to_u16(self.iso.volume_index.saturating_add(1))?);
         let input = crate::ventoy::VentoyOsParamInput {
-            disk_guid: [0; 16],
-            disk_size: self.device.total_size,
-            disk_part_id: usize_to_u16(self.iso.volume_index.saturating_add(1))?,
+            disk_guid: source_disk.map_or([0; 16], |disk| disk.disk_guid),
+            disk_size: source_disk.map_or(self.device.total_size, |disk| disk.disk_size),
+            disk_part_id,
             disk_part_type,
             image_path: &self.iso.path,
             image_size: self.iso.size,
             image_location_addr: image_location_addr as u64,
             image_location_len: usize_to_u32(image_location.len())?,
             reserved: [0; 4],
-            disk_signature: [0; 4],
+            disk_signature: source_disk.map_or([0; 4], |disk| disk.disk_signature),
         };
         let data =
             crate::ventoy::build_ventoy_os_param(&input).map_err(ventoy_error_to_uefi_status)?;
@@ -1133,7 +1144,19 @@ impl<'a> BootManager<'a> {
     fn build_ventoy_image_regions(
         &self,
         config: &VirtualDeviceConfig,
-    ) -> uefi::Result<(u32, Vec<crate::ventoy::VentoyImageRegion>)> {
+    ) -> uefi::Result<(u32, u32, Vec<crate::ventoy::VentoyImageRegion>)> {
+        let disk_sector_size = self
+            .iso
+            .source_disk
+            .map_or(self.iso.block_size, |disk| disk.block_size);
+        if disk_sector_size != self.iso.block_size {
+            warn!(
+                "VentoyOsParam source disk sector size {} differs from volume sector size {} for {}",
+                disk_sector_size, self.iso.block_size, self.iso.path
+            );
+            return Err(Status::UNSUPPORTED.into());
+        }
+
         let extents = self.ventoy_source_extents()?;
         let preferred_image_sector_size = if self.iso.image_format.is_iso() {
             2048
@@ -1146,7 +1169,7 @@ impl<'a> BootManager<'a> {
             self.iso.block_size,
             preferred_image_sector_size,
         ) {
-            Ok(regions) => Ok((preferred_image_sector_size, regions)),
+            Ok(regions) => Ok((preferred_image_sector_size, disk_sector_size, regions)),
             Err(crate::ventoy::VentoyParamError::UnalignedExtent)
                 if preferred_image_sector_size != self.iso.block_size =>
             {
@@ -1156,7 +1179,7 @@ impl<'a> BootManager<'a> {
                     self.iso.block_size,
                 )
                 .map_err(ventoy_error_to_uefi_status)?;
-                Ok((self.iso.block_size, regions))
+                Ok((self.iso.block_size, disk_sector_size, regions))
             }
             Err(err) => Err(ventoy_error_to_uefi_status(err).into()),
         }
@@ -1174,18 +1197,33 @@ impl<'a> BootManager<'a> {
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
 
         if self.iso.extents.is_empty() {
+            let disk_lba_offset = self
+                .iso
+                .source_disk
+                .map_or(0, |disk| disk.partition_start_lba);
             let block_count = div_round_up(self.iso.size, u64::from(self.iso.block_size))
                 .ok_or(uefi::Status::INVALID_PARAMETER)?;
             extents.push(crate::ventoy::VentoyExtent {
                 virtual_block_start: 0,
-                physical_lba: self.iso.start_lba,
+                physical_lba: self
+                    .iso
+                    .start_lba
+                    .checked_add(disk_lba_offset)
+                    .ok_or(uefi::Status::OUT_OF_RESOURCES)?,
                 block_count,
             });
         } else {
+            let disk_lba_offset = self
+                .iso
+                .source_disk
+                .map_or(0, |disk| disk.partition_start_lba);
             for extent in &self.iso.extents {
                 extents.push(crate::ventoy::VentoyExtent {
                     virtual_block_start: extent.virtual_block_start,
-                    physical_lba: extent.physical_lba,
+                    physical_lba: extent
+                        .physical_lba
+                        .checked_add(disk_lba_offset)
+                        .ok_or(uefi::Status::OUT_OF_RESOURCES)?,
                     block_count: extent.block_count,
                 });
             }

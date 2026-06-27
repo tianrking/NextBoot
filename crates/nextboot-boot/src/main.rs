@@ -20,6 +20,7 @@ use uefi::ResultExt;
 mod boot;
 mod init;
 mod scanner;
+mod source_disk;
 mod vdi;
 mod ventoy;
 mod vhdx;
