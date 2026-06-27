@@ -670,6 +670,21 @@ mod tests {
         io
     }
 
+    fn apply_udf_replacement_patch(
+        io: &mut MemoryBlockIo,
+        patch: crate::udf::UdfFileReplacementPatch,
+    ) {
+        let entry_start = patch.file_entry_offset as usize;
+        let entry_end = entry_start + patch.file_entry_data.len();
+        io.data[entry_start..entry_end].copy_from_slice(&patch.file_entry_data);
+
+        if let Some(descriptor) = patch.partition_descriptor {
+            let descriptor_start = descriptor.descriptor_offset as usize;
+            let descriptor_end = descriptor_start + descriptor.descriptor_data.len();
+            io.data[descriptor_start..descriptor_end].copy_from_slice(&descriptor.descriptor_data);
+        }
+    }
+
     #[test]
     fn read_full_blocks_checks_bounds_and_alignment() {
         let io = MemoryBlockIo::new(512, 2);
@@ -823,6 +838,73 @@ mod tests {
 
         let extents = fs.file_extents("/efi/bootx64.efi").expect("extents");
         assert_eq!(extents, vec![FileExtent::new(0, 107, 1)]);
+    }
+
+    #[test]
+    fn udf_replacement_patch_redirects_file_entry_to_appended_data() {
+        let fs = Udf::open(Rc::new(udf_fixture())).expect("valid UDF filesystem");
+        let patch = fs
+            .file_replacement_patch("/EFI/BOOTX64.EFI", 108, 11, 2048)
+            .expect("replacement patch");
+
+        assert_eq!(patch.file_entry_offset, 106 * 2048);
+        assert!(patch.partition_descriptor.is_none());
+
+        let mut io = udf_fixture();
+        apply_udf_replacement_patch(&mut io, patch);
+        io.block_mut(108)[..11].copy_from_slice(b"hello patch");
+
+        let fs = Udf::open(Rc::new(io)).expect("patched UDF filesystem");
+        let stat = fs.stat("/efi/bootx64.efi").expect("file stat");
+        assert_eq!(stat.size, 11);
+
+        let extents = fs.file_extents("/efi/bootx64.efi").expect("extents");
+        assert_eq!(extents, vec![FileExtent::new(0, 108, 1)]);
+
+        let mut data = [0u8; 11];
+        let read = fs
+            .read_file("/EFI/BOOTX64.EFI", 0, &mut data)
+            .expect("file read");
+        assert_eq!(read, data.len());
+        assert_eq!(&data, b"hello patch");
+    }
+
+    #[test]
+    fn udf_replacement_patch_extends_partition_descriptor_when_needed() {
+        let fs = Udf::open(Rc::new(udf_fixture())).expect("valid UDF filesystem");
+        let patch = fs
+            .file_replacement_patch("/EFI/BOOTX64.EFI", 240, 3000, 4096)
+            .expect("replacement patch");
+        let descriptor = patch
+            .partition_descriptor
+            .as_ref()
+            .expect("partition descriptor patch");
+
+        assert_eq!(descriptor.descriptor_offset, 32 * 2048);
+        assert_eq!(
+            u32::from_le_bytes([
+                descriptor.descriptor_data[192],
+                descriptor.descriptor_data[193],
+                descriptor.descriptor_data[194],
+                descriptor.descriptor_data[195],
+            ]),
+            142
+        );
+
+        let mut io = udf_fixture();
+        apply_udf_replacement_patch(&mut io, patch);
+        let replacement = vec![b'X'; 3000];
+        let replacement_start = 240 * 2048;
+        io.data[replacement_start..replacement_start + replacement.len()]
+            .copy_from_slice(&replacement);
+
+        let fs = Udf::open(Rc::new(io)).expect("patched UDF filesystem");
+        let mut data = vec![0u8; 3000];
+        let read = fs
+            .read_file("/EFI/BOOTX64.EFI", 0, &mut data)
+            .expect("file read");
+        assert_eq!(read, data.len());
+        assert_eq!(data, replacement);
     }
 
     #[test]

@@ -1731,23 +1731,100 @@ impl<'a> BootManager<'a> {
         if !self.iso.image_format.is_iso() {
             return Ok(Vec::new());
         }
-        if self.iso.is_udf {
-            warn!(
-                "Ventoy conf_replace for {} is skipped: UDF directory overrides are not implemented yet",
-                self.iso.path
-            );
-            return Ok(Vec::new());
-        }
-
-        let iso_fs = self.open_iso9660_filesystem(source_block_io)?;
         let source_fs = SourceVolumeFileSystem::open(source_block_io)?;
         let mut overlays = Vec::new();
         overlays
-            .try_reserve_exact(plugin.conf_replace.len().saturating_mul(2))
+            .try_reserve_exact(plugin.conf_replace.len().saturating_mul(3))
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
 
         let mut next_append_offset =
             align_up_u64(config.iso_size, ISO9660_SECTOR_SIZE).ok_or(Status::OUT_OF_RESOURCES)?;
+
+        if self.iso.is_udf {
+            let udf_fs = self.open_udf_filesystem(source_block_io)?;
+            for rule in &plugin.conf_replace {
+                let replacement = match source_fs.load_file(&rule.new_path) {
+                    Ok(file) => file,
+                    Err(err) => {
+                        warn!(
+                            "Ventoy UDF conf_replace new path {} for {} was not loaded: {:?}",
+                            rule.new_path,
+                            self.iso.path,
+                            err.status()
+                        );
+                        continue;
+                    }
+                };
+                if replacement.data.len() > VENTOY_CONF_REPLACE_MAX_SIZE {
+                    warn!(
+                        "Ventoy UDF conf_replace new path {} for {} is too large: {} bytes",
+                        replacement.path,
+                        self.iso.path,
+                        replacement.data.len()
+                    );
+                    continue;
+                }
+
+                let aligned_len = align_up(replacement.data.len(), ISO9660_SECTOR_SIZE as usize)
+                    .ok_or(Status::OUT_OF_RESOURCES)?;
+                let replacement_size =
+                    u64::try_from(replacement.data.len()).map_err(|_| Status::OUT_OF_RESOURCES)?;
+                let replacement_sector = next_append_offset / ISO9660_SECTOR_SIZE;
+
+                let patch = match udf_fs.file_replacement_patch(
+                    &rule.org,
+                    replacement_sector,
+                    replacement_size,
+                    aligned_len as u64,
+                ) {
+                    Ok(patch) => patch,
+                    Err(err) => {
+                        warn!(
+                            "Ventoy UDF conf_replace org path {} for {} was not patched: {:?}",
+                            rule.org, self.iso.path, err
+                        );
+                        continue;
+                    }
+                };
+
+                overlays.push(MemoryOverlay::new(
+                    patch.file_entry_offset,
+                    patch.file_entry_data,
+                ));
+                if let Some(partition_descriptor) = patch.partition_descriptor {
+                    overlays.push(MemoryOverlay::new(
+                        partition_descriptor.descriptor_offset,
+                        partition_descriptor.descriptor_data,
+                    ));
+                }
+
+                let mut data = replacement.data;
+                data.resize(aligned_len, 0);
+                overlays.push(MemoryOverlay::new(next_append_offset, data));
+
+                info!(
+                    "Prepared Ventoy UDF conf_replace for {}: {} -> {} at virtual sector {} ({} bytes)",
+                    self.iso.path, rule.org, replacement.path, replacement_sector, replacement_size
+                );
+                next_append_offset = next_append_offset
+                    .checked_add(aligned_len as u64)
+                    .ok_or(Status::OUT_OF_RESOURCES)?;
+            }
+
+            if !overlays.is_empty() {
+                config.iso_size = config.iso_size.max(next_append_offset);
+                info!(
+                    "Prepared {} Ventoy UDF conf_replace overlay(s) for {}; virtual size now {} bytes",
+                    overlays.len(),
+                    self.iso.path,
+                    config.iso_size
+                );
+            }
+
+            return Ok(overlays);
+        }
+
+        let iso_fs = self.open_iso9660_filesystem(source_block_io)?;
         for rule in &plugin.conf_replace {
             let record = match iso_fs.directory_record_location(&rule.org) {
                 Ok(record) if !record.is_dir => record,
@@ -1838,6 +1915,12 @@ impl<'a> BootManager<'a> {
             Iso9660::open(Rc::new(VirtualIsoBlockIo::new(vbio)))
                 .map_err(fs_error_to_uefi_status)?,
         )
+    }
+
+    fn open_udf_filesystem(&self, source_block_io: &BlockIO) -> uefi::Result<Udf> {
+        let config = self.iso9660_virtual_config();
+        let vbio = self.build_virtual_block_io(config, source_block_io)?;
+        Ok(Udf::open(Rc::new(VirtualIsoBlockIo::new(vbio))).map_err(fs_error_to_uefi_status)?)
     }
 
     fn publish_os_param(&self, config: &VirtualDeviceConfig) -> uefi::Result<()> {

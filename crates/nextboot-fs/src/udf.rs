@@ -55,9 +55,12 @@ const FSD_ROOT_ICB_OFFSET: usize = 400;
 const FILE_ENTRY_ICB_FILE_TYPE_OFFSET: usize = 27;
 const FILE_ENTRY_ICB_FLAGS_OFFSET: usize = 34;
 const FILE_ENTRY_FILE_SIZE_OFFSET: usize = 56;
+const FE_BLOCKS_RECORDED_OFFSET: usize = 64;
 const FE_EXT_ATTR_LENGTH_OFFSET: usize = 168;
 const FE_ALLOC_DESCS_LENGTH_OFFSET: usize = 172;
 const FE_ALLOC_DESCS_OFFSET: usize = 176;
+const EFE_OBJECT_SIZE_OFFSET: usize = 64;
+const EFE_BLOCKS_RECORDED_OFFSET: usize = 72;
 const EFE_EXT_ATTR_LENGTH_OFFSET: usize = 208;
 const EFE_ALLOC_DESCS_LENGTH_OFFSET: usize = 212;
 const EFE_ALLOC_DESCS_OFFSET: usize = 216;
@@ -90,6 +93,7 @@ struct Partition {
     number: u16,
     start: u32,
     length: u32,
+    descriptor_lba: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +103,8 @@ struct PartitionMap {
 
 #[derive(Debug, Clone)]
 struct UdfNode {
+    entry_lba: u64,
+    tag_ident: u16,
     part_ref: u16,
     file_type: u8,
     flags: u16,
@@ -116,6 +122,22 @@ impl UdfNode {
     fn is_file(&self) -> bool {
         self.file_type == ICB_FILE_TYPE_REGULAR
     }
+}
+
+/// A block-level patch that redirects a UDF file entry to replacement data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UdfFileReplacementPatch {
+    pub file_entry_offset: u64,
+    pub file_entry_data: Vec<u8>,
+    pub partition_descriptor: Option<UdfPartitionDescriptorPatch>,
+}
+
+/// A patched UDF partition descriptor block, needed when appended replacement
+/// data extends past the original partition extent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UdfPartitionDescriptorPatch {
+    pub descriptor_offset: u64,
+    pub descriptor_data: Vec<u8>,
 }
 
 /// Read-only UDF filesystem.
@@ -256,7 +278,7 @@ impl Udf {
         while block_lba < end {
             let block = self.read_logical_block(block_lba)?;
             match read_u16(&block, TAG_IDENT_OFFSET)? {
-                TAG_IDENT_PD => self.read_partition_descriptor(&block)?,
+                TAG_IDENT_PD => self.read_partition_descriptor(&block, block_lba)?,
                 TAG_IDENT_LVD => self.read_logical_volume_descriptor(&block)?,
                 TAG_IDENT_TD => break,
                 ident if ident > TAG_IDENT_TD => return Err(FsError::InvalidSignature),
@@ -268,11 +290,16 @@ impl Udf {
         self.resolve_partition_maps()
     }
 
-    fn read_partition_descriptor(&mut self, block: &[u8]) -> Result<(), FsError> {
+    fn read_partition_descriptor(
+        &mut self,
+        block: &[u8],
+        descriptor_lba: u64,
+    ) -> Result<(), FsError> {
         let partition = Partition {
             number: read_u16(block, PD_PARTITION_NUMBER_OFFSET)?,
             start: read_u32(block, PD_PARTITION_START_OFFSET)?,
             length: read_u32(block, PD_PARTITION_LENGTH_OFFSET)?,
+            descriptor_lba,
         };
         self.partitions
             .try_reserve_exact(1)
@@ -364,6 +391,107 @@ impl Udf {
         }
 
         Ok(node)
+    }
+
+    /// Build a replacement patch for `path` so that its file entry points at
+    /// `replacement_lba` with `replacement_size` visible bytes.
+    pub fn file_replacement_patch(
+        &self,
+        path: &str,
+        replacement_lba: u64,
+        replacement_size: u64,
+        allocated_bytes: u64,
+    ) -> Result<UdfFileReplacementPatch, FsError> {
+        let node = self.find_node(path)?;
+        if !node.is_file() {
+            return Err(FsError::NotFile);
+        }
+
+        let descriptor_size = match node.flags & ICB_AD_MASK {
+            ICB_AD_SHORT | ICB_AD_IN_ICB => 8usize,
+            ICB_AD_LONG => 16usize,
+            ICB_AD_EXTENDED => return Err(FsError::UnsupportedFs),
+            _ => return Err(FsError::UnsupportedFs),
+        };
+
+        if replacement_size > u64::from(EXTENT_LENGTH_MASK) {
+            return Err(FsError::FileTooLarge);
+        }
+
+        let map = self
+            .partition_maps
+            .get(node.part_ref as usize)
+            .ok_or(FsError::Corrupted)?;
+        let partition = *self
+            .partitions
+            .get(map.partition_index)
+            .ok_or(FsError::Corrupted)?;
+        let replacement_block = replacement_lba
+            .checked_sub(u64::from(partition.start))
+            .ok_or(FsError::InvalidArgument)?;
+        let replacement_block_u32 =
+            u32::try_from(replacement_block).map_err(|_| FsError::FileTooLarge)?;
+        let replacement_size_u32 =
+            u32::try_from(replacement_size).map_err(|_| FsError::FileTooLarge)?;
+
+        let mut entry = node.entry.clone();
+        write_u64(&mut entry, FILE_ENTRY_FILE_SIZE_OFFSET, replacement_size)?;
+        if node.tag_ident == TAG_IDENT_EFE {
+            write_u64(&mut entry, EFE_OBJECT_SIZE_OFFSET, replacement_size)?;
+            write_u64(&mut entry, EFE_BLOCKS_RECORDED_OFFSET, allocated_bytes)?;
+        } else {
+            write_u64(&mut entry, FE_BLOCKS_RECORDED_OFFSET, allocated_bytes)?;
+        }
+        let alloc_len_offset = if node.tag_ident == TAG_IDENT_FE {
+            FE_ALLOC_DESCS_LENGTH_OFFSET
+        } else {
+            EFE_ALLOC_DESCS_LENGTH_OFFSET
+        };
+        write_u32(&mut entry, alloc_len_offset, descriptor_size as u32)?;
+
+        let flags = (node.flags & !ICB_AD_MASK)
+            | if descriptor_size == 16 {
+                ICB_AD_LONG
+            } else {
+                ICB_AD_SHORT
+            };
+        write_u16(&mut entry, FILE_ENTRY_ICB_FLAGS_OFFSET, flags)?;
+
+        let clear_len = node.alloc_desc_len.max(descriptor_size);
+        let clear_end = node
+            .alloc_desc_offset
+            .checked_add(clear_len)
+            .ok_or(FsError::Corrupted)?;
+        if clear_end > entry.len() {
+            return Err(FsError::Corrupted);
+        }
+        entry[node.alloc_desc_offset..clear_end].fill(0);
+        write_u32(&mut entry, node.alloc_desc_offset, replacement_size_u32)?;
+        write_u32(
+            &mut entry,
+            node.alloc_desc_offset + 4,
+            replacement_block_u32,
+        )?;
+        if descriptor_size == 16 {
+            write_u16(&mut entry, node.alloc_desc_offset + 8, node.part_ref)?;
+        }
+        refresh_descriptor_tag(&mut entry)?;
+
+        let allocated_blocks = div_round_up(allocated_bytes, u64::from(self.logical_block_size));
+        let replacement_end_lba = replacement_lba
+            .checked_add(allocated_blocks)
+            .ok_or(FsError::Corrupted)?;
+        let partition_descriptor =
+            self.partition_descriptor_patch(partition, replacement_end_lba)?;
+
+        Ok(UdfFileReplacementPatch {
+            file_entry_offset: node
+                .entry_lba
+                .checked_mul(u64::from(self.logical_block_size))
+                .ok_or(FsError::Corrupted)?,
+            file_entry_data: entry,
+            partition_descriptor,
+        })
     }
 
     fn read_dir_node(&self, node: &UdfNode) -> Result<Vec<FileInfo>, FsError> {
@@ -478,6 +606,8 @@ impl Udf {
         }
 
         Ok(UdfNode {
+            entry_lba: lba,
+            tag_ident,
             part_ref: icb.block.part_ref,
             file_type: *entry
                 .get(FILE_ENTRY_ICB_FILE_TYPE_OFFSET)
@@ -703,6 +833,35 @@ impl Udf {
         }
         self.block_io.read_blocks(lba, block)
     }
+
+    fn partition_descriptor_patch(
+        &self,
+        partition: Partition,
+        replacement_end_lba: u64,
+    ) -> Result<Option<UdfPartitionDescriptorPatch>, FsError> {
+        let partition_end = u64::from(partition.start)
+            .checked_add(u64::from(partition.length))
+            .ok_or(FsError::Corrupted)?;
+        if replacement_end_lba <= partition_end {
+            return Ok(None);
+        }
+
+        let new_length = replacement_end_lba
+            .checked_sub(u64::from(partition.start))
+            .ok_or(FsError::Corrupted)?;
+        let new_length = u32::try_from(new_length).map_err(|_| FsError::FileTooLarge)?;
+        let mut descriptor = self.read_logical_block(partition.descriptor_lba)?;
+        write_u32(&mut descriptor, PD_PARTITION_LENGTH_OFFSET, new_length)?;
+        refresh_descriptor_tag(&mut descriptor)?;
+
+        Ok(Some(UdfPartitionDescriptorPatch {
+            descriptor_offset: partition
+                .descriptor_lba
+                .checked_mul(u64::from(self.logical_block_size))
+                .ok_or(FsError::Corrupted)?,
+            descriptor_data: descriptor,
+        }))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -776,6 +935,64 @@ fn read_u64(data: &[u8], offset: usize) -> Result<u64, FsError> {
     Ok(u64::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]))
+}
+
+fn write_u16(data: &mut [u8], offset: usize, value: u16) -> Result<(), FsError> {
+    let bytes = data.get_mut(offset..offset + 2).ok_or(FsError::Corrupted)?;
+    bytes.copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn write_u32(data: &mut [u8], offset: usize, value: u32) -> Result<(), FsError> {
+    let bytes = data.get_mut(offset..offset + 4).ok_or(FsError::Corrupted)?;
+    bytes.copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn write_u64(data: &mut [u8], offset: usize, value: u64) -> Result<(), FsError> {
+    let bytes = data.get_mut(offset..offset + 8).ok_or(FsError::Corrupted)?;
+    bytes.copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn refresh_descriptor_tag(block: &mut [u8]) -> Result<(), FsError> {
+    if block.len() < 16 {
+        return Err(FsError::Corrupted);
+    }
+
+    let crc_len = read_u16(block, 10)? as usize;
+    if crc_len > 0 {
+        let crc_end = 16usize.checked_add(crc_len).ok_or(FsError::Corrupted)?;
+        if crc_end > block.len() {
+            return Err(FsError::Corrupted);
+        }
+        let crc = udf_crc16(&block[16..crc_end]);
+        write_u16(block, 8, crc)?;
+    }
+
+    block[4] = 0;
+    let checksum = block[..16]
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 4)
+        .fold(0u8, |sum, (_, byte)| sum.wrapping_add(*byte));
+    block[4] = checksum;
+    Ok(())
+}
+
+fn udf_crc16(data: &[u8]) -> u16 {
+    let mut crc = 0u16;
+    for &byte in data {
+        crc ^= u16::from(byte) << 8;
+        for _ in 0..8 {
+            if crc & 0x8000 != 0 {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    crc
 }
 
 fn align_up(value: usize, align: usize) -> Option<usize> {
