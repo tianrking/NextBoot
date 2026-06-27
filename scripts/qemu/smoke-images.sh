@@ -9,7 +9,7 @@ create_smoke_raw_disk() {
 }
 
 create_generated_smoke_images() {
-    if [ "$SMOKE_EFI_ISO" -eq 1 ] || [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ] || [ "$SMOKE_DYNAMIC_VHD" -eq 1 ]; then
+    if [ "$SMOKE_EFI_ISO" -eq 1 ] || [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ] || [ "$SMOKE_DYNAMIC_VHD" -eq 1 ] || [ "$SMOKE_VDI" -eq 1 ]; then
         SMOKE_EFI_FILE="${PROJECT_DIR}/target/${TARGET}/${BUILD_MODE}/nextboot-smoke-efi.efi"
         SMOKE_HELPER_FILE="$SMOKE_EFI_FILE"
         if [ ! -f "$SMOKE_EFI_FILE" ]; then
@@ -42,7 +42,7 @@ create_generated_smoke_images() {
         IMAGES=("$SMOKE_ISO_FILE" "${IMAGES[@]}")
     fi
 
-    if [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ] || [ "$SMOKE_DYNAMIC_VHD" -eq 1 ]; then
+    if [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ] || [ "$SMOKE_DYNAMIC_VHD" -eq 1 ] || [ "$SMOKE_VDI" -eq 1 ]; then
         SMOKE_RAW_IMG_FILE="${PROJECT_DIR}/target/nextboot-smoke-raw.img"
         warn "Creating raw GPT/FAT32 smoke disk image..."
         create_smoke_raw_disk "$SMOKE_RAW_IMG_FILE"
@@ -66,5 +66,13 @@ create_generated_smoke_images() {
         warn "Wrapping smoke disk image as dynamic VHD..."
         python3 "${SCRIPT_DIR}/create-smoke-vhd.py" --format dynamic "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHD_FILE"
         IMAGES=("$SMOKE_VHD_FILE" "${IMAGES[@]}")
+    fi
+
+    if [ "$SMOKE_VDI" -eq 1 ]; then
+        SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-dynamic.vdi"
+        require_command python3 "python3 is required to create the smoke dynamic VDI"
+        warn "Wrapping smoke disk image as dynamic VDI..."
+        python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_FILE"
+        IMAGES=("$SMOKE_VDI_FILE" "${IMAGES[@]}")
     fi
 }
