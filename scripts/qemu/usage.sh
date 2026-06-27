@@ -8,6 +8,7 @@ Usage:
   $0 [debug|release] [options]
 
 Options:
+  TARGET=TRIPLE     UEFI target: x86_64-unknown-uefi or aarch64-unknown-uefi
   --mode MODE        Build mode: debug or release
   --bus BUS          Storage bus: virtio, nvme, sata, usb, sd
   --image PATH       Copy an ISO/WIM/VHD image into /ISO (repeatable)
@@ -55,6 +56,7 @@ Examples:
   $0 --bus nvme --sector-size 4096 --no-run
   $0 --bus nvme --layout split --data-fs exfat --image ~/Downloads/Win11.iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
+  TARGET=aarch64-unknown-uefi $0 --bus virtio --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vlnk-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-raw-img
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vhd

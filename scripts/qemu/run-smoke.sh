@@ -3,6 +3,7 @@
 run_qemu_smoke() {
     SMOKE_SCRIPT="${SCRIPT_DIR}/qemu-boot-smoke.py"
     [ -f "$SMOKE_SCRIPT" ] || die "QEMU smoke runner not found: ${SMOKE_SCRIPT}"
+    SMOKE_ISO_MENU_PATH="/ISO/${SMOKE_ISO_BASENAME:-nextboot-smoke-efi.iso}"
     EXPECT_ARGS=(
         --expect "NextBoot v"
         --expect "Phase 2: Scanning for ISO files"
@@ -32,7 +33,7 @@ run_qemu_smoke() {
             if [ "$SMOKE_MENU_MEMDISK" -eq 1 ]; then
                 EXPECT_ARGS+=(
                     --send-text "m"
-                    --expect "Manual Ventoy memdisk mode requested for /ISO/nextboot-smoke-efi.iso"
+                    --expect "Manual Ventoy memdisk mode requested for ${SMOKE_ISO_MENU_PATH}"
                 )
             else
                 EXPECT_ARGS+=(--send-key enter)
@@ -43,7 +44,7 @@ run_qemu_smoke() {
                 )
                 if [ "$SMOKE_AUTO_MEMDISK" -eq 1 ] || [ "$SMOKE_MENU_MEMDISK" -eq 1 ]; then
                     EXPECT_ARGS+=(
-                        --expect "Using Ventoy auto_memdisk for /ISO/nextboot-smoke-efi.iso"
+                        --expect "Using Ventoy auto_memdisk for ${SMOKE_ISO_MENU_PATH}"
                     )
                 fi
                 if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
@@ -107,5 +108,5 @@ run_qemu_smoke() {
     fi
     warn "Running QEMU boot smoke for ${SMOKE_TIMEOUT}s..."
     python3 "$SMOKE_SCRIPT" --timeout "$SMOKE_TIMEOUT" "${EXPECT_ARGS[@]}" -- \
-        qemu-system-x86_64 "${QEMU_OPTS[@]}"
+        "$QEMU_BINARY" "${QEMU_OPTS[@]}"
 }

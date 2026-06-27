@@ -17,6 +17,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 HOST_OS="${NEXTBOOT_OSTYPE:-$OSTYPE}"
+TARGET="${TARGET:-x86_64-unknown-uefi}"
 
 LAYOUT="split"
 DATA_FS="exfat"
@@ -37,6 +38,7 @@ Usage:
   $0 [options] <device>
 
 Options:
+  --target TARGET   UEFI build target: x86_64-unknown-uefi or aarch64-unknown-uefi
   --layout LAYOUT   Disk layout: split or single (default: split)
   --data-fs FS      Data partition filesystem for split layout: exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs (default: exfat)
   --esp-size MB     ESP size for split layout in MiB (default: 260)
@@ -56,6 +58,7 @@ Examples:
   $0 --layout split --data-fs ntfs /dev/diskX
   $0 --layout split --data-fs udf /dev/sdX
   $0 --layout split --data-fs xfs /dev/nvme0n1
+  $0 --target aarch64-unknown-uefi --layout split --data-fs exfat /dev/diskX
   $0 --layout split --ventoy-assets ../Ventoy/INSTALL/ventoy /dev/diskX
   $0 --layout split --data-fs fat32 /dev/sdX
   $0 --layout single /dev/sdX
@@ -118,6 +121,20 @@ list_devices() {
 
 source "${SCRIPT_DIR}/lib/flash_helpers.sh"
 
+configure_flash_target() {
+    case "$TARGET" in
+        x86_64-unknown-uefi)
+            EFI_BOOT_NAME="BOOTX64.EFI"
+            ;;
+        aarch64-unknown-uefi)
+            EFI_BOOT_NAME="BOOTAA64.EFI"
+            ;;
+        *)
+            die "Unsupported UEFI target '${TARGET}'. Supported: x86_64-unknown-uefi, aarch64-unknown-uefi"
+            ;;
+    esac
+}
+
 parse_args() {
     if [ $# -eq 0 ]; then
         list_devices
@@ -132,6 +149,11 @@ parse_args() {
     DEVICE=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --target)
+                [ $# -ge 2 ] || die "--target requires a value"
+                TARGET="$2"
+                shift 2
+                ;;
             --layout)
                 [ $# -ge 2 ] || die "--layout requires a value"
                 LAYOUT="$2"
@@ -187,6 +209,7 @@ parse_args() {
 }
 
 parse_args "$@"
+configure_flash_target
 
 case "$LAYOUT" in
     split|single) ;;
@@ -210,12 +233,12 @@ if [ "$ESP_SIZE_MB" -lt 64 ]; then
     die "--esp-size must be at least 64 MiB"
 fi
 
-EFI_FILE="${PROJECT_DIR}/target/x86_64-unknown-uefi/release/nextboot-boot.efi"
+EFI_FILE="${PROJECT_DIR}/target/${TARGET}/release/nextboot-boot.efi"
 if [ ! -f "$EFI_FILE" ]; then
-    EFI_FILE="${PROJECT_DIR}/target/x86_64-unknown-uefi/debug/nextboot-boot.efi"
+    EFI_FILE="${PROJECT_DIR}/target/${TARGET}/debug/nextboot-boot.efi"
 fi
 
-[ -f "$EFI_FILE" ] || die "EFI file not found. Run ./scripts/build.sh first."
+[ -f "$EFI_FILE" ] || die "EFI file not found. Run TARGET=${TARGET} ./scripts/build.sh first."
 
 if [ "$INSTALL_VENTOY_ASSETS" -eq 1 ]; then
     if VENTOY_ASSETS_RESOLVED="$(resolve_ventoy_assets_dir)"; then
@@ -235,6 +258,8 @@ fi
 echo -e "${GREEN}NextBoot Flash Tool${NC}"
 echo "===================="
 warn "EFI file: ${EFI_FILE}"
+warn "UEFI target: ${TARGET}"
+warn "Fallback loader: EFI/BOOT/${EFI_BOOT_NAME}"
 warn "Target device: ${DEVICE}"
 warn "Layout: ${LAYOUT}"
 if [ "$LAYOUT" = "split" ]; then

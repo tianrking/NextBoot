@@ -20,7 +20,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--sector-size", required=True, type=int, choices=(512, 4096))
     parser.add_argument("--layout", required=True, choices=("single", "split"))
     parser.add_argument("--data-fs", default="exfat", choices=("exfat", "ext2", "ext3", "ext4", "fat32", "ntfs", "udf", "xfs"))
-    parser.add_argument("--efi-file", help="expected BOOTX64.EFI source file")
+    parser.add_argument("--efi-file", help="expected fallback EFI source file")
+    parser.add_argument(
+        "--efi-boot-name",
+        default="BOOTX64.EFI",
+        choices=("BOOTX64.EFI", "BOOTAA64.EFI"),
+        help="fallback EFI filename under /EFI/BOOT",
+    )
     parser.add_argument("--image", action="append", default=[], help="expected /ISO image file; repeatable")
     return parser.parse_args(argv)
 

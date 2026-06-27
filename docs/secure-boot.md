@@ -51,7 +51,8 @@ binary with Secure Boot enabled. Common local paths are:
 - Keep Secure Boot disabled on machines where you cannot enroll your own key.
 
 Once the certificate is enrolled, install the signed EFI binary as
-`EFI/BOOT/BOOTX64.EFI` on the ESP instead of the unsigned build output.
+`EFI/BOOT/BOOTX64.EFI` for `x86_64-unknown-uefi` or `EFI/BOOT/BOOTAA64.EFI`
+for `aarch64-unknown-uefi` on the ESP instead of the unsigned build output.
 
 ## Current Limits
 

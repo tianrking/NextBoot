@@ -46,13 +46,14 @@ NextBoot/
 
 - Rust 1.70+ (安装 `rustup`)
 - QEMU + OVMF (用于测试)
-- x86_64-unknown-uefi target
+- x86_64-unknown-uefi target; 可选 `aarch64-unknown-uefi`
 
 ### 安装依赖
 
 ```bash
 # 添加 UEFI 目标
 rustup target add x86_64-unknown-uefi
+rustup target add aarch64-unknown-uefi
 
 # 安装 rust-src 组件
 rustup component add rust-src
@@ -81,6 +82,7 @@ sudo dnf install edk2-ovmf
 
 # 可选：覆盖目标平台
 TARGET=x86_64-unknown-uefi ./scripts/build.sh check
+TARGET=aarch64-unknown-uefi ./scripts/build.sh check
 ```
 
 `scripts/build.sh` 会优先验证当前 toolchain 是否已经包含 UEFI target，并在需要时安装
@@ -133,6 +135,10 @@ shim、微软 UEFI CA 签名和 SBAT/吊销策略仍在兼容性 gap 中。详�
 # 用 SD 控制器风格路径测试
 ./scripts/run-qemu.sh --bus sd --layout split --data-fs fat32 --smoke-efi-iso
 
+# 用 AArch64 UEFI 固件测试 virtio 固定盘路径和 BOOTAA64.EFI fallback
+TARGET=aarch64-unknown-uefi ./scripts/build.sh
+TARGET=aarch64-unknown-uefi ./scripts/run-qemu.sh --bus virtio --smoke-efi-iso
+
 # 用 NTFS Data 分区覆盖 Windows/大文件盘常见布局
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-linux-plugins
 
@@ -183,10 +189,11 @@ shim、微软 UEFI CA 签名和 SBAT/吊销策略仍在兼容性 gap 中。详�
 `usb`、`sd` 五种 QEMU 存储路径，用来覆盖固定盘、可移动盘和 SD 控制器路径的启动差异。`--sector-size
 4096` 会生成 4K Native 测试盘，并让 QEMU 设备暴露 4096B logical/physical block
 size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异。`--layout split` 会
-生成独立 ESP 和 Data 分区：ESP 只放 `BOOTX64.EFI`，Data 分区放 `/ISO`，用于验证
+生成独立 ESP 和 Data 分区：ESP 只放当前目标架构的 fallback EFI（x86_64 为
+`BOOTX64.EFI`，AArch64 为 `BOOTAA64.EFI`），Data 分区放 `/ISO`，用于验证
 固定盘上“引导分区与镜像分区分离”的真实部署路径；`--data-fs exfat|ext2|ext3|ext4|fat32|ntfs|udf|xfs` 可覆盖
 默认写盘布局、Linux ext 系列数据盘、FAT32 兼容布局、NTFS 大文件布局和 UDF 数据盘布局。生成后脚本会调用
-`verify-qemu-image.py` 校验 GPT CRC、分区布局、FAT32/exFAT/ext2/3/4/NTFS/UDF/XFS 目录、`BOOTX64.EFI`、
+`verify-qemu-image.py` 校验 GPT CRC、分区布局、FAT32/exFAT/ext2/3/4/NTFS/UDF/XFS 目录、fallback EFI、
 `/ISO` 文件和物理 extent。XFS QEMU 路径覆盖 512B/4K 设备扇区上的 4K XFS 文件系统块、
 真实 inode 编号映射、shortform 目录、dir2/dir3 block/data 目录和 NextBoot 小目录子集；真实
 `mkfs.xfs` 更复杂的大目录/btree 形态仍在 gap 列表中；`--smoke`
@@ -224,6 +231,8 @@ NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B�
 `ide-hd` 要求 512B discard granularity。当前 macOS Homebrew OVMF 也不会直接从
 `sdhci-pci` 启动，所以 SD 启动 smoke 需要显式设置 `NEXTBOOT_QEMU_SD_BOOT_SMOKE=1`
 作为实验项。
+矩阵默认使用 `x86_64-unknown-uefi`；可用 `TARGET=aarch64-unknown-uefi ./scripts/qemu-smoke-matrix.sh`
+覆盖 AArch64 virtio/NVMe/USB 等路径，其中 fallback 文件名会自动改为 `BOOTAA64.EFI`。
 
 真实硬件测试用 `./scripts/hardware-report.sh` 生成统一报告，并可追加
 `docs/hardware/hardware-matrix.csv`。推荐覆盖项见
@@ -238,6 +247,9 @@ SATA SSD、SD 读卡器、512B/4K 扇区和 exFAT/NTFS/ext/UDF/XFS Data 分区�
 
 # 写入标准 ESP + Data 双分区布局
 ./scripts/flash.sh --layout split --data-fs exfat /dev/sdX
+
+# 写入 AArch64 UEFI 介质，ESP 使用 EFI/BOOT/BOOTAA64.EFI
+TARGET=aarch64-unknown-uefi ./scripts/flash.sh --layout split --data-fs exfat /dev/sdX
 
 # 写入 NTFS Data 分区布局，适合 Windows/大文件盘工作流
 ./scripts/flash.sh --layout split --data-fs ntfs /dev/sdX

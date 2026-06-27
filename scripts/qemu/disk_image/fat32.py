@@ -7,6 +7,7 @@ def write_fat32_volume(f, part, deps):
     sector_size = deps["sector_size"]
     fat32_geometry = deps["fat32_geometry"]
     efi_file = deps["efi_file"]
+    efi_boot_name = deps["efi_boot_name"]
     smoke_vlnk_iso = deps["smoke_vlnk_iso"]
     image_files = deps["image_files"]
     extra_files = deps["extra_files"]
@@ -122,7 +123,7 @@ def write_fat32_volume(f, part, deps):
 
     if part["include_efi"]:
         boot = ensure_directory("/EFI/BOOT")
-        copy_file(efi_file, boot, "BOOTX64.EFI")
+        copy_file(efi_file, boot, efi_boot_name)
 
     if part["include_images"]:
         if not smoke_vlnk_iso:

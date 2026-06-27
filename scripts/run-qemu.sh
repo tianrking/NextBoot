@@ -17,7 +17,7 @@
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
-#   ./scripts/run-qemu.sh --bus usb --mode release --no-run
+#   TARGET=aarch64-unknown-uefi ./scripts/run-qemu.sh --bus virtio --smoke-efi-iso
 
 set -eo pipefail
 
@@ -29,7 +29,7 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-TARGET="x86_64-unknown-uefi"
+TARGET="${TARGET:-x86_64-unknown-uefi}"
 BUILD_MODE="debug"
 BUS="virtio"
 DISK_SIZE_MB=256
@@ -85,6 +85,42 @@ source "${SCRIPT_DIR}/qemu/device.sh"
 source "${SCRIPT_DIR}/qemu/validate.sh"
 source "${SCRIPT_DIR}/qemu/smoke-images.sh"
 source "${SCRIPT_DIR}/qemu/run-smoke.sh"
+
+configure_qemu_arch() {
+    case "$TARGET" in
+        x86_64-unknown-uefi)
+            EFI_BOOT_NAME="BOOTX64.EFI"
+            SMOKE_ARCH_TAG="x64"
+            QEMU_BINARY="qemu-system-x86_64"
+            QEMU_OPTS=(-machine q35,accel=tcg)
+            OVMF_PATHS=(
+                "/usr/share/OVMF/OVMF_CODE.fd"
+                "/usr/share/ovmf/OVMF.fd"
+                "/usr/share/qemu/OVMF.fd"
+                "/opt/homebrew/share/qemu/edk2-x86_64-code.fd"
+                "/opt/homebrew/opt/qemu/share/qemu/edk2-x86_64-code.fd"
+            )
+            ;;
+        aarch64-unknown-uefi)
+            EFI_BOOT_NAME="BOOTAA64.EFI"
+            SMOKE_ARCH_TAG="aa64"
+            QEMU_BINARY="qemu-system-aarch64"
+            QEMU_OPTS=(-machine virt,accel=tcg -cpu cortex-a72)
+            OVMF_PATHS=(
+                "/usr/share/AAVMF/AAVMF_CODE.fd"
+                "/usr/share/AAVMF/AAVMF_CODE.ms.fd"
+                "/usr/share/edk2/aarch64/QEMU_EFI.fd"
+                "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+                "/usr/share/qemu/edk2-aarch64-code.fd"
+                "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
+                "/opt/homebrew/opt/qemu/share/qemu/edk2-aarch64-code.fd"
+            )
+            ;;
+        *)
+            die "Unsupported UEFI QEMU target '${TARGET}'. Supported: x86_64-unknown-uefi, aarch64-unknown-uefi"
+            ;;
+    esac
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -279,6 +315,7 @@ while [ $# -gt 0 ]; do
 done
 
 validate_qemu_args
+configure_qemu_arch
 
 EFI_FILE="${PROJECT_DIR}/target/${TARGET}/${BUILD_MODE}/nextboot-boot.efi"
 if [ ! -f "$EFI_FILE" ]; then
@@ -288,7 +325,7 @@ fi
 create_generated_smoke_images
 SMOKE_VLNK_FILE=""
 if [ "$SMOKE_VLNK_ISO" -eq 1 ]; then
-    SMOKE_VLNK_FILE="${PROJECT_DIR}/target/nextboot-smoke-vlnk.vlnk.iso"
+    SMOKE_VLNK_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-vlnk.vlnk.iso"
 fi
 
 for image in "${IMAGES[@]}"; do
@@ -304,6 +341,8 @@ mkdir -p "$(dirname "$DISK_IMG")"
 echo -e "${GREEN}NextBoot QEMU Test${NC}"
 echo "=================="
 info "EFI file: ${EFI_FILE}"
+info "UEFI target: ${TARGET}"
+info "Fallback loader: EFI/BOOT/${EFI_BOOT_NAME}"
 info "Storage bus: ${BUS}"
 info "Sector size: ${SECTOR_SIZE}"
 info "Disk layout: ${LAYOUT}"
@@ -328,6 +367,7 @@ PY_ARGS=(
     "$SMOKE_VLNK_FILE"
     "$SMOKE_HELPER_FILE"
     "$SMOKE_AUTO_MEMDISK"
+    "$EFI_BOOT_NAME"
 )
 if [ "${#IMAGES[@]}" -gt 0 ]; then
     PY_ARGS+=("${IMAGES[@]}")
@@ -348,6 +388,7 @@ if [ "$VERIFY_IMAGE" -eq 1 ]; then
         --layout "$LAYOUT"
         --data-fs "$DATA_FS"
         --efi-file "$EFI_FILE"
+        --efi-boot-name "$EFI_BOOT_NAME"
     )
     if [ "$SMOKE_VLNK_ISO" -eq 1 ]; then
         VERIFY_ARGS+=(--image "$SMOKE_VLNK_FILE")
@@ -359,20 +400,11 @@ if [ "$VERIFY_IMAGE" -eq 1 ]; then
     python3 "$VERIFY_SCRIPT" "${VERIFY_ARGS[@]}"
 fi
 
-QEMU_OPTS=(
-    -machine q35,accel=tcg
+QEMU_OPTS+=(
     -m "$MEMORY"
     -net none
     -nographic
     -serial mon:stdio
-)
-
-OVMF_PATHS=(
-    "/usr/share/OVMF/OVMF_CODE.fd"
-    "/usr/share/ovmf/OVMF.fd"
-    "/usr/share/qemu/OVMF.fd"
-    "/opt/homebrew/share/qemu/edk2-x86_64-code.fd"
-    "/opt/homebrew/opt/qemu/share/qemu/edk2-x86_64-code.fd"
 )
 
 OVMF_CODE=""
@@ -392,7 +424,7 @@ fi
 append_qemu_storage_device "$BUS" "$DISK_IMG" "$SECTOR_SIZE"
 
 echo -e "${BLUE}QEMU command:${NC}"
-printf 'qemu-system-x86_64'
+printf '%s' "$QEMU_BINARY"
 for opt in "${QEMU_OPTS[@]}"; do
     printf ' %q' "$opt"
 done
@@ -403,7 +435,7 @@ if [ "$NO_RUN" -eq 1 ]; then
     exit 0
 fi
 
-require_command qemu-system-x86_64 "qemu-system-x86_64 is required to run the VM"
+require_command "$QEMU_BINARY" "${QEMU_BINARY} is required to run the VM"
 
 if [ -n "$OVMF_CODE" ]; then
     info "Using OVMF: ${OVMF_CODE}"
@@ -415,7 +447,7 @@ if [ "$SMOKE" -eq 1 ]; then
 fi
 
 warn "Starting QEMU. Press Ctrl+A then X to exit."
-qemu-system-x86_64 "${QEMU_OPTS[@]}"
+"$QEMU_BINARY" "${QEMU_OPTS[@]}"
 
 echo ""
 info "QEMU exited"

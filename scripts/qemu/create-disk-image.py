@@ -32,13 +32,16 @@ smoke_vlnk_iso = sys.argv[9] == "1"
 smoke_vlnk_file = sys.argv[10]
 smoke_helper_file = sys.argv[11]
 smoke_auto_memdisk = sys.argv[12] == "1"
-image_files = sys.argv[13:]
+efi_boot_name = sys.argv[13].upper()
+image_files = sys.argv[14:]
 if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
     raise SystemExit("layout must be single or split")
 if data_fs not in ("exfat", "ext2", "ext3", "ext4", "fat32", "ntfs", "udf", "xfs"):
     raise SystemExit("data filesystem must be exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs")
+if efi_boot_name not in ("BOOTX64.EFI", "BOOTAA64.EFI"):
+    raise SystemExit("EFI boot name must be BOOTX64.EFI or BOOTAA64.EFI")
 total_bytes = size_mb * 1024 * 1024
 if total_bytes % sector_size != 0:
     raise SystemExit("disk size must be aligned to the sector size")
@@ -379,6 +382,7 @@ volume_deps = {
     "log2_power_of_two": log2_power_of_two,
     "align_up": align_up,
     "efi_file": efi_file,
+    "efi_boot_name": efi_boot_name,
     "smoke_vlnk_iso": smoke_vlnk_iso,
     "image_files": image_files,
     "extra_files": extra_files,

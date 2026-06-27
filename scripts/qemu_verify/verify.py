@@ -88,9 +88,9 @@ def assert_extents_inside_partition(partition: Partition, record: FileRecord, ex
         )
 
 
-def verify_efi(volume, image: DiskImage, source: str | None) -> None:
-    efi = volume.lookup("/EFI/BOOT/BOOTX64.EFI")
-    require(not efi.is_dir, "BOOTX64.EFI is a directory")
+def verify_efi(volume, image: DiskImage, source: str | None, boot_name: str) -> None:
+    efi = volume.lookup(f"/EFI/BOOT/{boot_name}")
+    require(not efi.is_dir, f"{boot_name} is a directory")
     extents = volume.file_extents(efi)
     assert_extents_inside_partition(volume.partition, efi, extents)
     if source:
@@ -132,7 +132,7 @@ def verify_layout(args: argparse.Namespace) -> None:
             part = find_partition(partitions, "NEXBOOT")
             require(part.type_guid == ESP_GUID, "single partition is not an ESP")
             volume = make_volume(image, part, "fat32")
-            verify_efi(volume, image, args.efi_file)
+            verify_efi(volume, image, args.efi_file, args.efi_boot_name)
             verify_iso_directory(volume, image, args.image)
             print(f"verified single GPT/FAT32 layout: {part.name}")
         else:
@@ -143,7 +143,7 @@ def verify_layout(args: argparse.Namespace) -> None:
             require(data.type_guid == MS_BASIC_GUID, "split Data partition has wrong type GUID")
             esp_volume = make_volume(image, esp, "fat32")
             data_volume = make_volume(image, data, args.data_fs)
-            verify_efi(esp_volume, image, args.efi_file)
+            verify_efi(esp_volume, image, args.efi_file, args.efi_boot_name)
             verify_iso_directory(data_volume, image, args.image)
             print(f"verified split GPT layout: {esp.name}=FAT32 {data.name}={args.data_fs}")
         print(f"verified {len(args.image)} /ISO image file(s) on {args.sector_size} byte sectors")

@@ -257,11 +257,11 @@ ensure_macos_mounted() {
 copy_efi_tree() {
     local mount_point="$1"
     run_cmd mkdir -p "${mount_point}/EFI/BOOT"
-    run_cmd cp "$EFI_FILE" "${mount_point}/EFI/BOOT/BOOTX64.EFI"
+    run_cmd cp "$EFI_FILE" "${mount_point}/EFI/BOOT/${EFI_BOOT_NAME}"
 }
 
 copy_efi_tree_sudo() {
     local mount_point="$1"
     run_sudo mkdir -p "${mount_point}/EFI/BOOT"
-    run_sudo cp "$EFI_FILE" "${mount_point}/EFI/BOOT/BOOTX64.EFI"
+    run_sudo cp "$EFI_FILE" "${mount_point}/EFI/BOOT/${EFI_BOOT_NAME}"
 }

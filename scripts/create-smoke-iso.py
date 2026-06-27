@@ -235,7 +235,11 @@ def volume_descriptor_terminator() -> bytes:
     return bytes(data)
 
 
-def make_iso_layout(efi_data: bytes, profile: str) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+def make_iso_layout(
+    efi_data: bytes,
+    profile: str,
+    efi_boot_name: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     directories: list[dict[str, object]] = [
         {"path": "/", "name": b"\x00", "parent": "/"},
         {"path": "/EFI", "name": b"EFI", "parent": "/"},
@@ -247,7 +251,7 @@ def make_iso_layout(efi_data: bytes, profile: str) -> tuple[list[dict[str, objec
         files.append(
             {
                 "dir": "/EFI/BOOT",
-                "name": b"BOOTX64.EFI;1",
+                "name": f"{efi_boot_name};1".encode("ascii"),
                 "data": efi_data,
                 "eltorito": True,
             }
@@ -340,9 +344,9 @@ def make_iso_layout(efi_data: bytes, profile: str) -> tuple[list[dict[str, objec
     return directories, files
 
 
-def write_smoke_iso(output: Path, efi: Path, label: str, profile: str) -> None:
+def write_smoke_iso(output: Path, efi: Path, label: str, profile: str, efi_boot_name: str) -> None:
     efi_data = efi.read_bytes()
-    directories, files = make_iso_layout(efi_data, profile)
+    directories, files = make_iso_layout(efi_data, profile, efi_boot_name)
 
     pvd_lba = 16
     eltorito_record_lba = 17
@@ -452,7 +456,13 @@ def write_smoke_iso(output: Path, efi: Path, label: str, profile: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--efi", required=True, type=Path, help="BOOTX64.EFI payload")
+    parser.add_argument("--efi", required=True, type=Path, help="fallback EFI payload")
+    parser.add_argument(
+        "--boot-file-name",
+        default="BOOTX64.EFI",
+        choices=("BOOTX64.EFI", "BOOTAA64.EFI"),
+        help="generic ISO fallback filename under /EFI/BOOT",
+    )
     parser.add_argument("--label", default="NEXTSMOKE", help="ISO9660 volume label")
     parser.add_argument(
         "--profile",
@@ -474,7 +484,7 @@ def main() -> int:
         raise SystemExit(f"EFI payload not found: {args.efi}")
     if len(args.label) > 32:
         raise SystemExit("--label must fit in 32 ASCII characters")
-    write_smoke_iso(args.output, args.efi, args.label, args.profile)
+    write_smoke_iso(args.output, args.efi, args.label, args.profile, args.boot_file_name)
     print(f"created {args.output} ({os.path.getsize(args.output)} bytes)")
     return 0
 

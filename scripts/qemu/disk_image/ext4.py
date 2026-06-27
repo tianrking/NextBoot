@@ -39,6 +39,7 @@ def write_ext4_volume(f, part, deps):
     use_extents = part["fs_type"] == "ext4"
 
     efi_file = deps["efi_file"]
+    efi_boot_name = deps["efi_boot_name"]
     smoke_vlnk_iso = deps["smoke_vlnk_iso"]
     image_files = deps["image_files"]
     extra_files = deps["extra_files"]
@@ -74,7 +75,7 @@ def write_ext4_volume(f, part, deps):
         directory.children_by_name[node.name.lower()] = node
 
     if part["include_efi"]:
-        add_file("/EFI/BOOT/BOOTX64.EFI", source=efi_file)
+        add_file(f"/EFI/BOOT/{efi_boot_name}", source=efi_file)
 
     if part["include_images"]:
         if not smoke_vlnk_iso:
