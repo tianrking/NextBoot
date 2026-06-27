@@ -23,6 +23,9 @@ use uefi::{Handle, Identify};
 mod device_path;
 mod handlers;
 
+#[cfg(test)]
+use device_path::NEXTBOOT_VIRTUAL_DISK_GUID;
+
 pub use device_path::{
     append_file_path_device_path, create_cdrom_device_path, create_hard_drive_device_path,
     create_virtual_disk_controller_device_path, format_guid, CdRomDevicePath, DevicePathHeader,
