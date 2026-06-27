@@ -23,6 +23,8 @@ pub const VENTOY_WINDOWS_DATA_INJECTION_ARCHIVE_SIZE: usize = 384;
 pub const VENTOY_WINDOWS_DATA_RESERVED_SIZE: usize = 250;
 pub const VENTOY_WINDOWS_DATA_HEADER_SIZE: usize = 1024;
 
+const VENTOY_WIMBOOT_JUMP_ALIGNMENT: usize = 16;
+const VENTOY_WIMBOOT_PAYLOAD_ALIGNMENT: usize = 2048;
 const AUTO_INSTALL_SCRIPT_OFFSET: usize = 0;
 const INJECTION_ARCHIVE_OFFSET: usize =
     AUTO_INSTALL_SCRIPT_OFFSET + VENTOY_WINDOWS_DATA_AUTO_INSTALL_SCRIPT_SIZE;
@@ -53,6 +55,11 @@ pub struct VentoyWindowsRuntimeDataInput<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VentoyWindowsRuntimeDataError {
     AutoInstallTooLarge,
+    OutputReserveFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VentoyWindowsWimbootPayloadError {
     OutputReserveFailed,
 }
 
@@ -105,6 +112,42 @@ pub fn build_ventoy_windows_runtime_data(
     Ok(out)
 }
 
+/// Build Ventoy's WIMBOOT `winpeshl.exe` replacement payload.
+///
+/// Ventoy prepends `vtoyjump*.exe`, then embeds `VentoyOsParam`,
+/// `ventoy_windows_data`, and the original WinPE `winpeshl.exe`.
+pub fn build_ventoy_wimboot_jump_payload(
+    jump_exe: &[u8],
+    os_param: &[u8],
+    windows_data: &[u8],
+    original_exe: &[u8],
+) -> Result<Vec<u8>, VentoyWindowsWimbootPayloadError> {
+    let jump_align = align_up(jump_exe.len(), VENTOY_WIMBOOT_JUMP_ALIGNMENT)
+        .ok_or(VentoyWindowsWimbootPayloadError::OutputReserveFailed)?;
+    let raw_len = jump_align
+        .checked_add(os_param.len())
+        .and_then(|len| len.checked_add(windows_data.len()))
+        .and_then(|len| len.checked_add(original_exe.len()))
+        .ok_or(VentoyWindowsWimbootPayloadError::OutputReserveFailed)?;
+    let aligned_len = align_up(raw_len, VENTOY_WIMBOOT_PAYLOAD_ALIGNMENT)
+        .ok_or(VentoyWindowsWimbootPayloadError::OutputReserveFailed)?;
+
+    let mut out = Vec::new();
+    out.try_reserve_exact(aligned_len)
+        .map_err(|_| VentoyWindowsWimbootPayloadError::OutputReserveFailed)?;
+    out.resize(aligned_len, 0);
+    out[..jump_exe.len()].copy_from_slice(jump_exe);
+    let os_param_offset = jump_align;
+    out[os_param_offset..os_param_offset + os_param.len()].copy_from_slice(os_param);
+    let windows_data_offset = os_param_offset + os_param.len();
+    out[windows_data_offset..windows_data_offset + windows_data.len()]
+        .copy_from_slice(windows_data);
+    let original_exe_offset = windows_data_offset + windows_data.len();
+    out[original_exe_offset..original_exe_offset + original_exe.len()]
+        .copy_from_slice(original_exe);
+    Ok(out)
+}
+
 fn copy_ventoy_c_string(field: &mut [u8], value: &str) {
     if field.is_empty() {
         return;
@@ -117,6 +160,15 @@ fn copy_ventoy_c_string(field: &mut [u8], value: &str) {
 
 fn ventoy_basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
+}
+
+fn align_up(value: usize, alignment: usize) -> Option<usize> {
+    if !alignment.is_power_of_two() {
+        return None;
+    }
+    value
+        .checked_add(alignment - 1)
+        .map(|value| value & !(alignment - 1))
 }
 
 #[cfg(test)]
@@ -212,6 +264,36 @@ mod ventoy_windows_runtime_data_tests {
         );
         assert_eq!(data[WINDOWS11_BYPASS_NRO_OFFSET], 0);
         assert!(data.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn builds_wimboot_jump_payload_with_ventoy_alignment() {
+        let jump = b"MZjump";
+        let os_param = [0x11u8; 512];
+        let windows_data = [0x22u8; VENTOY_WINDOWS_DATA_HEADER_SIZE + 3];
+        let original = b"MZoriginal";
+
+        let data = build_ventoy_wimboot_jump_payload(jump, &os_param, &windows_data, original)
+            .expect("payload");
+
+        let jump_align = 16;
+        let raw_len = jump_align + os_param.len() + windows_data.len() + original.len();
+        assert_eq!(data.len(), 2048);
+        assert!(raw_len < data.len());
+        assert_eq!(&data[..jump.len()], jump);
+        assert!(data[jump.len()..jump_align].iter().all(|byte| *byte == 0));
+        assert_eq!(&data[jump_align..jump_align + os_param.len()], os_param);
+        let windows_data_offset = jump_align + os_param.len();
+        assert_eq!(
+            &data[windows_data_offset..windows_data_offset + windows_data.len()],
+            windows_data
+        );
+        let original_offset = windows_data_offset + windows_data.len();
+        assert_eq!(
+            &data[original_offset..original_offset + original.len()],
+            original
+        );
+        assert!(data[raw_len..].iter().all(|byte| *byte == 0));
     }
 }
 

@@ -189,6 +189,11 @@ copy_ventoy_assets() {
 
     run_cmd mkdir -p "${mount_point}/ventoy"
     run_cmd cp "${VENTOY_ASSETS_RESOLVED}/wimboot.x86_64.xz" "${mount_point}/ventoy/wimboot.x86_64.xz"
+    if [ -f "${VENTOY_ASSETS_RESOLVED}/vtoyjump64.exe" ]; then
+        run_cmd cp "${VENTOY_ASSETS_RESOLVED}/vtoyjump64.exe" "${mount_point}/ventoy/vtoyjump64.exe"
+    else
+        warn "vtoyjump64.exe was not found in ${VENTOY_ASSETS_RESOLVED}; Windows plugin runtime data will not be injected."
+    fi
     if [ -f "${VENTOY_ASSETS_RESOLVED}/common_bcd.xz" ]; then
         run_cmd cp "${VENTOY_ASSETS_RESOLVED}/common_bcd.xz" "${mount_point}/ventoy/common_bcd.xz"
     else
@@ -202,6 +207,11 @@ copy_ventoy_assets_sudo() {
 
     run_sudo mkdir -p "${mount_point}/ventoy"
     run_sudo cp "${VENTOY_ASSETS_RESOLVED}/wimboot.x86_64.xz" "${mount_point}/ventoy/wimboot.x86_64.xz"
+    if [ -f "${VENTOY_ASSETS_RESOLVED}/vtoyjump64.exe" ]; then
+        run_sudo cp "${VENTOY_ASSETS_RESOLVED}/vtoyjump64.exe" "${mount_point}/ventoy/vtoyjump64.exe"
+    else
+        warn "vtoyjump64.exe was not found in ${VENTOY_ASSETS_RESOLVED}; Windows plugin runtime data will not be injected."
+    fi
     if [ -f "${VENTOY_ASSETS_RESOLVED}/common_bcd.xz" ]; then
         run_sudo cp "${VENTOY_ASSETS_RESOLVED}/common_bcd.xz" "${mount_point}/ventoy/common_bcd.xz"
     else

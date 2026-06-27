@@ -135,7 +135,9 @@ const WIMBOOT_BCD_CALLBACK_PATH: &str = "nb-bcd";
 const WIMBOOT_BOOT_SDI_CALLBACK_PATH: &str = "nb-boot-sdi";
 const WIMBOOT_BOOTMGFW_CALLBACK_PATH: &str = "nb-bootmgfw";
 const WIMBOOT_SELF_CALLBACK_PATH: &str = "nb-wimboot";
+const WIMBOOT_WINPESHL_CALLBACK_PATH: &str = "nb-winpeshl";
 const WIMBOOT_XZ_MAX_OUTPUT_SIZE: usize = 2 * 1024 * 1024;
+const VTOYJUMP_CANDIDATES: &[&str] = &["/ventoy/vtoyjump64.exe"];
 const VENTOY_COMMON_CPIO_CANDIDATES: &[&str] = &["/ventoy/ventoy.cpio"];
 const LINUX_CONFIG_MAX_SIZE: usize = 512 * 1024;
 const VENTOY_CONF_REPLACE_MAX_SIZE: usize = 1024 * 1024;
@@ -268,12 +270,14 @@ const WINDOWS_ISO_BOOT_SDI_CANDIDATES: &[&str] = &[
     "/WEPE/WEPE.SDI",
 ];
 const WIMBOOT_BOOTMGFW_VIRTUAL_NAME: &str = "bootmgfw.efi";
+const WIMBOOT_WINPESHL_VIRTUAL_NAME: &str = "winpeshl.exe";
 const WIMBOOT_WIM_BOOTMGFW_CANDIDATES: &[&str] = &["\\Windows\\Boot\\EFI\\bootmgfw.efi"];
 const WIMBOOT_WIM_BCD_CANDIDATES: &[&str] = &["\\Windows\\Boot\\DVD\\EFI\\BCD"];
 const WIMBOOT_WIM_BOOT_SDI_CANDIDATES: &[&str] = &[
     "\\Windows\\Boot\\DVD\\EFI\\boot.sdi",
     "\\sms\\boot\\boot.sdi",
 ];
+const WIMBOOT_WIM_WINPESHL_CANDIDATES: &[&str] = &["\\Windows\\System32\\winpeshl.exe"];
 
 static WIMBOOT_RUNTIME_CONTEXT: AtomicPtr<WimbootRuntimeContext> = AtomicPtr::new(ptr::null_mut());
 
@@ -678,7 +682,8 @@ impl<'a> BootManager<'a> {
         }
 
         let helper = self.load_wimboot_helper()?;
-        let inputs = self.prepare_windows_iso_wimboot_runtime_inputs(&helper)?;
+        let boot_config = self.boot_virtual_config();
+        let inputs = self.prepare_windows_iso_wimboot_runtime_inputs(&helper, &boot_config)?;
         let runtime = self.register_wimboot_runtime_files(inputs.runtime_files)?;
         let callbacks = runtime.callbacks();
         let load_options =
@@ -706,6 +711,7 @@ impl<'a> BootManager<'a> {
     fn prepare_windows_iso_wimboot_runtime_inputs(
         &self,
         helper: &SourceVolumeFile,
+        boot_config: &VirtualDeviceConfig,
     ) -> uefi::Result<WimbootRuntimeInputs> {
         let (boot_wim, bcd, boot_sdi) = {
             let source_block_io = self
@@ -749,6 +755,30 @@ impl<'a> BootManager<'a> {
             include_bootmgfw = true;
         }
 
+        let mut include_winpeshl = false;
+        if let Some(original_winpeshl) = internal.winpeshl.take() {
+            match self.prepare_windows_wimboot_jump_payload(boot_config, &original_winpeshl) {
+                Ok(Some(data)) => {
+                    info!(
+                        "Prepared Ventoy Windows WIMBOOT jump payload for {}: {} bytes",
+                        self.iso.path,
+                        data.len()
+                    );
+                    runtime_files.push(WimbootRuntimeFile::from_memory(
+                        WIMBOOT_WINPESHL_CALLBACK_PATH,
+                        data,
+                    ));
+                    include_winpeshl = true;
+                }
+                Ok(None) => {}
+                Err(err) => warn!(
+                    "Ventoy Windows WIMBOOT jump payload for {} was not prepared: {:?}",
+                    self.iso.path,
+                    err.status()
+                ),
+            }
+        }
+
         let mut include_bcd = false;
         if let Some(mut bcd) = bcd {
             let patched = wimboot::patch_bcd_for_efi(&mut bcd.data);
@@ -786,7 +816,7 @@ impl<'a> BootManager<'a> {
 
         let mut virtual_files = Vec::new();
         virtual_files
-            .try_reserve_exact(5)
+            .try_reserve_exact(6)
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         virtual_files.push(
             WimbootVirtualFile::new("boot.wim", WIMBOOT_BOOT_WIM_CALLBACK_PATH)
@@ -801,6 +831,15 @@ impl<'a> BootManager<'a> {
                 WimbootVirtualFile::new(
                     WIMBOOT_BOOTMGFW_VIRTUAL_NAME,
                     WIMBOOT_BOOTMGFW_CALLBACK_PATH,
+                )
+                .map_err(|_| Status::INVALID_PARAMETER)?,
+            );
+        }
+        if include_winpeshl {
+            virtual_files.push(
+                WimbootVirtualFile::new(
+                    WIMBOOT_WINPESHL_VIRTUAL_NAME,
+                    WIMBOOT_WINPESHL_CALLBACK_PATH,
                 )
                 .map_err(|_| Status::INVALID_PARAMETER)?,
             );
@@ -822,6 +861,64 @@ impl<'a> BootManager<'a> {
             runtime_files,
             virtual_files,
         })
+    }
+
+    fn prepare_windows_wimboot_jump_payload(
+        &self,
+        boot_config: &VirtualDeviceConfig,
+        original_winpeshl: &[u8],
+    ) -> uefi::Result<Option<Vec<u8>>> {
+        let jump = match self.find_source_volume_file(VTOYJUMP_CANDIDATES, &[]) {
+            Ok(file) => file,
+            Err(err) if err.status() == Status::NOT_FOUND => {
+                info!(
+                    "Ventoy Windows jump helper was not found for {}; skipping winpeshl.exe overlay",
+                    self.iso.path
+                );
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
+
+        let plugin = self.iso.ventoy_plugin.as_ref();
+        let auto_install = self.load_selected_auto_install_template(plugin)?;
+        let injection = self.load_plugin_injection_archive(plugin)?;
+        let runtime_input = nextboot_windows::VentoyWindowsRuntimeDataInput {
+            auto_install: auto_install.as_ref().map(|file| {
+                nextboot_windows::VentoyWindowsAutoInstall {
+                    source_path: file.path.as_str(),
+                    data: file.data.as_slice(),
+                }
+            }),
+            injection_archive: injection.as_ref().map(|file| file.path.as_str()),
+            windows11_bypass_check: self.iso.ventoy_windows11_bypass_check,
+            windows11_bypass_nro: self.iso.ventoy_windows11_bypass_nro,
+        };
+        let windows_data = nextboot_windows::build_ventoy_windows_runtime_data(runtime_input)
+            .map_err(ventoy_windows_runtime_data_error_to_uefi_status)?;
+        let (os_param, image_chunks, image_location_addr) =
+            self.build_ventoy_os_param_payload(boot_config)?;
+        let payload = nextboot_windows::build_ventoy_wimboot_jump_payload(
+            jump.data.as_slice(),
+            &os_param,
+            windows_data.as_slice(),
+            original_winpeshl,
+        )
+        .map_err(ventoy_windows_wimboot_payload_error_to_uefi_status)?;
+
+        info!(
+            "Built Ventoy Windows runtime data for {}: jump={}, auto_install={}, injection={}, win11_bypass_check={}, win11_bypass_nro={}, image_chunks={}, image_location=0x{:x}",
+            self.iso.path,
+            jump.path,
+            auto_install.is_some(),
+            injection.is_some(),
+            self.iso.ventoy_windows11_bypass_check,
+            self.iso.ventoy_windows11_bypass_nro,
+            image_chunks,
+            image_location_addr
+        );
+
+        Ok(Some(payload))
     }
 
     fn collect_wimboot_internal_files(
@@ -898,10 +995,30 @@ impl<'a> BootManager<'a> {
                 }
             });
 
+        let winpeshl = self
+            .find_wim_resource_file(&image, WIMBOOT_WIM_WINPESHL_CANDIDATES)
+            .and_then(|resource| {
+                match self.read_wim_resource_to_vec(reader, boot_wim, &image.metadata, &resource) {
+                    Ok(data) => {
+                        info!("Loaded WIM internal winpeshl.exe ({} bytes)", data.len());
+                        Some(data)
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Could not read WIM internal winpeshl.exe for {}: {:?}",
+                            self.iso.path,
+                            err.status()
+                        );
+                        None
+                    }
+                }
+            });
+
         WimbootInternalFiles {
             bootmgfw,
             bcd,
             boot_sdi,
+            winpeshl,
         }
     }
 
@@ -4123,6 +4240,7 @@ struct WimbootInternalFiles {
     bootmgfw: Option<WimbootRuntimeFile>,
     bcd: Option<WimbootRuntimeFile>,
     boot_sdi: Option<WimbootRuntimeFile>,
+    winpeshl: Option<Vec<u8>>,
 }
 
 struct WimbootWimImage {
@@ -4911,6 +5029,27 @@ fn ventoy_linux_error_to_uefi_status(err: crate::ventoy_linux::VentoyLinuxInitrd
         crate::ventoy_linux::VentoyLinuxInitrdError::ValueOutOfRange
         | crate::ventoy_linux::VentoyLinuxInitrdError::FileTooLarge
         | crate::ventoy_linux::VentoyLinuxInitrdError::OutputReserveFailed => {
+            Status::OUT_OF_RESOURCES
+        }
+    }
+}
+
+fn ventoy_windows_runtime_data_error_to_uefi_status(
+    err: nextboot_windows::VentoyWindowsRuntimeDataError,
+) -> Status {
+    match err {
+        nextboot_windows::VentoyWindowsRuntimeDataError::AutoInstallTooLarge
+        | nextboot_windows::VentoyWindowsRuntimeDataError::OutputReserveFailed => {
+            Status::OUT_OF_RESOURCES
+        }
+    }
+}
+
+fn ventoy_windows_wimboot_payload_error_to_uefi_status(
+    err: nextboot_windows::VentoyWindowsWimbootPayloadError,
+) -> Status {
+    match err {
+        nextboot_windows::VentoyWindowsWimbootPayloadError::OutputReserveFailed => {
             Status::OUT_OF_RESOURCES
         }
     }

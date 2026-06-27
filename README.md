@@ -178,7 +178,7 @@ WIMBOOT fallback 入口；
 `/ISO` 下的 ISO/WIM/VHD 文件。旧式单分区 FAT32 仍可通过 `--layout single` 生成。
 在 macOS 上写入 NTFS Data 分区需要额外安装 `mkfs.ntfs`/`mkntfs`；若要脚本自动创建
 `/ISO` 目录，还需要可写 NTFS 驱动，例如 `ntfs-3g`。脚本会自动探测
-`../Ventoy/INSTALL/ventoy` 并把 `wimboot.x86_64.xz`、`common_bcd.xz` 安装到
+`../Ventoy/INSTALL/ventoy` 并把 `wimboot.x86_64.xz`、`vtoyjump64.exe`、`common_bcd.xz` 安装到
 镜像所在卷的 `/ventoy` 目录；也可以用 `--ventoy-assets DIR` 指定目录，或用
 `--no-ventoy-assets` 跳过。
 
