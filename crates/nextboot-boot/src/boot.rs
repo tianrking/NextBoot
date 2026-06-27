@@ -43,6 +43,7 @@ use uefi::{CString16, Guid, Handle, Identify, Status};
 
 mod load_file;
 mod source_volume;
+mod vhd;
 use load_file::{
     normalize_load_file_key, LinuxInitrdLoadFile2Protocol, PreloadedFile,
     PreloadedLoadFileProtocol, RawLoadedImage,
@@ -67,10 +68,6 @@ const NEXTBOOT_OS_PARAM_EXTENT_RECORD_SIZE: usize = 24;
 const NEXTBOOT_OS_PARAM_FLAG_SYNTHETIC_EXTENT: u16 = 0x0001;
 const NEXTBOOT_OS_PARAM_FLAG_EL_TORITO: u16 = 0x0002;
 const VENTOY_RUNTIME_ALIGNMENT: usize = 4096;
-const VHD_SECTOR_SIZE: u64 = 512;
-const VHD_FOOTER_SIZE: usize = 512;
-const VHD_DYNAMIC_HEADER_SIZE: usize = 1024;
-const VHD_UNUSED_BAT_ENTRY: u32 = 0xFFFF_FFFF;
 const WIMBOOT_MAX_CALLBACK_PATH: usize = 512;
 const WIMBOOT_BOOT_WIM_CALLBACK_PATH: &str = "nb-boot-wim";
 const WIMBOOT_BCD_CALLBACK_PATH: &str = "nb-bcd";
@@ -3028,7 +3025,7 @@ impl<'a> BootManager<'a> {
 
         let source_vbio =
             self.build_source_backed_virtual_block_io(config.clone(), source_block_io)?;
-        read_vhd_file_bytes(&source_vbio, 0, &mut image)?;
+        vhd::read_file_bytes(&source_vbio, 0, &mut image)?;
 
         info!(
             "Using Ventoy auto_memdisk for {} ({} bytes loaded)",
@@ -3048,15 +3045,15 @@ impl<'a> BootManager<'a> {
         source_block_io: &BlockIO,
     ) -> uefi::Result<VirtualBlockIo> {
         let file_vbio = self.build_image_file_block_io(source_block_io)?;
-        let mut footer = [0u8; VHD_FOOTER_SIZE];
+        let mut footer = [0u8; vhd::FOOTER_SIZE];
         let footer_offset = self
             .iso
             .size
-            .checked_sub(VHD_FOOTER_SIZE as u64)
+            .checked_sub(vhd::FOOTER_SIZE as u64)
             .ok_or(uefi::Status::LOAD_ERROR)?;
-        read_vhd_file_bytes(&file_vbio, footer_offset, &mut footer)?;
+        vhd::read_file_bytes(&file_vbio, footer_offset, &mut footer)?;
 
-        let footer = parse_dynamic_vhd_footer(&footer).ok_or(uefi::Status::LOAD_ERROR)?;
+        let footer = vhd::parse_dynamic_footer(&footer).ok_or(uefi::Status::LOAD_ERROR)?;
         let virtual_size = config.iso_size;
         if footer.virtual_size != virtual_size {
             warn!(
@@ -3065,9 +3062,9 @@ impl<'a> BootManager<'a> {
             );
         }
 
-        let mut header = alloc::vec![0u8; VHD_DYNAMIC_HEADER_SIZE];
-        read_vhd_file_bytes(&file_vbio, footer.data_offset, &mut header)?;
-        let header = parse_dynamic_vhd_header(&header).ok_or(uefi::Status::LOAD_ERROR)?;
+        let mut header = alloc::vec![0u8; vhd::DYNAMIC_HEADER_SIZE];
+        vhd::read_file_bytes(&file_vbio, footer.data_offset, &mut header)?;
+        let header = vhd::parse_dynamic_header(&header).ok_or(uefi::Status::LOAD_ERROR)?;
         if header.header_version != 0x0001_0000 {
             warn!(
                 "Dynamic VHD header version for {} is 0x{:08x}",
@@ -3076,13 +3073,13 @@ impl<'a> BootManager<'a> {
         }
 
         let block_size = u64::from(header.block_size);
-        if virtual_size == 0 || block_size == 0 || block_size % VHD_SECTOR_SIZE != 0 {
+        if virtual_size == 0 || block_size == 0 || block_size % vhd::SECTOR_SIZE != 0 {
             return Err(uefi::Status::LOAD_ERROR.into());
         }
 
-        let sectors_per_block = block_size / VHD_SECTOR_SIZE;
+        let sectors_per_block = block_size / vhd::SECTOR_SIZE;
         let bitmap_bytes = div_round_up(sectors_per_block, 8)
-            .and_then(|bytes| align_up_u64(bytes, VHD_SECTOR_SIZE))
+            .and_then(|bytes| align_up_u64(bytes, vhd::SECTOR_SIZE))
             .ok_or(uefi::Status::LOAD_ERROR)?;
         let entries_needed =
             div_round_up(virtual_size, block_size).ok_or(uefi::Status::LOAD_ERROR)?;
@@ -3093,14 +3090,14 @@ impl<'a> BootManager<'a> {
 
         let bat_bytes = entries_to_scan
             .checked_mul(4)
-            .and_then(|bytes| align_up_u64(bytes, VHD_SECTOR_SIZE))
+            .and_then(|bytes| align_up_u64(bytes, vhd::SECTOR_SIZE))
             .ok_or(uefi::Status::LOAD_ERROR)?;
         let bat_len = usize::try_from(bat_bytes).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         let mut bat = Vec::new();
         bat.try_reserve_exact(bat_len)
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         bat.resize(bat_len, 0);
-        read_vhd_file_bytes(&file_vbio, header.table_offset, &mut bat)?;
+        vhd::read_file_bytes(&file_vbio, header.table_offset, &mut bat)?;
 
         let mut byte_mapping = ByteMappingTable::empty();
         let mut allocated_blocks = 0u64;
@@ -3108,8 +3105,8 @@ impl<'a> BootManager<'a> {
         for index in 0..entries_to_scan {
             let bat_offset = usize::try_from(index.checked_mul(4).ok_or(uefi::Status::LOAD_ERROR)?)
                 .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-            let bat_entry = read_be_u32(&bat, bat_offset).ok_or(uefi::Status::LOAD_ERROR)?;
-            if bat_entry == VHD_UNUSED_BAT_ENTRY {
+            let bat_entry = vhd::read_be_u32(&bat, bat_offset).ok_or(uefi::Status::LOAD_ERROR)?;
+            if bat_entry == vhd::UNUSED_BAT_ENTRY {
                 continue;
             }
 
@@ -3121,7 +3118,7 @@ impl<'a> BootManager<'a> {
             }
             let byte_count = block_size.min(virtual_size - virtual_start);
             let file_offset = u64::from(bat_entry)
-                .checked_mul(VHD_SECTOR_SIZE)
+                .checked_mul(vhd::SECTOR_SIZE)
                 .and_then(|offset| offset.checked_add(bitmap_bytes))
                 .ok_or(uefi::Status::LOAD_ERROR)?;
 
@@ -3182,7 +3179,7 @@ impl<'a> BootManager<'a> {
             vhdx::bat_entry_count(payload_blocks, chunk_ratio).ok_or(uefi::Status::LOAD_ERROR)?;
         let bat_bytes = bat_entries
             .checked_mul(8)
-            .and_then(|bytes| align_up_u64(bytes, VHD_SECTOR_SIZE))
+            .and_then(|bytes| align_up_u64(bytes, vhd::SECTOR_SIZE))
             .ok_or(uefi::Status::LOAD_ERROR)?;
 
         if bat_bytes > regions.bat_length {
@@ -3194,7 +3191,7 @@ impl<'a> BootManager<'a> {
         bat.try_reserve_exact(bat_len)
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         bat.resize(bat_len, 0);
-        read_vhd_file_bytes(&file_vbio, regions.bat_offset, &mut bat)?;
+        vhd::read_file_bytes(&file_vbio, regions.bat_offset, &mut bat)?;
 
         let mut byte_mapping = ByteMappingTable::empty();
         let mut allocated_blocks = 0u64;
@@ -3294,7 +3291,7 @@ impl<'a> BootManager<'a> {
             .try_reserve_exact(map_len)
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         block_map.resize(map_len, 0);
-        read_vhd_file_bytes(&file_vbio, metadata.offset_blocks, &mut block_map)?;
+        vhd::read_file_bytes(&file_vbio, metadata.offset_blocks, &mut block_map)?;
 
         let block_size = u64::from(metadata.block_size);
         let mut byte_mapping = ByteMappingTable::empty();
@@ -3374,7 +3371,7 @@ impl<'a> BootManager<'a> {
             .try_reserve_exact(vhdx::VHDX_HEADER_SECTION_SIZE)
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         header.resize(vhdx::VHDX_HEADER_SECTION_SIZE, 0);
-        read_vhd_file_bytes(file_vbio, 0, &mut header)?;
+        vhd::read_file_bytes(file_vbio, 0, &mut header)?;
         let regions = vhdx::parse_vhdx_regions(&header).ok_or(uefi::Status::LOAD_ERROR)?;
 
         let metadata_len =
@@ -3384,7 +3381,7 @@ impl<'a> BootManager<'a> {
             .try_reserve_exact(metadata_len)
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         metadata.resize(metadata_len, 0);
-        read_vhd_file_bytes(file_vbio, regions.metadata_offset, &mut metadata)?;
+        vhd::read_file_bytes(file_vbio, regions.metadata_offset, &mut metadata)?;
         let metadata = vhdx::parse_vhdx_metadata(&metadata).ok_or(uefi::Status::LOAD_ERROR)?;
 
         Ok((regions, metadata))
@@ -3392,7 +3389,7 @@ impl<'a> BootManager<'a> {
 
     fn read_vdi_metadata(&self, file_vbio: &VirtualBlockIo) -> uefi::Result<vdi::VdiMetadata> {
         let mut header = [0u8; vdi::VDI_HEADER_SIZE];
-        read_vhd_file_bytes(file_vbio, 0, &mut header)?;
+        vhd::read_file_bytes(file_vbio, 0, &mut header)?;
         vdi::parse_vdi_metadata(&header).ok_or(uefi::Status::LOAD_ERROR.into())
     }
 
@@ -3401,7 +3398,7 @@ impl<'a> BootManager<'a> {
             VirtualDeviceType::HardDisk,
             self.iso.start_lba,
             self.iso.size,
-            VHD_SECTOR_SIZE as u32,
+            vhd::SECTOR_SIZE as u32,
         )
         .with_physical_block_size(self.iso.block_size)
         .with_name(&self.iso.path);
@@ -3865,78 +3862,6 @@ impl LoadOptionsBuffer {
     fn as_ptr(&self) -> *const c_void {
         self.data.as_ptr().cast::<c_void>()
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct DynamicVhdFooter {
-    data_offset: u64,
-    virtual_size: u64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct DynamicVhdHeader {
-    table_offset: u64,
-    header_version: u32,
-    max_table_entries: u32,
-    block_size: u32,
-}
-
-fn read_vhd_file_bytes(vbio: &VirtualBlockIo, offset: u64, buf: &mut [u8]) -> uefi::Result<()> {
-    vbio.read_bytes(vbio.media_id(), offset, buf)
-        .map_err(virtio_error_to_uefi_status)?;
-    Ok(())
-}
-
-fn parse_dynamic_vhd_footer(data: &[u8]) -> Option<DynamicVhdFooter> {
-    if data.len() < VHD_FOOTER_SIZE || data.get(0..8)? != b"conectix" {
-        return None;
-    }
-
-    let data_offset = read_be_u64(data, 16)?;
-    let virtual_size = read_be_u64(data, 48)?;
-    let disk_type = read_be_u32(data, 60)?;
-    if data_offset == u64::MAX || disk_type != 3 {
-        return None;
-    }
-
-    Some(DynamicVhdFooter {
-        data_offset,
-        virtual_size,
-    })
-}
-
-fn parse_dynamic_vhd_header(data: &[u8]) -> Option<DynamicVhdHeader> {
-    if data.len() < VHD_DYNAMIC_HEADER_SIZE || data.get(0..8)? != b"cxsparse" {
-        return None;
-    }
-
-    let table_offset = read_be_u64(data, 16)?;
-    let header_version = read_be_u32(data, 24)?;
-    let max_table_entries = read_be_u32(data, 28)?;
-    let block_size = read_be_u32(data, 32)?;
-
-    if table_offset == u64::MAX || max_table_entries == 0 || block_size == 0 {
-        return None;
-    }
-
-    Some(DynamicVhdHeader {
-        table_offset,
-        header_version,
-        max_table_entries,
-        block_size,
-    })
-}
-
-fn read_be_u32(data: &[u8], offset: usize) -> Option<u32> {
-    let bytes = data.get(offset..offset.checked_add(4)?)?;
-    Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-}
-
-fn read_be_u64(data: &[u8], offset: usize) -> Option<u64> {
-    let bytes = data.get(offset..offset.checked_add(8)?)?;
-    Some(u64::from_be_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-    ]))
 }
 
 fn virtio_error_to_uefi_status(err: VirtIoError) -> Status {
