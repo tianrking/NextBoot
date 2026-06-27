@@ -4,6 +4,7 @@
 
 use crate::init::StorageDevice;
 use crate::scanner::{IsoFile, OsType};
+use crate::virtual_fs::{IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem};
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -335,10 +336,7 @@ impl<'a> BootManager<'a> {
         let source_block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let config = self.iso9660_virtual_config();
-        let vbio = self.build_virtual_block_io(config, &source_block_io)?;
-        let iso = Iso9660::open(Rc::new(VirtualIsoBlockIo::new(vbio)))
-            .map_err(fs_error_to_uefi_status)?;
+        let iso = self.open_virtual_iso9660(&source_block_io)?;
 
         let path = normalize_iso_path(path);
         let info = iso.stat(&path).map_err(fs_error_to_uefi_status)?;
@@ -380,6 +378,19 @@ impl<'a> BootManager<'a> {
         let virtual_handle = registered.handle();
         let device_path = registered.device_path().to_vec();
 
+        let simple_file_system =
+            match self.install_iso_simple_file_system(&source_block_io, virtual_handle) {
+                Ok(protocol) => Some(protocol),
+                Err(err) => {
+                    warn!(
+                        "Failed to install SimpleFileSystem on virtual device {:?}: {:?}",
+                        virtual_handle,
+                        err.status()
+                    );
+                    None
+                }
+            };
+
         let load_file_protocol = if load_file_entries.is_empty() {
             None
         } else {
@@ -397,6 +408,9 @@ impl<'a> BootManager<'a> {
         };
 
         registered.leak();
+        if let Some(protocol) = simple_file_system {
+            protocol.leak();
+        }
         if let Some(protocol) = load_file_protocol {
             protocol.leak();
         }
@@ -592,6 +606,30 @@ impl<'a> BootManager<'a> {
         vbio.set_physical_reader(reader);
 
         Ok(vbio)
+    }
+
+    fn open_virtual_iso9660(&self, source_block_io: &BlockIO) -> uefi::Result<Iso9660> {
+        let config = self.iso9660_virtual_config();
+        let vbio = self.build_virtual_block_io(config, source_block_io)?;
+        let iso = Iso9660::open(Rc::new(VirtualIsoBlockIo::new(vbio)))
+            .map_err(fs_error_to_uefi_status)?;
+        Ok(iso)
+    }
+
+    fn install_iso_simple_file_system(
+        &self,
+        source_block_io: &BlockIO,
+        virtual_handle: Handle,
+    ) -> uefi::Result<RegisteredIsoSimpleFileSystem> {
+        let iso = self.open_virtual_iso9660(source_block_io)?;
+        let block_size = iso.block_size();
+        IsoSimpleFileSystemProtocol::install(
+            self.bt,
+            virtual_handle,
+            Rc::new(iso),
+            self.iso.size,
+            block_size,
+        )
     }
 
     fn preload_load_file_entries(&self) -> Vec<PreloadedFile> {
