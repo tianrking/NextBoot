@@ -3,11 +3,11 @@
 //! 用于解析 ISO 镜像内部结构
 
 use crate::{
-    alloc_buffer, read_full_blocks, FileAttributes, FileInfo, FileSystem, FileSystemType, FsError,
-    SharedBlockIo,
+    alloc_buffer, read_full_blocks, FileAttributes, FileExtent, FileInfo, FileSystem,
+    FileSystemType, FsError, SharedBlockIo,
 };
-use alloc::vec::Vec;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 /// ISO9660 文件系统
 pub struct Iso9660 {
@@ -98,7 +98,8 @@ impl FileSystem for Iso9660 {
             // Type 1 = 主卷描述符
             if type_code == 1 {
                 let logical_block_size = u16::from_le_bytes([vd_buf[128], vd_buf[129]]) as u32;
-                let volume_space_size = u32::from_le_bytes([vd_buf[84], vd_buf[85], vd_buf[86], vd_buf[87]]) as u64;
+                let volume_space_size =
+                    u32::from_le_bytes([vd_buf[84], vd_buf[85], vd_buf[86], vd_buf[87]]) as u64;
 
                 // 解析卷标识
                 let volume_id = String::from_utf8_lossy(&vd_buf[40..72])
@@ -106,18 +107,10 @@ impl FileSystem for Iso9660 {
                     .to_string();
 
                 // 解析根目录记录 (偏移 156)
-                let root_lba = u32::from_le_bytes([
-                    vd_buf[158],
-                    vd_buf[159],
-                    vd_buf[160],
-                    vd_buf[161],
-                ]);
-                let root_size = u32::from_le_bytes([
-                    vd_buf[166],
-                    vd_buf[167],
-                    vd_buf[168],
-                    vd_buf[169],
-                ]);
+                let root_lba =
+                    u32::from_le_bytes([vd_buf[158], vd_buf[159], vd_buf[160], vd_buf[161]]);
+                let root_size =
+                    u32::from_le_bytes([vd_buf[166], vd_buf[167], vd_buf[168], vd_buf[169]]);
 
                 return Ok(Self {
                     block_io,
@@ -191,9 +184,8 @@ impl FileSystem for Iso9660 {
             let copy_size = available.min(needed);
 
             let src_offset = if bytes_read == 0 { in_block_offset } else { 0 };
-            buf[bytes_read..bytes_read + copy_size].copy_from_slice(
-                &block_buf[src_offset..src_offset + copy_size]
-            );
+            buf[bytes_read..bytes_read + copy_size]
+                .copy_from_slice(&block_buf[src_offset..src_offset + copy_size]);
 
             bytes_read += copy_size;
             current_block += 1;
@@ -231,6 +223,24 @@ impl FileSystem for Iso9660 {
 
     fn block_size(&self) -> u32 {
         self.block_size
+    }
+
+    fn file_extents(&self, path: &str) -> Result<Vec<FileExtent>, FsError> {
+        let info = self.stat(path)?;
+        if info.is_dir {
+            return Err(FsError::NotFile);
+        }
+
+        let block_count = (info.size + self.block_size as u64 - 1) / self.block_size as u64;
+        if block_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        Ok(alloc::vec![FileExtent::new(
+            0,
+            info.start_cluster,
+            block_count,
+        )])
     }
 }
 
@@ -335,6 +345,7 @@ impl Iso9660 {
             is_dir,
             attributes,
             start_cluster: extent_lba_le as u64,
+            contiguous: true,
         })
     }
 
@@ -454,9 +465,7 @@ pub fn get_eltorito_boot_info(data: &[u8]) -> Option<(u32, u16)> {
 
         if vd[0] == 0 {
             // 引导记录
-            let catalog_lba = u32::from_le_bytes([
-                vd[0x47], vd[0x48], vd[0x49], vd[0x4A],
-            ]);
+            let catalog_lba = u32::from_le_bytes([vd[0x47], vd[0x48], vd[0x49], vd[0x4A]]);
 
             // 读取引导目录
             let cat_offset = catalog_lba as usize * 2048;
@@ -467,9 +476,7 @@ pub fn get_eltorito_boot_info(data: &[u8]) -> Option<(u32, u16)> {
             let cat = &data[cat_offset..];
             if cat[0] == 0x88 {
                 // 可引导
-                let load_rba = u32::from_le_bytes([
-                    cat[8], cat[9], cat[10], cat[11],
-                ]);
+                let load_rba = u32::from_le_bytes([cat[8], cat[9], cat[10], cat[11]]);
                 let sector_count = u16::from_le_bytes([cat[6], cat[7]]);
 
                 return Some((load_rba, sector_count));

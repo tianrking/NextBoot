@@ -3,12 +3,12 @@
 //! 用于 Data 分区，支持 >4GB 文件
 
 use crate::{
-    alloc_buffer, read_full_blocks, FileAttributes, FileInfo, FileSystem, FileSystemType, FsError,
-    SharedBlockIo,
+    alloc_buffer, read_full_blocks, FileAttributes, FileExtent, FileInfo, FileSystem,
+    FileSystemType, FsError, SharedBlockIo,
 };
-use alloc::vec::Vec;
-use alloc::string::String;
 use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// exFAT 文件系统
 pub struct ExFat {
@@ -143,9 +143,8 @@ impl FileSystem for ExFat {
         let mut boot_buf = alloc_buffer(block_io.block_size() as usize)?;
         read_full_blocks(block_io.as_ref(), 0, &mut boot_buf)?;
 
-        let boot: ExFatBootSector = unsafe {
-            core::ptr::read_unaligned(boot_buf.as_ptr() as *const ExFatBootSector)
-        };
+        let boot: ExFatBootSector =
+            unsafe { core::ptr::read_unaligned(boot_buf.as_ptr() as *const ExFatBootSector) };
 
         // 验证 exFAT 签名
         if &boot_buf[3..11] != b"EXFAT   " {
@@ -202,44 +201,23 @@ impl FileSystem for ExFat {
         let remaining = file_size - offset;
         let to_read = buf.len().min(remaining as usize);
 
-        let mut cluster = info.start_cluster as u32;
-        let cluster_size = self.cluster_size;
+        let extents = if info.contiguous {
+            self.contiguous_extents(info.start_cluster as u32, info.size)?
+        } else {
+            self.cluster_chain_extents(info.start_cluster as u32, info.size)?
+        };
 
-        // 跳过偏移的簇
-        let skip_clusters = offset / cluster_size;
-        for _ in 0..skip_clusters {
-            cluster = self.get_next_cluster(cluster)?;
-        }
-
-        // 读取数据
-        let mut bytes_read = 0;
-        let mut in_cluster_offset = (offset % cluster_size) as usize;
-
-        while bytes_read < to_read && !self.is_end_of_chain(cluster) {
-            let cluster_data = self.read_cluster(cluster)?;
-
-            let available = cluster_data.len() - in_cluster_offset;
-            let needed = to_read - bytes_read;
-            let copy_size = available.min(needed);
-
-            buf[bytes_read..bytes_read + copy_size].copy_from_slice(
-                &cluster_data[in_cluster_offset..in_cluster_offset + copy_size]
-            );
-
-            bytes_read += copy_size;
-            in_cluster_offset = 0;
-
-            if bytes_read < to_read {
-                cluster = self.get_next_cluster(cluster)?;
-            }
-        }
-
-        Ok(bytes_read)
+        self.read_from_extents(&extents, offset, &mut buf[..to_read])
     }
 
     fn stat(&self, path: &str) -> Result<FileInfo, FsError> {
         if path == "/" || path.is_empty() {
-            return Ok(FileInfo::new(String::from("/"), 0, true, self.root_cluster as u64));
+            return Ok(FileInfo::new(
+                String::from("/"),
+                0,
+                true,
+                self.root_cluster as u64,
+            ));
         }
 
         let (dir, name) = crate::split_path(path);
@@ -257,6 +235,19 @@ impl FileSystem for ExFat {
     fn block_size(&self) -> u32 {
         self.sector_size
     }
+
+    fn file_extents(&self, path: &str) -> Result<Vec<FileExtent>, FsError> {
+        let info = self.stat(path)?;
+        if info.is_dir {
+            return Err(FsError::NotFile);
+        }
+
+        if info.contiguous {
+            self.contiguous_extents(info.start_cluster as u32, info.size)
+        } else {
+            self.cluster_chain_extents(info.start_cluster as u32, info.size)
+        }
+    }
 }
 
 impl ExFat {
@@ -267,7 +258,129 @@ impl ExFat {
 
     /// 簇号转扇区号
     fn cluster_to_sector(&self, cluster: u32) -> u64 {
-        self.cluster_heap_offset as u64 + ((cluster - 2) as u64) * (self.cluster_size / self.sector_size as u64)
+        self.cluster_heap_offset as u64
+            + ((cluster - 2) as u64) * (self.cluster_size / self.sector_size as u64)
+    }
+
+    fn blocks_per_cluster(&self) -> u64 {
+        self.cluster_size / self.sector_size as u64
+    }
+
+    fn contiguous_extents(
+        &self,
+        start_cluster: u32,
+        file_size: u64,
+    ) -> Result<Vec<FileExtent>, FsError> {
+        let mut extents = Vec::new();
+        if file_size == 0 {
+            return Ok(extents);
+        }
+
+        if start_cluster < 2 || start_cluster >= self.total_clusters + 2 {
+            return Err(FsError::Corrupted);
+        }
+
+        let block_count = (file_size + self.sector_size as u64 - 1) / self.sector_size as u64;
+        extents.push(FileExtent::new(
+            0,
+            self.cluster_to_sector(start_cluster),
+            block_count,
+        ));
+        Ok(extents)
+    }
+
+    fn cluster_chain_extents(
+        &self,
+        start_cluster: u32,
+        file_size: u64,
+    ) -> Result<Vec<FileExtent>, FsError> {
+        let mut extents = Vec::new();
+        if file_size == 0 {
+            return Ok(extents);
+        }
+
+        if start_cluster < 2 || start_cluster >= self.total_clusters + 2 {
+            return Err(FsError::Corrupted);
+        }
+
+        let blocks_per_cluster = self.blocks_per_cluster();
+        let mut blocks_remaining =
+            (file_size + self.sector_size as u64 - 1) / self.sector_size as u64;
+        let mut virtual_block = 0u64;
+        let mut cluster = start_cluster;
+
+        while blocks_remaining > 0 {
+            if cluster < 2 || cluster >= self.total_clusters + 2 {
+                return Err(FsError::Corrupted);
+            }
+
+            let block_count = blocks_per_cluster.min(blocks_remaining);
+            push_extent(
+                &mut extents,
+                virtual_block,
+                self.cluster_to_sector(cluster),
+                block_count,
+            );
+
+            virtual_block += block_count;
+            blocks_remaining -= block_count;
+
+            if blocks_remaining > 0 {
+                cluster = self.get_next_cluster(cluster)?;
+                if self.is_end_of_chain(cluster) {
+                    return Err(FsError::Corrupted);
+                }
+            }
+        }
+
+        Ok(extents)
+    }
+
+    fn read_from_extents(
+        &self,
+        extents: &[FileExtent],
+        offset: u64,
+        buf: &mut [u8],
+    ) -> Result<usize, FsError> {
+        let block_size = self.sector_size as u64;
+        let mut skip_bytes = offset;
+        let mut bytes_read = 0usize;
+        let mut block_buf = alloc_buffer(self.sector_size as usize)?;
+
+        for extent in extents {
+            let extent_bytes = extent.block_count * block_size;
+            if skip_bytes >= extent_bytes {
+                skip_bytes -= extent_bytes;
+                continue;
+            }
+
+            let mut extent_offset = skip_bytes;
+            skip_bytes = 0;
+
+            while bytes_read < buf.len() && extent_offset < extent_bytes {
+                let block_offset = extent_offset / block_size;
+                let in_block_offset = (extent_offset % block_size) as usize;
+                let lba = extent.physical_lba + block_offset;
+
+                read_full_blocks(self.block_io.as_ref(), lba, &mut block_buf)?;
+
+                let available = block_buf.len() - in_block_offset;
+                let needed = buf.len() - bytes_read;
+                let copy_size = available.min(needed);
+
+                buf[bytes_read..bytes_read + copy_size]
+                    .copy_from_slice(&block_buf[in_block_offset..in_block_offset + copy_size]);
+
+                bytes_read += copy_size;
+                extent_offset += copy_size as u64;
+            }
+
+            if bytes_read == buf.len() {
+                break;
+            }
+        }
+
+        Ok(bytes_read)
     }
 
     /// 读取簇数据
@@ -277,7 +390,11 @@ impl ExFat {
         }
 
         let mut buf = alloc_buffer(self.cluster_size as usize)?;
-        read_full_blocks(self.block_io.as_ref(), self.cluster_to_sector(cluster), &mut buf)?;
+        read_full_blocks(
+            self.block_io.as_ref(),
+            self.cluster_to_sector(cluster),
+            &mut buf,
+        )?;
         Ok(buf)
     }
 
@@ -408,6 +525,7 @@ impl ExFat {
         let mut data_length = 0u64;
         let mut name_length = 0usize;
         let mut name = String::new();
+        let mut contiguous = false;
 
         let mut offset = 32;
         for _ in 0..secondary_count {
@@ -419,6 +537,7 @@ impl ExFat {
 
             // 流扩展条目
             if entry_type == EntryType::StreamExt as u8 || entry_type == 0xC0 {
+                contiguous = data[offset + 1] & 0x02 != 0;
                 name_length = data[offset + 3] as usize;
                 first_cluster = u32::from_le_bytes([
                     data[offset + 20],
@@ -485,8 +604,35 @@ impl ExFat {
             is_dir,
             attributes: file_attrs,
             start_cluster: first_cluster as u64,
+            contiguous,
         }))
     }
+}
+
+fn push_extent(
+    extents: &mut Vec<FileExtent>,
+    virtual_block_start: u64,
+    physical_lba: u64,
+    block_count: u64,
+) {
+    if block_count == 0 {
+        return;
+    }
+
+    if let Some(last) = extents.last_mut() {
+        if last.virtual_block_end() == virtual_block_start
+            && last.physical_lba_end() == physical_lba
+        {
+            last.block_count += block_count;
+            return;
+        }
+    }
+
+    extents.push(FileExtent::new(
+        virtual_block_start,
+        physical_lba,
+        block_count,
+    ));
 }
 
 /// 检查是否为有效的 exFAT 文件系统
@@ -496,10 +642,7 @@ pub fn is_exfat(data: &[u8]) -> bool {
     }
 
     // exFAT 跳转指令和签名
-    data[0] == 0xEB
-        && data[1] == 0x76
-        && data[2] == 0x90
-        && &data[3..11] == b"EXFAT   "
+    data[0] == 0xEB && data[1] == 0x76 && data[2] == 0x90 && &data[3..11] == b"EXFAT   "
 }
 
 /// exFAT 文件系统信息

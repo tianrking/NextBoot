@@ -3,12 +3,12 @@
 //! 仅支持读取，用于 ESP 分区和 Data 分区
 
 use crate::{
-    alloc_buffer, read_full_blocks, FileAttributes, FileInfo, FileSystem, FileSystemType, FsError,
-    SharedBlockIo,
+    alloc_buffer, read_full_blocks, FileAttributes, FileExtent, FileInfo, FileSystem,
+    FileSystemType, FsError, SharedBlockIo,
 };
-use alloc::vec::Vec;
-use alloc::string::{String, ToString};
 use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 /// FAT32 文件系统
 pub struct Fat32 {
@@ -109,9 +109,8 @@ impl FileSystem for Fat32 {
         read_full_blocks(block_io.as_ref(), 0, &mut boot_buf)?;
 
         // 安全转换
-        let boot_sector: Fat32BootSector = unsafe {
-            core::ptr::read_unaligned(boot_buf.as_ptr() as *const Fat32BootSector)
-        };
+        let boot_sector: Fat32BootSector =
+            unsafe { core::ptr::read_unaligned(boot_buf.as_ptr() as *const Fat32BootSector) };
 
         // 验证 FAT32
         if boot_sector.bytes_per_sector == 0 {
@@ -209,9 +208,8 @@ impl FileSystem for Fat32 {
             let needed = to_read - bytes_read;
             let copy_size = available.min(needed);
 
-            buf[bytes_read..bytes_read + copy_size].copy_from_slice(
-                &cluster_data[in_cluster_offset..in_cluster_offset + copy_size]
-            );
+            buf[bytes_read..bytes_read + copy_size]
+                .copy_from_slice(&cluster_data[in_cluster_offset..in_cluster_offset + copy_size]);
 
             bytes_read += copy_size;
             in_cluster_offset = 0;
@@ -226,7 +224,12 @@ impl FileSystem for Fat32 {
 
     fn stat(&self, path: &str) -> Result<FileInfo, FsError> {
         if path == "/" || path.is_empty() {
-            return Ok(FileInfo::new(String::from("/"), 0, true, self.root_cluster as u64));
+            return Ok(FileInfo::new(
+                String::from("/"),
+                0,
+                true,
+                self.root_cluster as u64,
+            ));
         }
 
         let (dir, name) = crate::split_path(path);
@@ -243,6 +246,15 @@ impl FileSystem for Fat32 {
 
     fn block_size(&self) -> u32 {
         self.block_size
+    }
+
+    fn file_extents(&self, path: &str) -> Result<Vec<FileExtent>, FsError> {
+        let info = self.stat(path)?;
+        if info.is_dir {
+            return Err(FsError::NotFile);
+        }
+
+        self.cluster_chain_extents(info.start_cluster as u32, info.size)
     }
 }
 
@@ -267,6 +279,53 @@ impl Fat32 {
     /// 簇号转 LBA
     fn cluster_to_lba(&self, cluster: u32) -> u64 {
         self.data_start + (cluster as u64 - 2) * self.sectors_per_cluster as u64
+    }
+
+    fn cluster_chain_extents(
+        &self,
+        start_cluster: u32,
+        file_size: u64,
+    ) -> Result<Vec<FileExtent>, FsError> {
+        let mut extents = Vec::new();
+        if file_size == 0 {
+            return Ok(extents);
+        }
+
+        if start_cluster < 2 || start_cluster >= self.total_clusters + 2 {
+            return Err(FsError::Corrupted);
+        }
+
+        let blocks_per_cluster = self.sectors_per_cluster as u64;
+        let mut blocks_remaining =
+            (file_size + self.block_size as u64 - 1) / self.block_size as u64;
+        let mut virtual_block = 0u64;
+        let mut cluster = start_cluster;
+
+        while blocks_remaining > 0 {
+            if cluster < 2 || cluster >= self.total_clusters + 2 {
+                return Err(FsError::Corrupted);
+            }
+
+            let block_count = blocks_per_cluster.min(blocks_remaining);
+            push_extent(
+                &mut extents,
+                virtual_block,
+                self.cluster_to_lba(cluster),
+                block_count,
+            );
+
+            virtual_block += block_count;
+            blocks_remaining -= block_count;
+
+            if blocks_remaining > 0 {
+                cluster = self.get_next_cluster(cluster)?;
+                if self.is_end_of_chain(cluster) {
+                    return Err(FsError::Corrupted);
+                }
+            }
+        }
+
+        Ok(extents)
     }
 
     /// 获取下一个簇号
@@ -390,6 +449,7 @@ impl Fat32 {
                     is_dir,
                     attributes,
                     start_cluster: file_cluster as u64,
+                    contiguous: false,
                 });
             }
 
@@ -405,12 +465,8 @@ impl Fat32 {
 
     /// 解析短文件名
     fn parse_short_name(&self, raw: &[u8]) -> String {
-        let name: String = String::from_utf8_lossy(&raw[0..8])
-            .trim_end()
-            .to_string();
-        let ext: String = String::from_utf8_lossy(&raw[8..11])
-            .trim_end()
-            .to_string();
+        let name: String = String::from_utf8_lossy(&raw[0..8]).trim_end().to_string();
+        let ext: String = String::from_utf8_lossy(&raw[8..11]).trim_end().to_string();
 
         if ext.is_empty() {
             name
@@ -457,7 +513,8 @@ impl Fat32 {
         }
 
         // 转换为字符串
-        let name_part: String = chars.iter()
+        let name_part: String = chars
+            .iter()
             .filter_map(|&c| char::from_u32(c as u32))
             .collect();
 
@@ -471,6 +528,32 @@ impl Fat32 {
     fn is_end_of_chain(&self, cluster: u32) -> bool {
         cluster >= 0x0FFFFFF8
     }
+}
+
+fn push_extent(
+    extents: &mut Vec<FileExtent>,
+    virtual_block_start: u64,
+    physical_lba: u64,
+    block_count: u64,
+) {
+    if block_count == 0 {
+        return;
+    }
+
+    if let Some(last) = extents.last_mut() {
+        if last.virtual_block_end() == virtual_block_start
+            && last.physical_lba_end() == physical_lba
+        {
+            last.block_count += block_count;
+            return;
+        }
+    }
+
+    extents.push(FileExtent::new(
+        virtual_block_start,
+        physical_lba,
+        block_count,
+    ));
 }
 
 /// 检查是否为有效的 FAT32 文件系统

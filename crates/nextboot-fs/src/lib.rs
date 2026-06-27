@@ -11,14 +11,14 @@
 
 extern crate alloc;
 
+use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use alloc::rc::Rc;
 
-pub mod fat32;
 pub mod exfat;
-pub mod iso9660;
+pub mod fat32;
 pub mod gpt;
+pub mod iso9660;
 
 /// 文件系统错误类型
 #[derive(Debug, Clone, Copy)]
@@ -77,7 +77,7 @@ pub enum FileSystemType {
     Fat32,
     ExFat,
     Iso9660,
-    Ntfs,  // P2 阶段支持
+    Ntfs, // P2 阶段支持
     Unknown,
 }
 
@@ -119,6 +119,8 @@ pub struct FileInfo {
     pub attributes: FileAttributes,
     /// 起始簇号 (FAT) 或 LBA (ISO9660)
     pub start_cluster: u64,
+    /// 文件数据是否按起始簇连续分配
+    pub contiguous: bool,
 }
 
 impl FileInfo {
@@ -134,6 +136,7 @@ impl FileInfo {
                 FileAttributes::empty()
             },
             start_cluster,
+            contiguous: false,
         }
     }
 
@@ -145,6 +148,35 @@ impl FileInfo {
     /// 检查是否为系统文件
     pub fn is_system(&self) -> bool {
         self.attributes.contains(FileAttributes::SYSTEM)
+    }
+}
+
+/// 文件在底层块设备上的物理区段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileExtent {
+    /// 文件内的虚拟块起始位置
+    pub virtual_block_start: u64,
+    /// 底层块设备上的物理 LBA
+    pub physical_lba: u64,
+    /// 连续块数量
+    pub block_count: u64,
+}
+
+impl FileExtent {
+    pub fn new(virtual_block_start: u64, physical_lba: u64, block_count: u64) -> Self {
+        Self {
+            virtual_block_start,
+            physical_lba,
+            block_count,
+        }
+    }
+
+    pub fn virtual_block_end(&self) -> u64 {
+        self.virtual_block_start + self.block_count
+    }
+
+    pub fn physical_lba_end(&self) -> u64 {
+        self.physical_lba + self.block_count
     }
 }
 
@@ -191,7 +223,10 @@ pub fn read_full_blocks(
     }
 
     let block_count = (buf.len() / block_size) as u64;
-    if lba.checked_add(block_count).map_or(true, |end| end > block_io.total_blocks()) {
+    if lba
+        .checked_add(block_count)
+        .map_or(true, |end| end > block_io.total_blocks())
+    {
         return Err(FsError::ReadError);
     }
 
@@ -206,7 +241,11 @@ pub struct DynBlockIo {
 }
 
 impl DynBlockIo {
-    pub fn new(block_size: u32, total_blocks: u64, read_fn: fn(u64, &mut [u8]) -> Result<(), FsError>) -> Self {
+    pub fn new(
+        block_size: u32,
+        total_blocks: u64,
+        read_fn: fn(u64, &mut [u8]) -> Result<(), FsError>,
+    ) -> Self {
         Self {
             block_size,
             total_blocks,
@@ -249,6 +288,11 @@ pub trait FileSystem: Sized {
     /// 获取块大小
     fn block_size(&self) -> u32;
 
+    /// 获取文件到底层块设备的物理 LBA 映射。
+    fn file_extents(&self, _path: &str) -> Result<Vec<FileExtent>, FsError> {
+        Err(FsError::UnsupportedFs)
+    }
+
     /// 递归扫描目录获取所有文件
     fn scan_files(&self, path: &str, extensions: &[&str]) -> Result<Vec<FileInfo>, FsError> {
         let mut result = Vec::new();
@@ -283,9 +327,8 @@ pub trait FileSystem: Sized {
             } else {
                 // 检查扩展名
                 let name_lower = entry.name.to_ascii_lowercase();
-                let matches = extensions.is_empty() || extensions.iter().any(|ext| {
-                    name_lower.ends_with(ext)
-                });
+                let matches =
+                    extensions.is_empty() || extensions.iter().any(|ext| name_lower.ends_with(ext));
 
                 if matches {
                     let mut file_info = entry.clone();
@@ -380,8 +423,12 @@ pub fn split_path(path: &str) -> (String, String) {
         let dir = &normalized[..pos];
         let name = &normalized[pos + 1..];
         (
-            if dir.is_empty() { String::from("/") } else { dir.to_string() },
-            name.to_string()
+            if dir.is_empty() {
+                String::from("/")
+            } else {
+                dir.to_string()
+            },
+            name.to_string(),
         )
     } else {
         (String::from("/"), normalized)
@@ -402,9 +449,11 @@ extern crate std;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exfat::ExFat;
+    use crate::fat32::Fat32;
+    use crate::iso9660::Iso9660;
     use alloc::rc::Rc;
     use alloc::vec;
-    use crate::iso9660::Iso9660;
 
     struct MemoryBlockIo {
         block_size: u32,
@@ -465,6 +514,13 @@ mod tests {
         block[offset + 33..offset + 33 + name.len()].copy_from_slice(name);
     }
 
+    fn write_utf16_name(entry: &mut [u8], name: &str) {
+        for (i, ch) in name.encode_utf16().enumerate() {
+            let offset = 2 + i * 2;
+            entry[offset..offset + 2].copy_from_slice(&ch.to_le_bytes());
+        }
+    }
+
     #[test]
     fn read_full_blocks_checks_bounds_and_alignment() {
         let io = MemoryBlockIo::new(512, 2);
@@ -519,5 +575,108 @@ mod tests {
         let read = fs.read_file("/kernel", 0, &mut data).expect("file read");
         assert_eq!(read, 11);
         assert_eq!(&data, b"hello world");
+    }
+
+    #[test]
+    fn fat32_file_extents_follow_fragmented_cluster_chain() {
+        let mut io = MemoryBlockIo::new(512, 16);
+
+        {
+            let boot = io.block_mut(0);
+            boot[0..3].copy_from_slice(&[0xEB, 0x58, 0x90]);
+            boot[3..11].copy_from_slice(b"NEXTBOOT");
+            boot[11..13].copy_from_slice(&512u16.to_le_bytes());
+            boot[13] = 1;
+            boot[14..16].copy_from_slice(&1u16.to_le_bytes());
+            boot[16] = 1;
+            boot[32..36].copy_from_slice(&16u32.to_le_bytes());
+            boot[36..40].copy_from_slice(&1u32.to_le_bytes());
+            boot[44..48].copy_from_slice(&2u32.to_le_bytes());
+            boot[82..90].copy_from_slice(b"FAT32   ");
+            boot[510] = 0x55;
+            boot[511] = 0xAA;
+        }
+
+        {
+            let fat = io.block_mut(1);
+            fat[0..4].copy_from_slice(&0x0FFFFFF8u32.to_le_bytes());
+            fat[4..8].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
+            fat[8..12].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
+            fat[12..16].copy_from_slice(&5u32.to_le_bytes());
+            fat[20..24].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
+        }
+
+        {
+            let root = io.block_mut(2);
+            root[0..11].copy_from_slice(b"TEST    ISO");
+            root[11] = FileAttributes::ARCHIVE.bits();
+            root[26..28].copy_from_slice(&3u16.to_le_bytes());
+            root[28..32].copy_from_slice(&700u32.to_le_bytes());
+        }
+
+        let fs = Fat32::open(Rc::new(io)).expect("valid FAT32 filesystem");
+        let extents = fs.file_extents("/TEST.ISO").expect("file extents");
+
+        assert_eq!(
+            extents,
+            vec![FileExtent::new(0, 3, 1), FileExtent::new(1, 5, 1),]
+        );
+    }
+
+    #[test]
+    fn exfat_file_extents_support_no_fat_chain_files() {
+        let mut io = MemoryBlockIo::new(512, 16);
+
+        {
+            let boot = io.block_mut(0);
+            boot[0..3].copy_from_slice(&[0xEB, 0x76, 0x90]);
+            boot[3..11].copy_from_slice(b"EXFAT   ");
+            boot[72..80].copy_from_slice(&16u64.to_le_bytes());
+            boot[80..84].copy_from_slice(&1u32.to_le_bytes());
+            boot[84..88].copy_from_slice(&1u32.to_le_bytes());
+            boot[88..92].copy_from_slice(&2u32.to_le_bytes());
+            boot[92..96].copy_from_slice(&14u32.to_le_bytes());
+            boot[96..100].copy_from_slice(&2u32.to_le_bytes());
+            boot[104..106].copy_from_slice(&0x0100u16.to_le_bytes());
+            boot[108] = 9;
+            boot[109] = 0;
+            boot[110] = 1;
+            boot[510..512].copy_from_slice(&0xAA55u16.to_le_bytes());
+        }
+
+        {
+            let fat = io.block_mut(1);
+            fat[8..12].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+        }
+
+        {
+            let root = io.block_mut(2);
+            root[0] = 0x85;
+            root[1] = 2;
+            root[4..6].copy_from_slice(&0x20u16.to_le_bytes());
+
+            root[32] = 0xC0;
+            root[33] = 0x02;
+            root[35] = 8;
+            root[52..56].copy_from_slice(&4u32.to_le_bytes());
+            root[56..64].copy_from_slice(&1024u64.to_le_bytes());
+
+            root[64] = 0xC1;
+            write_utf16_name(&mut root[64..96], "TEST.ISO");
+        }
+
+        io.block_mut(4)[..5].copy_from_slice(b"first");
+        io.block_mut(5)[..6].copy_from_slice(b"second");
+
+        let fs = ExFat::open(Rc::new(io)).expect("valid exFAT filesystem");
+        let extents = fs.file_extents("/TEST.ISO").expect("file extents");
+
+        assert_eq!(extents, vec![FileExtent::new(0, 4, 2)]);
+
+        let mut data = vec![0u8; 518];
+        let read = fs.read_file("/TEST.ISO", 0, &mut data).expect("file read");
+        assert_eq!(read, 518);
+        assert_eq!(&data[..5], b"first");
+        assert_eq!(&data[512..518], b"second");
     }
 }
