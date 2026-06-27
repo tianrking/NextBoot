@@ -12,7 +12,7 @@
 #   ./scripts/run-qemu.sh --bus nvme --image ~/Downloads/ubuntu.iso
 #   ./scripts/run-qemu.sh --bus usb --mode release --no-run
 
-set -euo pipefail
+set -eo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -162,42 +162,209 @@ info "Storage bus: ${BUS}"
 info "Disk image: ${DISK_IMG}"
 
 require_command python3 "python3 is required to create the GPT disk image"
-require_command mformat "mtools is required: install with 'brew install mtools' or your distro package manager"
-require_command mcopy "mtools is required: install with 'brew install mtools' or your distro package manager"
-require_command mmd "mtools is required: install with 'brew install mtools' or your distro package manager"
 
 SECTOR_SIZE=512
 PART_START_LBA=2048
 TOTAL_SECTORS=$((DISK_SIZE_MB * 1024 * 1024 / SECTOR_SIZE))
 PART_SECTORS=$((TOTAL_SECTORS - PART_START_LBA - 33))
-PART_OFFSET_BYTES=$((PART_START_LBA * SECTOR_SIZE))
 
 if [ "$PART_SECTORS" -le 0 ]; then
     die "Disk image is too small for GPT and FAT32 partition"
 fi
 
 warn "Creating GPT/FAT32 test disk image..."
-python3 - "$DISK_IMG" "$DISK_SIZE_MB" "$PART_START_LBA" <<'PY'
+PY_ARGS=("$DISK_IMG" "$DISK_SIZE_MB" "$PART_START_LBA" "$EFI_FILE")
+if [ "${#IMAGES[@]}" -gt 0 ]; then
+    PY_ARGS+=("${IMAGES[@]}")
+fi
+python3 - "${PY_ARGS[@]}" <<'PY'
+import math
 import os
 import struct
 import sys
+import time
 import uuid
 import zlib
 
 path = sys.argv[1]
 size_mb = int(sys.argv[2])
 part_start_lba = int(sys.argv[3])
+efi_file = sys.argv[4]
+image_files = sys.argv[5:]
 sector_size = 512
 total_sectors = size_mb * 1024 * 1024 // sector_size
 last_lba = total_sectors - 1
 part_end_lba = last_lba - 33
+part_sectors = part_end_lba - part_start_lba + 1
+partition_offset = part_start_lba * sector_size
 
 if part_start_lba >= part_end_lba:
     raise SystemExit("disk image is too small")
 
+def short_name_checksum(name11):
+    checksum = 0
+    for byte in name11:
+        checksum = (((checksum & 1) << 7) + (checksum >> 1) + byte) & 0xFF
+    return checksum
+
+def sanitize_short_component(text):
+    allowed = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$%'-_@~`!(){}^#&"
+    out = bytearray()
+    for ch in text.upper().encode("ascii", "ignore"):
+        out.append(ch if ch in allowed else ord("_"))
+    return bytes(out)
+
+def split_name(name):
+    if "." in name and not name.startswith("."):
+        base, ext = name.rsplit(".", 1)
+    else:
+        base, ext = name, ""
+    return base, ext
+
+def make_short_name(name, used):
+    base, ext = split_name(name)
+    clean_base = sanitize_short_component(base) or b"FILE"
+    clean_ext = sanitize_short_component(ext)
+
+    candidate = clean_base[:8].ljust(8, b" ") + clean_ext[:3].ljust(3, b" ")
+    simple_name = clean_base.decode("ascii", "ignore").rstrip()
+    simple_ext = clean_ext.decode("ascii", "ignore").rstrip()
+    requested = simple_name if not simple_ext else f"{simple_name}.{simple_ext}"
+    if requested == name.upper() and candidate not in used:
+        used.add(candidate)
+        return candidate, False
+
+    stem = clean_base[:6] or b"FILE"
+    for index in range(1, 100000):
+        suffix = f"~{index}".encode("ascii")
+        short_base = (stem[: 8 - len(suffix)] + suffix)[:8]
+        candidate = short_base.ljust(8, b" ") + clean_ext[:3].ljust(3, b" ")
+        if candidate not in used:
+            used.add(candidate)
+            return candidate, True
+    raise SystemExit(f"cannot allocate short name for {name}")
+
+def lfn_entry(sequence, chunk, checksum):
+    values = [0xFFFF] * 13
+    for index, codepoint in enumerate(chunk):
+        values[index] = codepoint
+    if len(chunk) < 13:
+        values[len(chunk)] = 0
+
+    entry = bytearray(32)
+    entry[0] = sequence
+    entry[11] = 0x0F
+    entry[13] = checksum
+    for i in range(5):
+        struct.pack_into("<H", entry, 1 + i * 2, values[i])
+    for i in range(6):
+        struct.pack_into("<H", entry, 14 + i * 2, values[5 + i])
+    for i in range(2):
+        struct.pack_into("<H", entry, 28 + i * 2, values[11 + i])
+    return bytes(entry)
+
+def directory_entry(name11, attr, first_cluster, size):
+    entry = bytearray(32)
+    entry[0:11] = name11
+    entry[11] = attr
+    struct.pack_into("<H", entry, 20, (first_cluster >> 16) & 0xFFFF)
+    struct.pack_into("<H", entry, 26, first_cluster & 0xFFFF)
+    struct.pack_into("<I", entry, 28, size)
+    return bytes(entry)
+
+class Directory:
+    def __init__(self, first_cluster):
+        self.first_cluster = first_cluster
+        self.entries = []
+        self.used_short_names = set()
+
+    def add(self, name, attr, first_cluster, size):
+        short, needs_lfn = make_short_name(name, self.used_short_names)
+        if needs_lfn or name.upper() != short_to_display_name(short):
+            checksum = short_name_checksum(short)
+            codes = [ord(ch) for ch in name]
+            chunks = [codes[i : i + 13] for i in range(0, len(codes), 13)] or [[]]
+            for index in range(len(chunks), 0, -1):
+                seq = index
+                if index == len(chunks):
+                    seq |= 0x40
+                self.entries.append(lfn_entry(seq, chunks[index - 1], checksum))
+        self.entries.append(directory_entry(short, attr, first_cluster, size))
+
+def short_to_display_name(name11):
+    base = name11[:8].decode("ascii").rstrip()
+    ext = name11[8:].decode("ascii").rstrip()
+    return base if not ext else f"{base}.{ext}"
+
 disk_guid = uuid.uuid5(uuid.NAMESPACE_URL, f"nextboot-qemu:{os.path.abspath(path)}").bytes_le
 part_guid = uuid.uuid5(uuid.NAMESPACE_URL, f"nextboot-qemu-part:{os.path.abspath(path)}").bytes_le
 esp_type = uuid.UUID("c12a7328-f81f-11d2-ba4b-00a0c93ec93b").bytes_le
+
+reserved_sectors = 32
+num_fats = 2
+sectors_per_cluster = 1
+media = 0xF8
+
+fat_size = 1
+while True:
+    data_sectors = part_sectors - reserved_sectors - num_fats * fat_size
+    if data_sectors <= 0:
+        raise SystemExit("partition is too small for FAT32")
+    cluster_count = data_sectors // sectors_per_cluster
+    required = math.ceil((cluster_count + 2) * 4 / sector_size)
+    if required <= fat_size:
+        break
+    fat_size = required
+
+if cluster_count < 65525:
+    raise SystemExit("partition is too small for FAT32")
+
+cluster_size = sectors_per_cluster * sector_size
+fat_offset = partition_offset + reserved_sectors * sector_size
+data_offset = partition_offset + (reserved_sectors + num_fats * fat_size) * sector_size
+fat = bytearray(fat_size * sector_size)
+
+def set_fat(cluster, value):
+    struct.pack_into("<I", fat, cluster * 4, value & 0x0FFFFFFF)
+
+def cluster_offset(cluster):
+    return data_offset + (cluster - 2) * cluster_size
+
+next_cluster = 2
+
+def allocate_cluster():
+    global next_cluster
+    if next_cluster >= cluster_count + 2:
+        raise SystemExit("disk image is too small for requested files")
+    cluster = next_cluster
+    next_cluster += 1
+    set_fat(cluster, 0x0FFFFFFF)
+    return cluster
+
+def allocate_chain(count):
+    if count == 0:
+        return []
+    chain = [allocate_cluster() for _ in range(count)]
+    for current, nxt in zip(chain, chain[1:]):
+        set_fat(current, nxt)
+    set_fat(chain[-1], 0x0FFFFFFF)
+    return chain
+
+def write_cluster(f, cluster, data):
+    f.seek(cluster_offset(cluster))
+    if len(data) > cluster_size:
+        raise SystemExit("internal error: cluster write too large")
+    f.write(data)
+    if len(data) < cluster_size:
+        f.write(bytes(cluster_size - len(data)))
+
+root = Directory(allocate_cluster())
+efi = Directory(allocate_cluster())
+boot = Directory(allocate_cluster())
+iso = Directory(allocate_cluster())
+
+set_fat(0, 0x0FFFFF00 | media)
+set_fat(1, 0x0FFFFFFF)
 
 with open(path, "wb") as f:
     f.truncate(total_sectors * sector_size)
@@ -253,20 +420,93 @@ with open(path, "wb") as f:
     f.write(make_header(1, last_lba, primary_entries_lba))
     f.seek(last_lba * sector_size)
     f.write(make_header(last_lba, 1, backup_entries_lba))
+
+    def copy_file(source, target_dir, target_name):
+        size = os.path.getsize(source)
+        clusters_needed = math.ceil(size / cluster_size) if size else 0
+        chain = allocate_chain(clusters_needed)
+        with open(source, "rb") as src:
+            for cluster in chain:
+                write_cluster(f, cluster, src.read(cluster_size))
+        first = chain[0] if chain else 0
+        target_dir.add(target_name, 0x20, first, size)
+
+    copy_file(efi_file, boot, "BOOTX64.EFI")
+    for image in image_files:
+        copy_file(image, iso, os.path.basename(image))
+
+    root.add("EFI", 0x10, efi.first_cluster, 0)
+    root.add("ISO", 0x10, iso.first_cluster, 0)
+    efi.add("BOOT", 0x10, boot.first_cluster, 0)
+
+    def flush_directory(directory):
+        content = b"".join(directory.entries)
+        needed = max(1, math.ceil((len(content) + 32) / cluster_size))
+        chain = [directory.first_cluster]
+        current = directory.first_cluster
+        while True:
+            value = struct.unpack_from("<I", fat, current * 4)[0] & 0x0FFFFFFF
+            if value >= 0x0FFFFFF8:
+                break
+            chain.append(value)
+            current = value
+        while len(chain) < needed:
+            new_cluster = allocate_cluster()
+            set_fat(chain[-1], new_cluster)
+            set_fat(new_cluster, 0x0FFFFFFF)
+            chain.append(new_cluster)
+        content += b"\x00" * (len(chain) * cluster_size - len(content))
+        for index, cluster in enumerate(chain):
+            write_cluster(f, cluster, content[index * cluster_size : (index + 1) * cluster_size])
+
+    flush_directory(root)
+    flush_directory(efi)
+    flush_directory(boot)
+    flush_directory(iso)
+
+    volume_id = int(time.time()) & 0xFFFFFFFF
+    boot_sector = bytearray(sector_size)
+    boot_sector[0:3] = b"\xeb\x58\x90"
+    boot_sector[3:11] = b"MSWIN4.1"
+    struct.pack_into("<H", boot_sector, 11, sector_size)
+    boot_sector[13] = sectors_per_cluster
+    struct.pack_into("<H", boot_sector, 14, reserved_sectors)
+    boot_sector[16] = num_fats
+    boot_sector[21] = media
+    struct.pack_into("<H", boot_sector, 24, 63)
+    struct.pack_into("<H", boot_sector, 26, 255)
+    struct.pack_into("<I", boot_sector, 28, part_start_lba)
+    struct.pack_into("<I", boot_sector, 32, part_sectors)
+    struct.pack_into("<I", boot_sector, 36, fat_size)
+    struct.pack_into("<I", boot_sector, 44, root.first_cluster)
+    struct.pack_into("<H", boot_sector, 48, 1)
+    struct.pack_into("<H", boot_sector, 50, 6)
+    boot_sector[64] = 0x80
+    boot_sector[66] = 0x29
+    struct.pack_into("<I", boot_sector, 67, volume_id)
+    boot_sector[71:82] = b"NEXBOOT    "
+    boot_sector[82:90] = b"FAT32   "
+    boot_sector[510:512] = b"\x55\xaa"
+
+    fsinfo = bytearray(sector_size)
+    struct.pack_into("<I", fsinfo, 0, 0x41615252)
+    struct.pack_into("<I", fsinfo, 484, 0x61417272)
+    struct.pack_into("<I", fsinfo, 488, max(0, cluster_count - next_cluster))
+    struct.pack_into("<I", fsinfo, 492, next_cluster)
+    struct.pack_into("<I", fsinfo, 508, 0xAA550000)
+
+    f.seek(partition_offset)
+    f.write(boot_sector)
+    f.seek(partition_offset + sector_size)
+    f.write(fsinfo)
+    f.seek(partition_offset + 6 * sector_size)
+    f.write(boot_sector)
+    f.seek(partition_offset + 7 * sector_size)
+    f.write(fsinfo)
+    for index in range(num_fats):
+        f.seek(fat_offset + index * fat_size * sector_size)
+        f.write(fat)
 PY
-
-MTOOLS_IMAGE="${DISK_IMG}@@${PART_OFFSET_BYTES}"
-mformat -i "$MTOOLS_IMAGE" -F -T "$PART_SECTORS" -v NEXBOOT ::
-mmd -i "$MTOOLS_IMAGE" ::/EFI >/dev/null 2>&1 || true
-mmd -i "$MTOOLS_IMAGE" ::/EFI/BOOT >/dev/null 2>&1 || true
-mmd -i "$MTOOLS_IMAGE" ::/ISO >/dev/null 2>&1 || true
-mcopy -o -i "$MTOOLS_IMAGE" "$EFI_FILE" ::/EFI/BOOT/BOOTX64.EFI
-
-for image in "${IMAGES[@]}"; do
-    name="$(basename "$image")"
-    warn "Copying test image to /ISO/${name}..."
-    mcopy -o -i "$MTOOLS_IMAGE" "$image" "::/ISO/${name}"
-done
 
 info "Disk image created: ${DISK_IMG}"
 

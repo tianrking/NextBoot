@@ -102,9 +102,8 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 ./scripts/run-qemu.sh --bus sata --no-run
 ```
 
-`run-qemu.sh` 会创建 GPT 分区磁盘镜像，并支持 `virtio`、`nvme`、`sata`、`usb`
-四种 QEMU 存储路径。脚本需要 `mtools` 来直接写入镜像内的 FAT32 分区：
-macOS 可用 `brew install mtools`，Linux 可安装发行版的 `mtools` 包。
+`run-qemu.sh` 会直接创建 GPT/FAT32 磁盘镜像，并支持 `virtio`、`nvme`、`sata`、
+`usb` 四种 QEMU 存储路径，用来覆盖固定盘和可移动盘的启动差异。
 
 ### 写入 U 盘
 
