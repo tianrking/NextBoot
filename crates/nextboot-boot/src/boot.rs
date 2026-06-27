@@ -33,7 +33,8 @@ use nextboot_virtio::protocol::{
     append_file_path_device_path, DevicePathHeader, DevicePathType, EndDevicePath, MediaSubtype,
 };
 use nextboot_virtio::{
-    PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
+    MemoryOverlay, PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig,
+    VirtualDeviceType,
 };
 use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
@@ -133,6 +134,8 @@ const WIMBOOT_SELF_CALLBACK_PATH: &str = "nb-wimboot";
 const WIMBOOT_XZ_MAX_OUTPUT_SIZE: usize = 2 * 1024 * 1024;
 const VENTOY_COMMON_CPIO_CANDIDATES: &[&str] = &["/ventoy/ventoy.cpio"];
 const LINUX_CONFIG_MAX_SIZE: usize = 512 * 1024;
+const VENTOY_CONF_REPLACE_MAX_SIZE: usize = 1024 * 1024;
+const ISO9660_SECTOR_SIZE: u64 = 2048;
 const LINUX_GRUB_CONFIG_CANDIDATES: &[&str] = &[
     "/boot/grub/grub.cfg",
     "/boot/grub/loopback.cfg",
@@ -1640,7 +1643,7 @@ impl<'a> BootManager<'a> {
     /// 创建虚拟 Block IO
     fn create_virtual_block_io(
         &self,
-        config: VirtualDeviceConfig,
+        mut config: VirtualDeviceConfig,
     ) -> uefi::Result<VirtualBootDevice> {
         use nextboot_virtio::protocol::VirtualBlockIoProtocol;
 
@@ -1650,7 +1653,12 @@ impl<'a> BootManager<'a> {
         let source_block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let vbio = self.build_virtual_block_io(config, &source_block_io)?;
+        let memory_overlays = self.build_conf_replace_overlays(&source_block_io, &mut config)?;
+        let mut vbio = self.build_virtual_block_io(config, &source_block_io)?;
+        for overlay in memory_overlays {
+            vbio.add_memory_overlay(overlay)
+                .map_err(virtio_error_to_uefi_status)?;
+        }
         let virtual_info = vbio.device_info();
         let registered = VirtualBlockIoProtocol::new(vbio).install(self.bt)?;
         let virtual_handle = registered.handle();
@@ -1707,6 +1715,129 @@ impl<'a> BootManager<'a> {
             handle: virtual_handle,
             device_path,
         })
+    }
+
+    fn build_conf_replace_overlays(
+        &self,
+        source_block_io: &BlockIO,
+        config: &mut VirtualDeviceConfig,
+    ) -> uefi::Result<Vec<MemoryOverlay>> {
+        let Some(plugin) = self.iso.ventoy_plugin.as_ref() else {
+            return Ok(Vec::new());
+        };
+        if plugin.conf_replace.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !self.iso.image_format.is_iso() {
+            return Ok(Vec::new());
+        }
+        if self.iso.is_udf {
+            warn!(
+                "Ventoy conf_replace for {} is skipped: UDF directory overrides are not implemented yet",
+                self.iso.path
+            );
+            return Ok(Vec::new());
+        }
+
+        let iso_fs = self.open_iso9660_filesystem(source_block_io)?;
+        let source_fs = SourceVolumeFileSystem::open(source_block_io)?;
+        let mut overlays = Vec::new();
+        overlays
+            .try_reserve_exact(plugin.conf_replace.len().saturating_mul(2))
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+
+        let mut next_append_offset =
+            align_up_u64(config.iso_size, ISO9660_SECTOR_SIZE).ok_or(Status::OUT_OF_RESOURCES)?;
+        for rule in &plugin.conf_replace {
+            let record = match iso_fs.directory_record_location(&rule.org) {
+                Ok(record) if !record.is_dir => record,
+                Ok(_) => {
+                    warn!(
+                        "Ventoy conf_replace org path {} for {} is a directory",
+                        rule.org, self.iso.path
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    warn!(
+                        "Ventoy conf_replace org path {} for {} was not found: {:?}",
+                        rule.org, self.iso.path, err
+                    );
+                    continue;
+                }
+            };
+
+            let replacement = match source_fs.load_file(&rule.new_path) {
+                Ok(file) => file,
+                Err(err) => {
+                    warn!(
+                        "Ventoy conf_replace new path {} for {} was not loaded: {:?}",
+                        rule.new_path,
+                        self.iso.path,
+                        err.status()
+                    );
+                    continue;
+                }
+            };
+            if replacement.data.len() > VENTOY_CONF_REPLACE_MAX_SIZE {
+                warn!(
+                    "Ventoy conf_replace new path {} for {} is too large: {} bytes",
+                    replacement.path,
+                    self.iso.path,
+                    replacement.data.len()
+                );
+                continue;
+            }
+
+            let aligned_len = align_up(replacement.data.len(), ISO9660_SECTOR_SIZE as usize)
+                .ok_or(Status::OUT_OF_RESOURCES)?;
+            let replacement_size =
+                u32::try_from(replacement.data.len()).map_err(|_| Status::OUT_OF_RESOURCES)?;
+            let replacement_sector = u32::try_from(next_append_offset / ISO9660_SECTOR_SIZE)
+                .map_err(|_| Status::OUT_OF_RESOURCES)?;
+            let patch_offset = record
+                .record_offset
+                .checked_add(2)
+                .ok_or(Status::OUT_OF_RESOURCES)?;
+
+            overlays.push(MemoryOverlay::new(
+                patch_offset,
+                iso9660_file_extent_patch(replacement_sector, replacement_size),
+            ));
+
+            let mut data = replacement.data;
+            data.resize(aligned_len, 0);
+            overlays.push(MemoryOverlay::new(next_append_offset, data));
+
+            info!(
+                "Prepared Ventoy conf_replace for {}: {} -> {} at virtual sector {} ({} bytes)",
+                self.iso.path, rule.org, replacement.path, replacement_sector, replacement_size
+            );
+            next_append_offset = next_append_offset
+                .checked_add(aligned_len as u64)
+                .ok_or(Status::OUT_OF_RESOURCES)?;
+        }
+
+        if !overlays.is_empty() {
+            config.iso_size = config.iso_size.max(next_append_offset);
+            info!(
+                "Prepared {} Ventoy conf_replace overlay(s) for {}; virtual size now {} bytes",
+                overlays.len() / 2,
+                self.iso.path,
+                config.iso_size
+            );
+        }
+
+        Ok(overlays)
+    }
+
+    fn open_iso9660_filesystem(&self, source_block_io: &BlockIO) -> uefi::Result<Iso9660> {
+        let config = self.iso9660_virtual_config();
+        let vbio = self.build_virtual_block_io(config, source_block_io)?;
+        Ok(
+            Iso9660::open(Rc::new(VirtualIsoBlockIo::new(vbio)))
+                .map_err(fs_error_to_uefi_status)?,
+        )
     }
 
     fn publish_os_param(&self, config: &VirtualDeviceConfig) -> uefi::Result<()> {
@@ -3767,6 +3898,15 @@ fn selected_persistence_backend_index(autosel: Option<usize>, count: usize) -> O
         None if count == 1 => Some(0),
         None => None,
     }
+}
+
+fn iso9660_file_extent_patch(first_sector: u32, size: u32) -> Vec<u8> {
+    let mut patch = Vec::new();
+    patch.extend_from_slice(&first_sector.to_le_bytes());
+    patch.extend_from_slice(&first_sector.to_be_bytes());
+    patch.extend_from_slice(&size.to_le_bytes());
+    patch.extend_from_slice(&size.to_be_bytes());
+    patch
 }
 
 fn normalize_iso_path(path: &str) -> String {

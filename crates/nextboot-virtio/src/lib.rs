@@ -152,12 +152,34 @@ impl PhysicalReader for FnPhysicalReader {
     }
 }
 
+/// In-memory bytes exposed at a virtual media offset.
+#[derive(Debug, Clone)]
+pub struct MemoryOverlay {
+    pub virtual_offset: u64,
+    pub data: Vec<u8>,
+}
+
+impl MemoryOverlay {
+    pub fn new(virtual_offset: u64, data: Vec<u8>) -> Self {
+        Self {
+            virtual_offset,
+            data,
+        }
+    }
+
+    fn end(&self) -> Option<u64> {
+        self.virtual_offset.checked_add(self.data.len() as u64)
+    }
+}
+
 /// 虚拟 Block IO 实例
 pub struct VirtualBlockIo {
     /// 设备配置
     config: VirtualDeviceConfig,
     /// 字节级映射表
     byte_mapping: ByteMappingTable,
+    /// In-memory overrides for bytes that do not exist on the source disk.
+    memory_overlays: Vec<MemoryOverlay>,
     /// 物理读取函数
     physical_read: Option<Box<dyn PhysicalReader>>,
     /// 媒体 ID
@@ -178,6 +200,7 @@ impl VirtualBlockIo {
         Self {
             config,
             byte_mapping,
+            memory_overlays: Vec::new(),
             physical_read: None,
             media_id: 0x4E425453, // "NBTS" - NextBoot Storage
         }
@@ -194,6 +217,7 @@ impl VirtualBlockIo {
         Self {
             config,
             byte_mapping,
+            memory_overlays: Vec::new(),
             physical_read: None,
             media_id: 0x4E425453,
         }
@@ -204,6 +228,7 @@ impl VirtualBlockIo {
         Self {
             config,
             byte_mapping,
+            memory_overlays: Vec::new(),
             physical_read: None,
             media_id: 0x4E425453,
         }
@@ -231,6 +256,18 @@ impl VirtualBlockIo {
         R: PhysicalReader + 'static,
     {
         self.physical_read = Some(Box::new(reader));
+    }
+
+    /// Add an owned in-memory overlay at a virtual byte offset.
+    pub fn add_memory_overlay(&mut self, overlay: MemoryOverlay) -> Result<(), VirtIoError> {
+        let end = overlay.end().ok_or(VirtIoError::InvalidArgument)?;
+        if end > self.config.iso_size {
+            self.config.iso_size = end;
+            self.byte_mapping.set_total_bytes(end);
+        }
+
+        self.memory_overlays.push(overlay);
+        Ok(())
     }
 
     /// 获取块大小
@@ -379,6 +416,40 @@ impl VirtualBlockIo {
                 physical_byte += copy_size as u64;
                 remaining -= copy_size;
             }
+        }
+
+        self.apply_memory_overlays(virtual_offset, readable, buf)?;
+
+        Ok(())
+    }
+
+    fn apply_memory_overlays(
+        &self,
+        virtual_offset: u64,
+        readable: u64,
+        buf: &mut [u8],
+    ) -> Result<(), VirtIoError> {
+        let read_end = virtual_offset
+            .checked_add(readable)
+            .ok_or(VirtIoError::OutOfBounds)?;
+        for overlay in &self.memory_overlays {
+            let Some(overlay_end) = overlay.end() else {
+                return Err(VirtIoError::InvalidArgument);
+            };
+            let overlap_start = virtual_offset.max(overlay.virtual_offset);
+            let overlap_end = read_end.min(overlay_end);
+            if overlap_start >= overlap_end {
+                continue;
+            }
+
+            let dst_start = usize::try_from(overlap_start - virtual_offset)
+                .map_err(|_| VirtIoError::InvalidArgument)?;
+            let src_start = usize::try_from(overlap_start - overlay.virtual_offset)
+                .map_err(|_| VirtIoError::InvalidArgument)?;
+            let len = usize::try_from(overlap_end - overlap_start)
+                .map_err(|_| VirtIoError::InvalidArgument)?;
+            buf[dst_start..dst_start + len]
+                .copy_from_slice(&overlay.data[src_start..src_start + len]);
         }
 
         Ok(())
@@ -793,6 +864,29 @@ mod tests {
         assert!(buf[..512].iter().all(|b| *b == 10));
         assert!(buf[512..1024].iter().all(|b| *b == 0));
         assert!(buf[1024..].iter().all(|b| *b == 20));
+    }
+
+    #[test]
+    fn test_virtual_block_io_applies_memory_overlays() {
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::HardDisk, 0, 512, 512);
+        let extents = [(0, 10, 1)];
+        let mut vbio = VirtualBlockIo::from_file_extents(config, &extents);
+        vbio.set_physical_read(fill_lba_read);
+        vbio.add_memory_overlay(MemoryOverlay::new(4, alloc::vec![1, 2, 3, 4]))
+            .expect("in-place overlay");
+        vbio.add_memory_overlay(MemoryOverlay::new(512, alloc::vec![9, 8, 7]))
+            .expect("appended overlay");
+
+        let mut first = [0u8; 8];
+        vbio.read_bytes(vbio.media_id(), 0, &mut first)
+            .expect("overlay byte read");
+        assert_eq!(first, [10, 10, 10, 10, 1, 2, 3, 4]);
+
+        let mut appended = [0u8; 3];
+        vbio.read_bytes(vbio.media_id(), 512, &mut appended)
+            .expect("appended overlay read");
+        assert_eq!(appended, [9, 8, 7]);
+        assert_eq!(vbio.device_info().size_bytes, 515);
     }
 
     #[test]

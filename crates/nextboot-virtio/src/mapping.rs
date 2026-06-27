@@ -301,6 +301,10 @@ impl ByteMappingTable {
         }
     }
 
+    pub fn set_total_bytes(&mut self, total_bytes: u64) {
+        self.total_bytes = total_bytes;
+    }
+
     pub fn optimize(&mut self) {
         if self.mappings.len() <= 1 {
             return;

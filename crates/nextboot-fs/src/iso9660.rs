@@ -62,6 +62,14 @@ pub struct Iso9660 {
     volume_id: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IsoDirectoryRecordLocation {
+    pub record_offset: u64,
+    pub extent_lba: u32,
+    pub data_length: u32,
+    pub is_dir: bool,
+}
+
 /// ISO9660 卷描述符
 #[repr(C, packed)]
 struct VolumeDescriptor {
@@ -327,6 +335,90 @@ impl Iso9660 {
         }
 
         Ok(entries)
+    }
+
+    pub fn directory_record_location(
+        &self,
+        path: &str,
+    ) -> Result<IsoDirectoryRecordLocation, FsError> {
+        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        if parts.is_empty() {
+            return Err(FsError::InvalidPath);
+        }
+
+        let mut current_lba = self.root_lba;
+        let mut current_size = self.root_size as u64;
+
+        for (index, part) in parts.iter().enumerate() {
+            let Some(record) = self.find_directory_record(current_lba, current_size, part)? else {
+                return Err(if index + 1 == parts.len() {
+                    FsError::FileNotFound
+                } else {
+                    FsError::DirectoryNotFound
+                });
+            };
+
+            if index + 1 == parts.len() {
+                return Ok(record);
+            }
+            if !record.is_dir {
+                return Err(FsError::NotDirectory);
+            }
+
+            current_lba = record.extent_lba;
+            current_size = u64::from(record.data_length);
+        }
+
+        Err(FsError::InvalidPath)
+    }
+
+    fn find_directory_record(
+        &self,
+        lba: u32,
+        size: u64,
+        name: &str,
+    ) -> Result<Option<IsoDirectoryRecordLocation>, FsError> {
+        let mut current_lba = lba;
+        let total_blocks = ((size + self.block_size as u64 - 1) / self.block_size as u64).max(1);
+        let mut dir_data = alloc_buffer(self.block_size as usize)?;
+
+        for _ in 0..total_blocks {
+            read_full_blocks(self.block_io.as_ref(), current_lba as u64, &mut dir_data)?;
+
+            let mut offset = 0usize;
+            while offset < dir_data.len() {
+                let len = dir_data[offset] as usize;
+                if len == 0 {
+                    break;
+                }
+                if offset + len > dir_data.len() {
+                    break;
+                }
+
+                let record = &dir_data[offset..offset + len];
+                if let Some(info) = self.parse_directory_record(record) {
+                    if info.name != "." && info.name != ".." && info.name.eq_ignore_ascii_case(name)
+                    {
+                        let record_offset = u64::from(current_lba)
+                            .checked_mul(u64::from(self.block_size))
+                            .and_then(|value| value.checked_add(offset as u64))
+                            .ok_or(FsError::Corrupted)?;
+                        return Ok(Some(IsoDirectoryRecordLocation {
+                            record_offset,
+                            extent_lba: info.start_cluster as u32,
+                            data_length: info.size as u32,
+                            is_dir: info.is_dir,
+                        }));
+                    }
+                }
+
+                offset += len;
+            }
+
+            current_lba += 1;
+        }
+
+        Ok(None)
     }
 
     /// 解析目录记录
