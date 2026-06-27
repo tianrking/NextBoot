@@ -14,6 +14,7 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use bitflags::bitflags;
 
@@ -109,6 +110,21 @@ impl VirtualDeviceConfig {
 /// 物理读取函数类型
 pub type PhysicalReadFn = fn(u64, &mut [u8]) -> Result<(), VirtIoError>;
 
+/// 可携带状态的物理块读取器。
+pub trait PhysicalReader {
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError>;
+}
+
+struct FnPhysicalReader {
+    read_fn: PhysicalReadFn,
+}
+
+impl PhysicalReader for FnPhysicalReader {
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
+        (self.read_fn)(lba, buf)
+    }
+}
+
 /// 虚拟 Block IO 实例
 pub struct VirtualBlockIo {
     /// 设备配置
@@ -116,7 +132,7 @@ pub struct VirtualBlockIo {
     /// 字节级映射表
     byte_mapping: ByteMappingTable,
     /// 物理读取函数
-    physical_read: Option<PhysicalReadFn>,
+    physical_read: Option<Box<dyn PhysicalReader>>,
     /// 媒体 ID
     media_id: u32,
 }
@@ -179,7 +195,15 @@ impl VirtualBlockIo {
 
     /// 设置物理读取函数
     pub fn set_physical_read(&mut self, read_fn: PhysicalReadFn) {
-        self.physical_read = Some(read_fn);
+        self.physical_read = Some(Box::new(FnPhysicalReader { read_fn }));
+    }
+
+    /// 设置可携带状态的物理读取器。
+    pub fn set_physical_reader<R>(&mut self, reader: R)
+    where
+        R: PhysicalReader + 'static,
+    {
+        self.physical_read = Some(Box::new(reader));
     }
 
     /// 获取块大小
@@ -238,16 +262,19 @@ impl VirtualBlockIo {
             return Err(VirtIoError::OutOfBounds);
         }
 
-        let read_fn = self.physical_read.ok_or(VirtIoError::NoPhysicalRead)?;
+        let reader = self
+            .physical_read
+            .as_ref()
+            .ok_or(VirtIoError::NoPhysicalRead)?;
         let virtual_offset = virtual_lba
             .checked_mul(self.config.block_size as u64)
             .ok_or(VirtIoError::OutOfBounds)?;
-        self.read_virtual_bytes(read_fn, virtual_offset, buf)
+        self.read_virtual_bytes(reader.as_ref(), virtual_offset, buf)
     }
 
     fn read_virtual_bytes(
         &self,
-        read_fn: PhysicalReadFn,
+        reader: &dyn PhysicalReader,
         virtual_offset: u64,
         buf: &mut [u8],
     ) -> Result<(), VirtIoError> {
@@ -280,7 +307,7 @@ impl VirtualBlockIo {
                 let in_block_offset = (physical_byte % physical_block_size as u64) as usize;
                 let copy_size = (physical_block_size - in_block_offset).min(remaining);
 
-                read_fn(physical_lba, &mut scratch)?;
+                reader.read_blocks(physical_lba, &mut scratch)?;
 
                 buf[dst_offset..dst_offset + copy_size]
                     .copy_from_slice(&scratch[in_block_offset..in_block_offset + copy_size]);

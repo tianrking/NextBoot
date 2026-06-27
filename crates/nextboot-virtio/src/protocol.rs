@@ -3,7 +3,17 @@
 //! 定义与 UEFI 兼容的协议接口
 
 use crate::{VirtIoError, VirtualBlockIo, VirtualMediaInfo};
+#[cfg(not(test))]
+use alloc::boxed::Box;
 use bitflags::bitflags;
+#[cfg(not(test))]
+use core::ffi::c_void;
+#[cfg(not(test))]
+use uefi::proto::media::block::BlockIO;
+#[cfg(not(test))]
+use uefi::table::boot::BootServices;
+#[cfg(not(test))]
+use uefi::{Handle, Identify};
 
 /// UEFI Block IO Protocol GUID
 pub const BLOCK_IO_GUID: [u8; 16] = [
@@ -368,6 +378,16 @@ impl VirtualBlockIoProtocol {
         &mut self.protocol
     }
 
+    /// 安装为 UEFI Block IO 协议。
+    #[cfg(not(test))]
+    pub fn install(self, bt: &BootServices) -> uefi::Result<RegisteredVirtualBlockIo> {
+        let mut protocol = Box::new(self);
+        let interface = protocol.as_ptr().cast::<c_void>();
+        let handle = unsafe { bt.install_protocol_interface(None, &BlockIO::GUID, interface) }?;
+
+        Ok(RegisteredVirtualBlockIo { handle, protocol })
+    }
+
     /// Reset 处理函数
     extern "efiapi" fn reset_handler(this: *mut BlockIoProtocol, extended: bool) -> u64 {
         let Some(wrapper) = Self::from_protocol(this) else {
@@ -462,6 +482,34 @@ impl VirtualBlockIoProtocol {
         // `protocol` is the first field and the type is repr(C), so both
         // pointers have the same address.
         Some(unsafe { &mut *(this.cast::<Self>()) })
+    }
+}
+
+/// 已注册的虚拟 Block IO。
+///
+/// 持有协议对象的 Box，确保 firmware 保存的协议指针在 boot-services
+/// 生命周期内不会悬空。
+#[cfg(not(test))]
+pub struct RegisteredVirtualBlockIo {
+    handle: Handle,
+    protocol: Box<VirtualBlockIoProtocol>,
+}
+
+#[cfg(not(test))]
+impl RegisteredVirtualBlockIo {
+    pub fn handle(&self) -> Handle {
+        self.handle
+    }
+
+    pub fn protocol_ptr(&mut self) -> *mut BlockIoProtocol {
+        self.protocol.as_ptr()
+    }
+
+    pub fn leak(self) -> Handle {
+        let handle = self.handle;
+        let protocol = self.protocol;
+        let _ = Box::leak(protocol);
+        handle
     }
 }
 

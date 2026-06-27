@@ -6,7 +6,10 @@ use crate::init::StorageDevice;
 use crate::scanner::{IsoFile, OsType};
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::ptr::NonNull;
 use log::{info, warn};
+use nextboot_virtio::{PhysicalReader, VirtIoError};
+use uefi::proto::media::block::BlockIO;
 use uefi::table::boot::BootServices;
 use uefi::Status;
 
@@ -173,6 +176,7 @@ impl<'a> BootManager<'a> {
 
     /// 创建虚拟 Block IO
     fn create_virtual_block_io(&self) -> uefi::Result<()> {
+        use nextboot_virtio::protocol::VirtualBlockIoProtocol;
         use nextboot_virtio::{VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
 
         info!("Creating virtual Block IO...");
@@ -198,7 +202,7 @@ impl<'a> BootManager<'a> {
         .with_name(&self.iso.path);
 
         // 创建虚拟 Block IO
-        let vbio = if self.iso.extents.is_empty() {
+        let mut vbio = if self.iso.extents.is_empty() {
             warn!(
                 "No extent map for {}, falling back to contiguous LBA {}",
                 self.iso.path, self.iso.start_lba
@@ -220,18 +224,76 @@ impl<'a> BootManager<'a> {
             VirtualBlockIo::from_file_extents(config, &extents)
         };
 
-        // 设置物理读取函数
-        // vbio.set_physical_read(self.physical_read_fn());
+        let source_block_io = self
+            .bt
+            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+        let reader = UefiPhysicalReader::new(&source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+        vbio.set_physical_reader(reader);
+
+        let virtual_info = vbio.device_info();
+        let registered = VirtualBlockIoProtocol::new(vbio).install(self.bt)?;
+        let virtual_handle = registered.leak();
 
         info!(
-            "Virtual device created: {:?}, source extents: {}",
-            vbio.device_info(),
+            "Virtual Block IO installed on {:?}: {:?}, source extents: {}",
+            virtual_handle,
+            virtual_info,
             self.iso.extents.len()
         );
 
-        // TODO: 注册到 UEFI
-
         Ok(())
+    }
+}
+
+struct UefiPhysicalReader {
+    block_io: NonNull<BlockIO>,
+    media_id: u32,
+    block_size: u32,
+    total_blocks: u64,
+}
+
+impl UefiPhysicalReader {
+    fn new(block_io: &BlockIO) -> Option<Self> {
+        let media = block_io.media();
+        let block_size = media.block_size();
+        if block_size == 0 || !media.is_media_present() {
+            return None;
+        }
+
+        Some(Self {
+            block_io: NonNull::from(block_io),
+            media_id: media.media_id(),
+            block_size,
+            total_blocks: media.last_block() + 1,
+        })
+    }
+}
+
+impl PhysicalReader for UefiPhysicalReader {
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
+        let block_size = self.block_size as usize;
+        if block_size == 0 || buf.is_empty() || buf.len() % block_size != 0 {
+            return Err(VirtIoError::InvalidBufferSize);
+        }
+
+        let block_count = (buf.len() / block_size) as u64;
+        if lba
+            .checked_add(block_count)
+            .map_or(true, |end| end > self.total_blocks)
+        {
+            return Err(VirtIoError::OutOfBounds);
+        }
+
+        let block_io = unsafe { self.block_io.as_ref() };
+        block_io
+            .read_blocks(self.media_id, lba, buf)
+            .map_err(|err| match err.status() {
+                Status::MEDIA_CHANGED => VirtIoError::MediaChanged,
+                Status::NO_MEDIA => VirtIoError::NoPhysicalRead,
+                Status::BAD_BUFFER_SIZE => VirtIoError::InvalidBufferSize,
+                Status::INVALID_PARAMETER => VirtIoError::InvalidArgument,
+                _ => VirtIoError::ReadFailed,
+            })
     }
 }
 
