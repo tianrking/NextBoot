@@ -29,11 +29,17 @@ workflows and which gaps are still worth pursuing.
 - Sparse VHDX `ZERO` BAT entries, self-contained VHDX `PARTIALLY_PRESENT`
   entries with full sector bitmaps, and sparse VDI unallocated block-map
   entries in virtual hard-disk boot smoke coverage.
+- Local Secure Boot signing workflow: `scripts/secure-boot.sh` can generate a
+  local test certificate, sign the UEFI binary with sbsigntools, verify the
+  signed binary where `sbverify` is available, and document firmware db or shim
+  MOK enrollment via `docs/secure-boot.md`.
 
 ## Useful Ventoy Ideas Still Open
 
-- Secure Boot distribution: Ventoy provides a documented Secure Boot workflow;
-  NextBoot still needs a signing/enrollment story before this is user-friendly.
+- Secure Boot distribution: local owner-key signing is documented now, but
+  NextBoot still needs a production-grade shim or Microsoft UEFI CA story,
+  SBAT/revocation policy, and release key management before public Secure Boot
+  distribution is user-friendly.
 - Broader image types: raw IMG, fixed/dynamic VHD, VHDX, sparse VHDX,
   self-contained partially-present VHDX, dynamic VDI, and sparse VDI have
   virtual hard-disk boot smoke coverage now; differencing VHDX/VDI parent

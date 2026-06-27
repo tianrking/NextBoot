@@ -29,10 +29,12 @@ NextBoot/
 │   ├── nextboot-linux/    # Linux 引导支持
 │   └── nextboot-windows/  # Windows 引导支持
 ├── docs/
-│   ├── ARCHITECTURE.md    # 架构设计文档
+│   ├── architecture.md    # 架构设计文档
+│   ├── secure-boot.md     # Secure Boot 本地签名工作流
 │   └── progress/          # 开发进度记录
 ├── scripts/
 │   ├── build.sh           # 构建脚本
+│   ├── secure-boot.sh     # Secure Boot 证书、签名和验签脚本
 │   ├── run-qemu.sh        # QEMU 测试脚本
 │   └── flash.sh           # 写入 U 盘脚本
 └── Cargo.toml             # Workspace 配置
@@ -89,6 +91,29 @@ RUSTC="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc" \
 CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 ./scripts/build.sh check
 ```
+
+### Secure Boot 本地签名
+
+```bash
+# 查看签名工具状态和默认路径
+./scripts/secure-boot.sh status
+
+# 生成本机测试证书和固件/MOK 可登记的 DER 证书
+./scripts/secure-boot.sh generate-test-cert
+
+# 构建并签名 EFI
+./scripts/build.sh release
+./scripts/secure-boot.sh sign
+
+# 在安装了 sbverify 的环境验证签名
+./scripts/secure-boot.sh verify
+```
+
+签名流程默认输出到 `target/secure-boot/`。把 `nextboot-db.cer` 登记到固件
+Secure Boot `db` 或 shim MOK 后，再把 `nextboot-boot-signed.efi` 作为
+`EFI/BOOT/BOOTX64.EFI` 安装到 ESP。这个流程适合自有设备和实验室环境；生产级
+shim、微软 UEFI CA 签名和 SBAT/吊销策略仍在兼容性 gap 中。详细限制见
+`docs/secure-boot.md`。
 
 ### 测试
 
