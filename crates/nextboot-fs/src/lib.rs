@@ -19,6 +19,7 @@ pub mod exfat;
 pub mod fat32;
 pub mod gpt;
 pub mod iso9660;
+pub mod ntfs;
 pub mod udf;
 
 /// 文件系统错误类型
@@ -387,6 +388,11 @@ pub fn detect_fs_type(data: &[u8]) -> FileSystemType {
                 return FileSystemType::ExFat;
             }
         }
+    }
+
+    // NTFS 检测
+    if data.len() >= 11 && &data[3..11] == b"NTFS    " {
+        return FileSystemType::Ntfs;
     }
 
     // ISO9660 检测

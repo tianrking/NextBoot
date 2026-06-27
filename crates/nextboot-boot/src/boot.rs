@@ -25,6 +25,7 @@ use log::{info, warn};
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::Iso9660;
+use nextboot_fs::ntfs::Ntfs;
 use nextboot_fs::udf::Udf;
 use nextboot_fs::{
     detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError, SharedBlockIo,
@@ -3691,6 +3692,7 @@ struct SourceVolumeFileMetadata {
 enum SourceVolumeFileSystem {
     Fat32(Fat32),
     ExFat(ExFat),
+    Ntfs(Ntfs),
 }
 
 impl SourceVolumeFileSystem {
@@ -3718,6 +3720,9 @@ impl SourceVolumeFileSystem {
                 .map_err(fs_error_to_uefi_status)?),
             FileSystemType::ExFat => Ok(ExFat::open(shared)
                 .map(Self::ExFat)
+                .map_err(fs_error_to_uefi_status)?),
+            FileSystemType::Ntfs => Ok(Ntfs::open(shared)
+                .map(Self::Ntfs)
                 .map_err(fs_error_to_uefi_status)?),
             _ => Err(Status::UNSUPPORTED.into()),
         }
@@ -3766,6 +3771,7 @@ impl SourceVolumeFileSystem {
         Ok(match self {
             Self::Fat32(fs) => fs.stat(path),
             Self::ExFat(fs) => fs.stat(path),
+            Self::Ntfs(fs) => fs.stat(path),
         }
         .map_err(fs_error_to_uefi_status)?)
     }
@@ -3774,6 +3780,7 @@ impl SourceVolumeFileSystem {
         Ok(match self {
             Self::Fat32(fs) => fs.read_file(path, offset, buf),
             Self::ExFat(fs) => fs.read_file(path, offset, buf),
+            Self::Ntfs(fs) => fs.read_file(path, offset, buf),
         }
         .map_err(fs_error_to_uefi_status)?)
     }
@@ -3782,6 +3789,7 @@ impl SourceVolumeFileSystem {
         Ok(match self {
             Self::Fat32(fs) => fs.file_extents(path),
             Self::ExFat(fs) => fs.file_extents(path),
+            Self::Ntfs(fs) => fs.file_extents(path),
         }
         .map_err(fs_error_to_uefi_status)?)
     }
@@ -3790,6 +3798,7 @@ impl SourceVolumeFileSystem {
         match self {
             Self::Fat32(fs) => fs.block_size(),
             Self::ExFat(fs) => fs.block_size(),
+            Self::Ntfs(fs) => fs.block_size(),
         }
     }
 }

@@ -19,6 +19,7 @@ use core::ptr::{self, NonNull};
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::{detect_udf_volume, read_efi_eltorito_boot_info, ElToritoBootInfo};
+use nextboot_fs::ntfs::Ntfs;
 use nextboot_fs::{detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError};
 use nextboot_virtio::{
     PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
@@ -359,7 +360,9 @@ impl<'a> IsoScanner<'a> {
             .bt
             .locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))?;
 
-        for (volume_index, handle) in fs_handles.iter().copied().enumerate() {
+        let simple_fs_handles: Vec<Handle> = fs_handles.iter().copied().collect();
+
+        for (volume_index, handle) in simple_fs_handles.iter().copied().enumerate() {
             let mut fs = match self.bt.open_protocol_exclusive::<SimpleFileSystem>(handle) {
                 Ok(fs) => fs,
                 Err(_) => continue,
@@ -379,6 +382,15 @@ impl<'a> IsoScanner<'a> {
                     iso_files.extend(files);
                 }
             }
+        }
+
+        if let Ok(mut block_files) = self.scan_ntfs_block_volumes(
+            simple_fs_handles.len(),
+            &simple_fs_handles,
+            &default_search_paths,
+            &extensions,
+        ) {
+            iso_files.append(&mut block_files);
         }
 
         // 去重。相同卷上的相同路径可能会被多个 search path 扫到；不同卷
@@ -410,8 +422,9 @@ impl<'a> IsoScanner<'a> {
             .bt
             .locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))?;
         let mut files = Vec::new();
+        let simple_fs_handles: Vec<Handle> = fs_handles.iter().copied().collect();
 
-        for (volume_index, handle) in fs_handles.iter().copied().enumerate() {
+        for (volume_index, handle) in simple_fs_handles.iter().copied().enumerate() {
             let mut fs = match self.bt.open_protocol_exclusive::<SimpleFileSystem>(handle) {
                 Ok(fs) => fs,
                 Err(_) => continue,
@@ -423,6 +436,15 @@ impl<'a> IsoScanner<'a> {
             {
                 files.append(&mut volume_files);
             }
+        }
+
+        if let Ok(mut block_files) = self.scan_ntfs_block_volumes(
+            simple_fs_handles.len(),
+            &simple_fs_handles,
+            &[path],
+            extensions,
+        ) {
+            files.append(&mut block_files);
         }
 
         Ok(files)
@@ -484,6 +506,178 @@ impl<'a> IsoScanner<'a> {
             &mut files,
         )?;
         Ok(files)
+    }
+
+    fn scan_ntfs_block_volumes(
+        &self,
+        volume_index_base: usize,
+        simple_fs_handles: &[Handle],
+        default_search_paths: &[&str],
+        extensions: &[&str],
+    ) -> uefi::Result<Vec<IsoFile>> {
+        let block_handles = self
+            .bt
+            .locate_handle_buffer(SearchType::ByProtocol(&BlockIO::GUID))?;
+        let mut files = Vec::new();
+        let mut ntfs_volume_index = 0usize;
+
+        for handle in block_handles.iter().copied() {
+            if handle_list_contains(simple_fs_handles, handle) {
+                continue;
+            }
+
+            let block_io = match self.bt.open_protocol_exclusive::<BlockIO>(handle) {
+                Ok(block_io) => block_io,
+                Err(_) => continue,
+            };
+            let media = block_io.media();
+            if !media.is_media_present() {
+                continue;
+            }
+            let block_size = media.block_size();
+            if block_size == 0 {
+                continue;
+            }
+
+            let Some(uefi_io) = UefiBlockIo::new(&block_io) else {
+                continue;
+            };
+            let shared: nextboot_fs::SharedBlockIo = Rc::new(uefi_io);
+            let mut boot_sector = match alloc_buffer_for_block(block_size) {
+                Ok(buf) => buf,
+                Err(_) => continue,
+            };
+            if shared.read_blocks(0, &mut boot_sector).is_err()
+                || detect_fs_type(&boot_sector) != FileSystemType::Ntfs
+            {
+                continue;
+            }
+
+            let fs = match Ntfs::open(shared) {
+                Ok(fs) => fs,
+                Err(err) => {
+                    log::warn!("Ignoring NTFS BlockIO volume {:?}: {:?}", handle, err);
+                    continue;
+                }
+            };
+
+            let volume_index = volume_index_base + ntfs_volume_index;
+            ntfs_volume_index += 1;
+            let config = self.load_ntfs_ventoy_config(&fs);
+            let search_paths = config.search_roots(default_search_paths);
+            let source_disk = self.resolve_source_disk_identity(handle);
+
+            for search_path in &search_paths {
+                let _ = self.scan_ntfs_path(
+                    handle,
+                    volume_index,
+                    source_disk,
+                    &block_io,
+                    &fs,
+                    search_path,
+                    extensions,
+                    &config,
+                    0,
+                    &mut files,
+                );
+            }
+        }
+
+        Ok(files)
+    }
+
+    fn scan_ntfs_path(
+        &self,
+        volume_handle: Handle,
+        volume_index: usize,
+        source_disk: Option<SourceDiskIdentity>,
+        block_io: &BlockIO,
+        fs: &Ntfs,
+        display_path: &str,
+        extensions: &[&str],
+        config: &VentoyConfig,
+        depth: usize,
+        files: &mut Vec<IsoFile>,
+    ) -> Result<(), FsError> {
+        let normalized = normalize_scan_path(display_path);
+        let entries = fs.read_dir(&normalized)?;
+
+        for entry in entries {
+            if entry.name.is_empty() || entry.name == "." || entry.name == ".." {
+                continue;
+            }
+
+            let full_path = join_display_path(&normalized, &entry.name);
+            if entry.is_dir {
+                if depth >= MAX_SCAN_DEPTH || is_hidden_tree(&entry.name) {
+                    continue;
+                }
+                let _ = self.scan_ntfs_path(
+                    volume_handle,
+                    volume_index,
+                    source_disk,
+                    block_io,
+                    fs,
+                    &full_path,
+                    extensions,
+                    config,
+                    depth + 1,
+                    files,
+                );
+                continue;
+            }
+
+            if entry.is_hidden() || entry.is_system() {
+                continue;
+            }
+
+            if has_supported_extension(&entry.name, extensions)
+                && config.supports_image_name(&entry.name)
+                && config.allows_image_path(&full_path)
+            {
+                let image_format = ImageFormat::detect_from_path(&full_path);
+                let metadata = self
+                    .resolve_ntfs_image_metadata(block_io, fs, &full_path, entry.size, image_format)
+                    .unwrap_or_else(|| ResolvedImageMetadata {
+                        block_size: fs.block_size(),
+                        extents: Vec::new(),
+                        boot_info: None,
+                        is_udf: false,
+                        wim_info: None,
+                        image_format,
+                        virtual_size: entry.size,
+                        virtual_block_size: default_virtual_block_size(image_format),
+                    });
+                let start_lba = metadata
+                    .extents
+                    .first()
+                    .map_or(0, |extent| extent.physical_lba);
+                let os_type =
+                    self.detect_image_os_type(&full_path, metadata.image_format, metadata.wim_info);
+
+                files.push(IsoFile {
+                    path: full_path.clone(),
+                    menu_alias: config.menu_alias_for(&full_path).map(ToString::to_string),
+                    ventoy_plugin: config.image_plugin_for(&full_path),
+                    size: entry.size,
+                    virtual_size: metadata.virtual_size,
+                    virtual_block_size: metadata.virtual_block_size,
+                    volume_handle,
+                    volume_index,
+                    block_size: metadata.block_size,
+                    start_lba,
+                    extents: metadata.extents,
+                    os_type,
+                    image_format: metadata.image_format,
+                    boot_info: metadata.boot_info,
+                    is_udf: metadata.is_udf,
+                    wim_info: metadata.wim_info,
+                    source_disk,
+                });
+            }
+        }
+
+        Ok(())
     }
 
     fn scan_directory_entries(
@@ -642,6 +836,43 @@ impl<'a> IsoScanner<'a> {
         VentoyConfig::parse(&data)
     }
 
+    fn load_ntfs_ventoy_config(&self, fs: &Ntfs) -> VentoyConfig {
+        match self.read_ntfs_ventoy_config(fs) {
+            Ok(config) => config,
+            Err(VentoyConfigError::NotFound) => VentoyConfig::default(),
+            Err(err) => {
+                log::warn!("Ignoring NTFS {}: {:?}", VENTOY_CONFIG_PATH, err);
+                VentoyConfig::default()
+            }
+        }
+    }
+
+    fn read_ntfs_ventoy_config(&self, fs: &Ntfs) -> Result<VentoyConfig, VentoyConfigError> {
+        let info = fs.stat(VENTOY_CONFIG_PATH).map_err(|err| match err {
+            FsError::FileNotFound | FsError::DirectoryNotFound => VentoyConfigError::NotFound,
+            _ => VentoyConfigError::InvalidJson,
+        })?;
+        if info.is_dir {
+            return Err(VentoyConfigError::InvalidJson);
+        }
+
+        let file_size = usize::try_from(info.size).map_err(|_| VentoyConfigError::FileTooLarge)?;
+        if file_size > VENTOY_CONFIG_MAX_SIZE {
+            return Err(VentoyConfigError::FileTooLarge);
+        }
+
+        let mut data = Vec::new();
+        data.try_reserve_exact(file_size)
+            .map_err(|_| VentoyConfigError::OutOfMemory)?;
+        data.resize(file_size, 0);
+        let read = fs
+            .read_file(VENTOY_CONFIG_PATH, 0, &mut data)
+            .map_err(|_| VentoyConfigError::InvalidJson)?;
+        data.truncate(read);
+
+        VentoyConfig::parse(&data)
+    }
+
     fn resolve_image_metadata(
         &self,
         volume_handle: Handle,
@@ -671,6 +902,9 @@ impl<'a> IsoScanner<'a> {
             FileSystemType::ExFat => ExFat::open(shared)
                 .and_then(|fs| fs.file_extents(path))
                 .ok()?,
+            FileSystemType::Ntfs => Ntfs::open(shared)
+                .and_then(|fs| fs.file_extents(path))
+                .ok()?,
             _ => return None,
         };
 
@@ -684,6 +918,46 @@ impl<'a> IsoScanner<'a> {
         };
         let wim_info = if image_format.is_wim_container() {
             self.read_wim_boot_info(&block_io, block_size, size, &extents)
+        } else {
+            None
+        };
+
+        Some(ResolvedImageMetadata {
+            block_size,
+            extents,
+            boot_info,
+            is_udf,
+            wim_info,
+            image_format,
+            virtual_size,
+            virtual_block_size,
+        })
+    }
+
+    fn resolve_ntfs_image_metadata(
+        &self,
+        block_io: &BlockIO,
+        fs: &Ntfs,
+        path: &str,
+        size: u64,
+        image_format: ImageFormat,
+    ) -> Option<ResolvedImageMetadata> {
+        let block_size = fs.block_size();
+        let extents: Vec<IsoExtent> = fs
+            .file_extents(path)
+            .ok()?
+            .into_iter()
+            .map(IsoExtent::from)
+            .collect();
+        let (image_format, virtual_size, virtual_block_size) =
+            self.detect_image_virtual_metadata(block_io, block_size, size, &extents, image_format);
+        let (boot_info, is_udf) = if image_format.is_iso() {
+            self.resolve_iso_metadata(block_io, block_size, size, &extents)
+        } else {
+            (None, false)
+        };
+        let wim_info = if image_format.is_wim_container() {
+            self.read_wim_boot_info(block_io, block_size, size, &extents)
         } else {
             None
         };
@@ -1002,6 +1276,25 @@ impl<'a> IsoScanner<'a> {
 
         (boot_info, is_udf)
     }
+}
+
+fn alloc_buffer_for_block(block_size: u32) -> Result<Vec<u8>, FsError> {
+    let len = usize::try_from(block_size).map_err(|_| FsError::InvalidArgument)?;
+    if len == 0 {
+        return Err(FsError::InvalidArgument);
+    }
+
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(len)
+        .map_err(|_| FsError::OutOfMemory)?;
+    buf.resize(len, 0);
+    Ok(buf)
+}
+
+fn handle_list_contains(handles: &[Handle], needle: Handle) -> bool {
+    handles
+        .iter()
+        .any(|handle| handle.as_ptr() == needle.as_ptr())
 }
 
 fn device_path_to_vec(device_path: &DevicePath) -> Option<Vec<u8>> {
