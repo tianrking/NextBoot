@@ -1,4 +1,4 @@
-use super::virtio_error_to_uefi_status;
+use super::errors::virtio_error_to_uefi_status;
 use nextboot_virtio::VirtualBlockIo;
 
 pub(super) const SECTOR_SIZE: u64 = 512;

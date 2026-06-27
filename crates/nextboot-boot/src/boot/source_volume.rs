@@ -1,4 +1,5 @@
-use super::{fs_error_to_uefi_status, normalize_iso_path, virtio_error_to_fs_error};
+use super::errors::{fs_error_to_uefi_status, virtio_error_to_fs_error};
+use super::normalize_iso_path;
 use crate::scanner::IsoExtent;
 use crate::source_disk::{source_volume_range, SourceDiskIdentity};
 use alloc::rc::Rc;

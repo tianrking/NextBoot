@@ -12,7 +12,7 @@ use crate::virtual_fs::{
 };
 use crate::wim;
 use crate::wimboot::{self, WimbootCallbacks, WimbootVirtualFile};
-use crate::xz::{self, XzDecodeError};
+use crate::xz;
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::rc::Rc;
@@ -28,8 +28,7 @@ use nextboot_fs::{detect_fs_type, BlockIoOps, FileExtent, FileSystemType, FsErro
 use nextboot_virtio::mapping::ByteMappingTable;
 use nextboot_virtio::protocol::append_file_path_device_path;
 use nextboot_virtio::{
-    MemoryOverlay, PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig,
-    VirtualDeviceType,
+    MemoryOverlay, PhysicalReader, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
 };
 use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
@@ -41,9 +40,16 @@ use uefi::table::boot::{
 use uefi::table::runtime::{RuntimeServices, VariableAttributes, VariableVendor};
 use uefi::{CString16, Guid, Handle, Identify, Status};
 
+mod errors;
 mod load_file;
 mod source_volume;
 mod vhd;
+use errors::{
+    fs_error_to_uefi_status, ventoy_error_to_uefi_status, ventoy_linux_error_to_uefi_status,
+    ventoy_windows_runtime_data_error_to_uefi_status,
+    ventoy_windows_wimboot_payload_error_to_uefi_status, virtio_error_to_fs_error,
+    virtio_error_to_uefi_status, wim_read_error_to_uefi_status, xz_error_to_uefi_status,
+};
 use load_file::{
     normalize_load_file_key, LinuxInitrdLoadFile2Protocol, PreloadedFile,
     PreloadedLoadFileProtocol, RawLoadedImage,
@@ -3864,18 +3870,6 @@ impl LoadOptionsBuffer {
     }
 }
 
-fn virtio_error_to_uefi_status(err: VirtIoError) -> Status {
-    match err {
-        VirtIoError::OutOfBounds | VirtIoError::InvalidMapping => Status::LOAD_ERROR,
-        VirtIoError::WriteProtected => Status::WRITE_PROTECTED,
-        VirtIoError::InvalidArgument | VirtIoError::InvalidBufferSize => Status::INVALID_PARAMETER,
-        VirtIoError::MediaChanged => Status::MEDIA_CHANGED,
-        VirtIoError::NoPhysicalRead => Status::NO_MEDIA,
-        VirtIoError::CrcError => Status::CRC_ERROR,
-        VirtIoError::ReadFailed | VirtIoError::DeviceError => Status::DEVICE_ERROR,
-    }
-}
-
 struct WimbootRuntimeInputs {
     runtime_files: Vec<WimbootRuntimeFile>,
     virtual_files: Vec<WimbootVirtualFile<'static>>,
@@ -4321,101 +4315,6 @@ impl BlockIoOps for VirtualIsoBlockIo {
         self.vbio
             .read_blocks(self.media_id, lba, buf)
             .map_err(virtio_error_to_fs_error)
-    }
-}
-
-fn virtio_error_to_fs_error(err: VirtIoError) -> FsError {
-    match err {
-        VirtIoError::InvalidArgument | VirtIoError::InvalidBufferSize => FsError::InvalidArgument,
-        VirtIoError::OutOfBounds
-        | VirtIoError::MediaChanged
-        | VirtIoError::InvalidMapping
-        | VirtIoError::NoPhysicalRead
-        | VirtIoError::ReadFailed
-        | VirtIoError::DeviceError
-        | VirtIoError::CrcError => FsError::ReadError,
-        VirtIoError::WriteProtected => FsError::UnsupportedFs,
-    }
-}
-
-fn fs_error_to_uefi_status(err: FsError) -> Status {
-    match err {
-        FsError::FileNotFound | FsError::DirectoryNotFound => Status::NOT_FOUND,
-        FsError::InvalidPath | FsError::InvalidArgument => Status::INVALID_PARAMETER,
-        FsError::OutOfMemory | FsError::FileTooLarge => Status::OUT_OF_RESOURCES,
-        FsError::NotDirectory | FsError::NotFile | FsError::UnsupportedFs => Status::UNSUPPORTED,
-        FsError::InvalidSignature | FsError::BlockSizeMismatch | FsError::Corrupted => {
-            Status::LOAD_ERROR
-        }
-        FsError::ReadError => Status::DEVICE_ERROR,
-    }
-}
-
-fn xz_error_to_uefi_status(err: XzDecodeError) -> Status {
-    match err {
-        XzDecodeError::OutputTooLarge | XzDecodeError::OutputReserveFailed => {
-            Status::OUT_OF_RESOURCES
-        }
-        XzDecodeError::Decoder(_) | XzDecodeError::Stalled => Status::LOAD_ERROR,
-    }
-}
-
-fn wim_read_error_to_uefi_status(err: wim::WimReadError) -> Status {
-    match err {
-        wim::WimReadError::InvalidChunkLength
-        | wim::WimReadError::InvalidRange
-        | wim::WimReadError::InvalidChunkTable
-        | wim::WimReadError::XpressDecodeFailed(_)
-        | wim::WimReadError::LzxDecodeFailed(_) => Status::LOAD_ERROR,
-        wim::WimReadError::ResourceOutOfBounds => Status::DEVICE_ERROR,
-        wim::WimReadError::OutputReserveFailed => Status::OUT_OF_RESOURCES,
-        wim::WimReadError::UnsupportedCompressedChunk { .. } => Status::UNSUPPORTED,
-    }
-}
-
-fn ventoy_error_to_uefi_status(err: crate::ventoy::VentoyParamError) -> Status {
-    match err {
-        crate::ventoy::VentoyParamError::PathTooLong
-        | crate::ventoy::VentoyParamError::InvalidSectorSize => Status::INVALID_PARAMETER,
-        crate::ventoy::VentoyParamError::UnalignedExtent => Status::UNSUPPORTED,
-        crate::ventoy::VentoyParamError::ValueOutOfRange
-        | crate::ventoy::VentoyParamError::OutputTooLarge
-        | crate::ventoy::VentoyParamError::OutputReserveFailed => Status::OUT_OF_RESOURCES,
-    }
-}
-
-fn ventoy_linux_error_to_uefi_status(err: crate::ventoy_linux::VentoyLinuxInitrdError) -> Status {
-    match err {
-        crate::ventoy_linux::VentoyLinuxInitrdError::InvalidArchive => Status::LOAD_ERROR,
-        crate::ventoy_linux::VentoyLinuxInitrdError::InvalidSectorSize
-        | crate::ventoy_linux::VentoyLinuxInitrdError::NameTooLong => Status::INVALID_PARAMETER,
-        crate::ventoy_linux::VentoyLinuxInitrdError::UnalignedExtent => Status::UNSUPPORTED,
-        crate::ventoy_linux::VentoyLinuxInitrdError::ValueOutOfRange
-        | crate::ventoy_linux::VentoyLinuxInitrdError::FileTooLarge
-        | crate::ventoy_linux::VentoyLinuxInitrdError::OutputReserveFailed => {
-            Status::OUT_OF_RESOURCES
-        }
-    }
-}
-
-fn ventoy_windows_runtime_data_error_to_uefi_status(
-    err: nextboot_windows::VentoyWindowsRuntimeDataError,
-) -> Status {
-    match err {
-        nextboot_windows::VentoyWindowsRuntimeDataError::AutoInstallTooLarge
-        | nextboot_windows::VentoyWindowsRuntimeDataError::OutputReserveFailed => {
-            Status::OUT_OF_RESOURCES
-        }
-    }
-}
-
-fn ventoy_windows_wimboot_payload_error_to_uefi_status(
-    err: nextboot_windows::VentoyWindowsWimbootPayloadError,
-) -> Status {
-    match err {
-        nextboot_windows::VentoyWindowsWimbootPayloadError::OutputReserveFailed => {
-            Status::OUT_OF_RESOURCES
-        }
     }
 }
 
