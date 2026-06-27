@@ -14,16 +14,13 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
-use alloc::rc::Rc;
-use core::cell::RefCell;
 use bitflags::bitflags;
 
 pub mod mapping;
 pub mod protocol;
 
-use mapping::MappingTable;
+use mapping::{ByteMappingTable, MappingTable};
 
 /// 虚拟设备类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,8 +46,8 @@ impl VirtualDeviceType {
     /// 获取 UEFI 媒体类型
     pub fn uefi_media_type(&self) -> u8 {
         match self {
-            VirtualDeviceType::DvdRom => 0x02, // CD-ROM
-            VirtualDeviceType::HardDisk => 0x01, // Hard Disk
+            VirtualDeviceType::DvdRom => 0x02,         // CD-ROM
+            VirtualDeviceType::HardDisk => 0x01,       // Hard Disk
             VirtualDeviceType::UsbMassStorage => 0x01, // Hard Disk
         }
     }
@@ -67,6 +64,8 @@ pub struct VirtualDeviceConfig {
     pub iso_size: u64,
     /// 块大小
     pub block_size: u32,
+    /// 底层物理块大小
+    pub physical_block_size: u32,
     /// 设备名称
     pub device_name: alloc::string::String,
 }
@@ -84,6 +83,7 @@ impl VirtualDeviceConfig {
             iso_start_lba,
             iso_size,
             block_size,
+            physical_block_size: block_size,
             device_name: alloc::string::String::from("NextBoot Virtual Device"),
         }
     }
@@ -98,6 +98,12 @@ impl VirtualDeviceConfig {
         self.device_name = alloc::string::String::from(name);
         self
     }
+
+    /// 设置底层物理块大小。
+    pub fn with_physical_block_size(mut self, physical_block_size: u32) -> Self {
+        self.physical_block_size = physical_block_size;
+        self
+    }
 }
 
 /// 物理读取函数类型
@@ -107,8 +113,8 @@ pub type PhysicalReadFn = fn(u64, &mut [u8]) -> Result<(), VirtIoError>;
 pub struct VirtualBlockIo {
     /// 设备配置
     config: VirtualDeviceConfig,
-    /// LBA 映射表
-    mapping: MappingTable,
+    /// 字节级映射表
+    byte_mapping: ByteMappingTable,
     /// 物理读取函数
     physical_read: Option<PhysicalReadFn>,
     /// 媒体 ID
@@ -120,10 +126,15 @@ impl VirtualBlockIo {
     pub fn new(config: VirtualDeviceConfig) -> Self {
         let block_count = config.block_count();
         let mapping = MappingTable::contiguous(config.iso_start_lba, block_count);
+        let byte_mapping = ByteMappingTable::from_block_mapping(
+            &mapping,
+            config.block_size as u64,
+            config.physical_block_size as u64,
+        );
 
         Self {
             config,
-            mapping,
+            byte_mapping,
             physical_read: None,
             media_id: 0x4E425453, // "NBTS" - NextBoot Storage
         }
@@ -131,12 +142,39 @@ impl VirtualBlockIo {
 
     /// 创建带有自定义映射的实例
     pub fn with_mapping(config: VirtualDeviceConfig, mapping: MappingTable) -> Self {
+        let byte_mapping = ByteMappingTable::from_block_mapping(
+            &mapping,
+            config.block_size as u64,
+            config.physical_block_size as u64,
+        );
+
         Self {
             config,
-            mapping,
+            byte_mapping,
             physical_read: None,
             media_id: 0x4E425453,
         }
+    }
+
+    /// 创建带有字节级映射的实例。
+    pub fn with_byte_mapping(config: VirtualDeviceConfig, byte_mapping: ByteMappingTable) -> Self {
+        Self {
+            config,
+            byte_mapping,
+            physical_read: None,
+            media_id: 0x4E425453,
+        }
+    }
+
+    /// 从文件系统 extent 创建虚拟 Block IO。
+    pub fn from_file_extents(config: VirtualDeviceConfig, extents: &[(u64, u64, u64)]) -> Self {
+        let mut byte_mapping = ByteMappingTable::from_file_extents(
+            extents,
+            config.iso_size,
+            config.physical_block_size as u64,
+        );
+        byte_mapping.optimize();
+        Self::with_byte_mapping(config, byte_mapping)
     }
 
     /// 设置物理读取函数
@@ -165,10 +203,19 @@ impl VirtualBlockIo {
     /// - `media_id`: 媒体 ID (必须匹配)
     /// - `virtual_lba`: 虚拟 LBA (相对于 ISO 起始)
     /// - `buf`: 目标缓冲区
-    pub fn read_blocks(&self, media_id: u32, virtual_lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
+    pub fn read_blocks(
+        &self,
+        media_id: u32,
+        virtual_lba: u64,
+        buf: &mut [u8],
+    ) -> Result<(), VirtIoError> {
         // 验证媒体 ID
         if media_id != self.media_id {
             return Err(VirtIoError::MediaChanged);
+        }
+
+        if self.config.block_size == 0 {
+            return Err(VirtIoError::InvalidArgument);
         }
 
         // 检查缓冲区对齐
@@ -178,32 +225,70 @@ impl VirtualBlockIo {
 
         // 检查边界
         let blocks_to_read = buf.len() / self.config.block_size as usize;
-        let max_lba = self.mapping.total_blocks();
+        let max_lba = self.config.block_count();
 
         if virtual_lba >= max_lba {
             return Err(VirtIoError::OutOfBounds);
         }
 
-        if virtual_lba + blocks_to_read as u64 > max_lba {
+        if virtual_lba
+            .checked_add(blocks_to_read as u64)
+            .map_or(true, |end| end > max_lba)
+        {
             return Err(VirtIoError::OutOfBounds);
         }
 
-        // 执行读取
         let read_fn = self.physical_read.ok_or(VirtIoError::NoPhysicalRead)?;
+        let virtual_offset = virtual_lba
+            .checked_mul(self.config.block_size as u64)
+            .ok_or(VirtIoError::OutOfBounds)?;
+        self.read_virtual_bytes(read_fn, virtual_offset, buf)
+    }
 
-        for i in 0..blocks_to_read {
-            let current_lba = virtual_lba + i as u64;
+    fn read_virtual_bytes(
+        &self,
+        read_fn: PhysicalReadFn,
+        virtual_offset: u64,
+        buf: &mut [u8],
+    ) -> Result<(), VirtIoError> {
+        buf.fill(0);
 
-            // 转换虚拟 LBA 到物理 LBA
-            let physical_lba = self.mapping.translate(current_lba)
-                .ok_or(VirtIoError::InvalidMapping)?;
+        if virtual_offset >= self.config.iso_size {
+            return Ok(());
+        }
 
-            // 计算缓冲区偏移
-            let offset = i * self.config.block_size as usize;
-            let block_buf = &mut buf[offset..offset + self.config.block_size as usize];
+        let readable = (self.config.iso_size - virtual_offset).min(buf.len() as u64);
+        let ranges = self
+            .byte_mapping
+            .translate_range(virtual_offset, readable)
+            .ok_or(VirtIoError::InvalidMapping)?;
 
-            // 读取物理块
-            read_fn(physical_lba, block_buf)?;
+        let physical_block_size = self.config.physical_block_size as usize;
+        if physical_block_size == 0 {
+            return Err(VirtIoError::InvalidArgument);
+        }
+
+        let mut dst_offset = 0usize;
+        let mut scratch = alloc::vec![0u8; physical_block_size];
+
+        for (physical_byte_start, byte_count) in ranges {
+            let mut remaining = byte_count as usize;
+            let mut physical_byte = physical_byte_start;
+
+            while remaining > 0 {
+                let physical_lba = physical_byte / physical_block_size as u64;
+                let in_block_offset = (physical_byte % physical_block_size as u64) as usize;
+                let copy_size = (physical_block_size - in_block_offset).min(remaining);
+
+                read_fn(physical_lba, &mut scratch)?;
+
+                buf[dst_offset..dst_offset + copy_size]
+                    .copy_from_slice(&scratch[in_block_offset..in_block_offset + copy_size]);
+
+                dst_offset += copy_size;
+                physical_byte += copy_size as u64;
+                remaining -= copy_size;
+            }
         }
 
         Ok(())
@@ -295,7 +380,9 @@ impl core::fmt::Display for VirtIoError {
             VirtIoError::WriteProtected => write!(f, "Device is write protected"),
             VirtIoError::ReadFailed => write!(f, "Read operation failed"),
             VirtIoError::InvalidArgument => write!(f, "Invalid argument"),
-            VirtIoError::InvalidBufferSize => write!(f, "Buffer size must be multiple of block size"),
+            VirtIoError::InvalidBufferSize => {
+                write!(f, "Buffer size must be multiple of block size")
+            }
             VirtIoError::MediaChanged => write!(f, "Media changed"),
             VirtIoError::InvalidMapping => write!(f, "Invalid LBA mapping"),
             VirtIoError::NoPhysicalRead => write!(f, "No physical read function set"),
@@ -447,12 +534,7 @@ pub struct IsoMapping {
 
 impl IsoMapping {
     /// 创建新的 ISO 映射
-    pub fn new(
-        filename: &str,
-        size: u64,
-        start_lba: u64,
-        block_size: u32,
-    ) -> Self {
+    pub fn new(filename: &str, size: u64, start_lba: u64, block_size: u32) -> Self {
         let block_count = (size + block_size as u64 - 1) / block_size as u64;
 
         // 根据 ISO 类型决定设备类型
@@ -474,18 +556,30 @@ impl IsoMapping {
 
     /// 转换为虚拟设备配置
     pub fn to_config(&self) -> VirtualDeviceConfig {
-        VirtualDeviceConfig::new(
-            self.device_type,
-            self.start_lba,
-            self.size,
-            self.block_size,
-        ).with_name(&self.filename)
+        VirtualDeviceConfig::new(self.device_type, self.start_lba, self.size, self.block_size)
+            .with_name(&self.filename)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fill_lba_read(lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
+        for b in buf.iter_mut() {
+            *b = lba as u8;
+        }
+        Ok(())
+    }
+
+    fn patterned_4k_read(lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
+        for (index, b) in buf.iter_mut().enumerate() {
+            *b = (lba as u8)
+                .wrapping_mul(16)
+                .wrapping_add((index / 1024) as u8);
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_virtual_device_config() {
@@ -512,7 +606,7 @@ mod tests {
         let mut vbio = VirtualBlockIo::new(config);
 
         // 设置物理读取函数
-        vbio.set_physical_read(|lba, buf| {
+        vbio.set_physical_read(|_lba, buf| {
             // 模拟读取
             for b in buf.iter_mut() {
                 *b = 0xAA;
@@ -528,5 +622,58 @@ mod tests {
         // 测试写入 (应该失败)
         let result = vbio.write_blocks(vbio.media_id(), 0, &[0u8; 512]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_virtual_block_io_reads_fragmented_file_extents() {
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::HardDisk, 0, 1024, 512);
+        let extents = [(0, 10, 1), (1, 20, 1)];
+        let mut vbio = VirtualBlockIo::from_file_extents(config, &extents);
+        vbio.set_physical_read(fill_lba_read);
+
+        let mut buf = [0u8; 1024];
+        vbio.read_blocks(vbio.media_id(), 0, &mut buf)
+            .expect("fragmented extent read");
+
+        assert!(buf[..512].iter().all(|b| *b == 10));
+        assert!(buf[512..].iter().all(|b| *b == 20));
+    }
+
+    #[test]
+    fn test_virtual_block_io_maps_2048_virtual_blocks_to_4k_physical_blocks() {
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::DvdRom, 0, 8192, 2048)
+            .with_physical_block_size(4096);
+        let extents = [(0, 2, 2)];
+        let mut vbio = VirtualBlockIo::from_file_extents(config, &extents);
+        vbio.set_physical_read(patterned_4k_read);
+
+        let mut buf = [0u8; 8192];
+        vbio.read_blocks(vbio.media_id(), 0, &mut buf)
+            .expect("4K-backed DVD read");
+
+        assert_eq!(buf[0], 32);
+        assert_eq!(buf[1023], 32);
+        assert_eq!(buf[1024], 33);
+        assert_eq!(buf[2048], 34);
+        assert_eq!(buf[3072], 35);
+        assert_eq!(buf[4096], 48);
+        assert_eq!(buf[5120], 49);
+        assert_eq!(buf[7168], 51);
+    }
+
+    #[test]
+    fn test_virtual_block_io_zero_fills_file_tail_padding() {
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::HardDisk, 0, 600, 512);
+        let extents = [(0, 7, 2)];
+        let mut vbio = VirtualBlockIo::from_file_extents(config, &extents);
+        vbio.set_physical_read(fill_lba_read);
+
+        let mut buf = [0xFFu8; 1024];
+        vbio.read_blocks(vbio.media_id(), 0, &mut buf)
+            .expect("tail padding read");
+
+        assert!(buf[..512].iter().all(|b| *b == 7));
+        assert!(buf[512..600].iter().all(|b| *b == 8));
+        assert!(buf[600..].iter().all(|b| *b == 0));
     }
 }
