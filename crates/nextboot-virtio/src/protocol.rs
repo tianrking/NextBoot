@@ -89,6 +89,14 @@ pub enum MediaSubtype {
     PiwgFirmwareVolume = 0x07,
 }
 
+/// 硬件设备路径子类型
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum HardwareSubtype {
+    /// 供应商特定硬件节点
+    Vendor = 0x04,
+}
+
 /// 消息设备路径子类型
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -130,6 +138,30 @@ impl DevicePathHeader {
     /// 获取长度
     pub fn get_length(&self) -> u16 {
         u16::from_le_bytes(self.length)
+    }
+}
+
+const NEXTBOOT_VIRTUAL_DISK_GUID: [u8; 16] = [
+    0xf2, 0x5a, 0x77, 0xc1, 0x11, 0x42, 0x55, 0x4f, 0x9f, 0x6f, 0x2c, 0xc5, 0xef, 0x56, 0x67, 0xf0,
+];
+
+/// 供应商硬件设备路径。
+#[repr(C, packed)]
+pub struct VendorHardwareDevicePath {
+    pub header: DevicePathHeader,
+    pub guid: [u8; 16],
+}
+
+impl VendorHardwareDevicePath {
+    pub fn new(guid: [u8; 16]) -> Self {
+        Self {
+            header: DevicePathHeader::new(
+                DevicePathType::HARDWARE,
+                HardwareSubtype::Vendor as u8,
+                20,
+            ),
+            guid,
+        }
     }
 }
 
@@ -592,7 +624,7 @@ impl VirtualBlockIoProtocol {
                 }
             }
             crate::VirtualDeviceType::HardDisk | crate::VirtualDeviceType::UsbMassStorage => {
-                create_hard_drive_device_path(1, 0, info.block_count)
+                create_virtual_disk_controller_device_path()
             }
         }
     }
@@ -1069,6 +1101,28 @@ pub fn create_cdrom_device_path(boot_entry: u32, start: u64, size: u64) -> alloc
     data
 }
 
+/// 创建虚拟硬盘控制器设备路径。
+///
+/// The virtual disk controller must not identify itself as a hard-drive
+/// partition. Firmware partition drivers append their own Hard Drive media
+/// nodes to this controller path after parsing MBR/GPT.
+pub fn create_virtual_disk_controller_device_path() -> alloc::vec::Vec<u8> {
+    let vendor = VendorHardwareDevicePath::new(NEXTBOOT_VIRTUAL_DISK_GUID);
+    let end = EndDevicePath::new();
+    let mut data = alloc::vec::Vec::new();
+
+    unsafe {
+        let vendor_bytes = core::slice::from_raw_parts(
+            &vendor as *const VendorHardwareDevicePath as *const u8,
+            core::mem::size_of::<VendorHardwareDevicePath>(),
+        );
+        data.extend_from_slice(vendor_bytes);
+    }
+
+    data.extend_from_slice(&end.to_bytes());
+    data
+}
+
 /// 创建硬盘设备路径
 pub fn create_hard_drive_device_path(partition: u32, start: u64, size: u64) -> alloc::vec::Vec<u8> {
     let hdd = HardDriveDevicePath::new(partition, start, size);
@@ -1343,6 +1397,26 @@ mod tests {
     }
 
     #[test]
+    fn virtual_disk_controller_device_path_has_vendor_node_and_end_node() {
+        let path = create_virtual_disk_controller_device_path();
+
+        assert_eq!(
+            path.len(),
+            core::mem::size_of::<VendorHardwareDevicePath>() + 4
+        );
+        assert_eq!(path[0], DevicePathType::HARDWARE.bits());
+        assert_eq!(path[1], HardwareSubtype::Vendor as u8);
+        assert_eq!(u16::from_le_bytes([path[2], path[3]]), 20);
+        assert_eq!(&path[4..20], &NEXTBOOT_VIRTUAL_DISK_GUID);
+        assert_eq!(path[path.len() - 4], DevicePathType::END.bits());
+        assert_eq!(path[path.len() - 3], 0xFF);
+        assert_eq!(
+            u16::from_le_bytes([path[path.len() - 2], path[path.len() - 1]]),
+            4
+        );
+    }
+
+    #[test]
     fn hard_drive_device_path_has_media_node_and_end_node() {
         let path = create_hard_drive_device_path(1, 0, 128);
 
@@ -1382,11 +1456,11 @@ mod tests {
 
     #[test]
     fn append_file_path_device_path_adds_leading_backslash() {
-        let base = create_hard_drive_device_path(1, 0, 128);
+        let base = create_virtual_disk_controller_device_path();
         let full = append_file_path_device_path(&base, "EFI\\BOOT\\BOOTAA64.EFI").unwrap();
-        let hdd_len = core::mem::size_of::<HardDriveDevicePath>();
+        let controller_len = core::mem::size_of::<VendorHardwareDevicePath>();
 
-        assert_eq!(full[hdd_len + 4], b'\\');
-        assert_eq!(full[hdd_len + 5], 0);
+        assert_eq!(full[controller_len + 4], b'\\');
+        assert_eq!(full[controller_len + 5], 0);
     }
 }
