@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 
 mod mount;
 mod nodes;
+mod storage;
 
 const TAG_IDENT_AVDP: u16 = 0x0002;
 const TAG_IDENT_PD: u16 = 0x0005;
