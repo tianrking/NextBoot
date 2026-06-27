@@ -32,12 +32,74 @@ find_ntfs_mkfs() {
     fi
 }
 
+find_ext4_mkfs() {
+    if command_exists mkfs.ext4; then
+        printf 'mkfs.ext4\n'
+    elif command_exists mke2fs; then
+        printf 'mke2fs\n'
+    elif command_exists brew && [ -x "$(brew --prefix e2fsprogs 2>/dev/null)/sbin/mkfs.ext4" ]; then
+        printf '%s/sbin/mkfs.ext4\n' "$(brew --prefix e2fsprogs)"
+    else
+        return 1
+    fi
+}
+
+find_udf_mkfs() {
+    if [[ "$HOST_OS" == "darwin"* ]] && command_exists newfs_udf; then
+        printf 'newfs_udf\n'
+    elif command_exists mkudffs; then
+        printf 'mkudffs\n'
+    elif command_exists newfs_udf; then
+        printf 'newfs_udf\n'
+    else
+        return 1
+    fi
+}
+
 ntfs_mkfs_command() {
     if [ "$DRY_RUN" -eq 1 ]; then
         printf 'mkfs.ntfs\n'
     else
         find_ntfs_mkfs
     fi
+}
+
+ext4_mkfs_command() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf 'mkfs.ext4\n'
+    else
+        find_ext4_mkfs
+    fi
+}
+
+udf_mkfs_command() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        if [[ "$HOST_OS" == "darwin"* ]]; then
+            printf 'newfs_udf\n'
+        else
+            printf 'mkudffs\n'
+        fi
+    else
+        find_udf_mkfs
+    fi
+}
+
+run_udf_mkfs() {
+    local device="$1"
+    local mkfs_cmd
+
+    mkfs_cmd="$(udf_mkfs_command)"
+    case "$(basename "$mkfs_cmd")" in
+        mkudffs)
+            run_sudo "$mkfs_cmd" --media-type=hd --vid=NEXTDATA --lvid=NEXTDATA "$device"
+            ;;
+        newfs_udf)
+            run_sudo "$mkfs_cmd" -v NEXTDATA "$device"
+            ;;
+        *)
+            die "Unsupported UDF formatter: $mkfs_cmd"
+            ;;
+    esac
 }
 
 detect_ventoy_assets_dir() {
@@ -111,18 +173,31 @@ require_linux_tools() {
     if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "exfat" ]; then
         find_linux_exfat_mkfs >/dev/null || die "mkfs.exfat or mkexfatfs is required for --data-fs exfat"
     fi
+    if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "ext4" ]; then
+        find_ext4_mkfs >/dev/null || die "mkfs.ext4 or mke2fs is required for --data-fs ext4"
+    fi
     if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "ntfs" ]; then
         find_ntfs_mkfs >/dev/null || die "mkfs.ntfs or mkntfs is required for --data-fs ntfs"
+    fi
+    if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "udf" ]; then
+        find_udf_mkfs >/dev/null || die "mkudffs is required for --data-fs udf"
     fi
 }
 
 require_macos_tools() {
+    if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "ext4" ]; then
+        find_ext4_mkfs >/dev/null || die "mkfs.ext4 or mke2fs is required for --data-fs ext4 on macOS"
+        warn "macOS cannot reliably write-mount ext4; the Data partition will be formatted but /ISO and /ventoy must be populated from Linux."
+    fi
     if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "ntfs" ]; then
         find_ntfs_mkfs >/dev/null || die "mkfs.ntfs or mkntfs is required for --data-fs ntfs on macOS"
         if ! command_exists ntfs-3g; then
             warn "ntfs-3g was not found; macOS may mount the NTFS Data partition read-only after formatting."
             warn "If creating /ISO fails, install a writable NTFS driver or create /ISO from Windows/Linux."
         fi
+    fi
+    if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "udf" ]; then
+        find_udf_mkfs >/dev/null || die "newfs_udf or mkudffs is required for --data-fs udf on macOS"
     fi
 }
 

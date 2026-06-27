@@ -23,7 +23,7 @@ NextBoot 是一个基于 Rust 的 UEFI 启动加载器，核心功能是无需�
 NextBoot/
 ├── crates/
 │   ├── nextboot-boot/     # 主 bootloader 入口
-│   ├── nextboot-fs/       # 文件系统模块 (FAT32, exFAT, NTFS, ISO9660)
+│   ├── nextboot-fs/       # 文件系统模块 (FAT32, exFAT, ext4, NTFS, UDF, ISO9660)
 │   ├── nextboot-virtio/   # 虚拟 Block IO 驱动
 │   ├── nextboot-menu/     # UEFI GOP 菜单渲染
 │   ├── nextboot-linux/    # Linux 引导支持
@@ -195,6 +195,12 @@ NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B�
 # 写入 NTFS Data 分区布局，适合 Windows/大文件盘工作流
 ./scripts/flash.sh --layout split --data-fs ntfs /dev/sdX
 
+# 写入 ext4 Data 分区布局，适合 Linux SSD/NVMe 工作流
+./scripts/flash.sh --layout split --data-fs ext4 /dev/nvme0n1
+
+# 写入 UDF Data 分区布局，适合 Ventoy 风格兼容性验证
+./scripts/flash.sh --layout split --data-fs udf /dev/sdX
+
 # 显式指定 Ventoy 资产目录，安装 Windows WIMBOOT fallback 所需文件
 ./scripts/flash.sh --layout split --ventoy-assets ../Ventoy/INSTALL/ventoy /dev/sdX
 
@@ -203,10 +209,12 @@ NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B�
 ```
 
 `flash.sh` 默认使用 split GPT 布局：第 1 分区是 FAT32 ESP，只保存 NextBoot
-启动文件；第 2 分区是 Data 分区，默认 exFAT，也可选择 FAT32 或 NTFS，用来存放
+启动文件；第 2 分区是 Data 分区，默认 exFAT，也可选择 FAT32、ext4、NTFS 或 UDF，用来存放
 `/ISO` 下的 ISO/WIM/VHD 文件。旧式单分区 FAT32 仍可通过 `--layout single` 生成。
-在 macOS 上写入 NTFS Data 分区需要额外安装 `mkfs.ntfs`/`mkntfs`；若要脚本自动创建
-`/ISO` 目录，还需要可写 NTFS 驱动，例如 `ntfs-3g`。脚本会自动探测
+在 Linux 上写入 ext4/UDF Data 分区需要 `mkfs.ext4`/`mkudffs`。在 macOS 上写入 NTFS
+Data 分区需要额外安装 `mkfs.ntfs`/`mkntfs`；若要脚本自动创建 `/ISO` 目录，还需要可写
+NTFS 驱动，例如 `ntfs-3g`。macOS 没有可靠内置 ext4 写挂载，因此 `--data-fs ext4`
+会完成分区和格式化，但需要从 Linux 往 Data 分区复制 ISO。脚本会自动探测
 `../Ventoy/INSTALL/ventoy` 并把 `wimboot.x86_64.xz`、`vtoyjump64.exe`、`common_bcd.xz` 安装到
 镜像所在卷的 `/ventoy` 目录；也可以用 `--ventoy-assets DIR` 指定目录，或用
 `--no-ventoy-assets` 跳过。
