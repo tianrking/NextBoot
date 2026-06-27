@@ -107,8 +107,11 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 # 启动 QEMU 并自动断言 NextBoot 扫描到镜像、进入菜单
 ./scripts/run-qemu.sh --bus nvme --layout split --sector-size 4096 --image ~/Downloads/ubuntu.iso --smoke
 
-# 进一步自动按 Enter，断言选中镜像后进入虚拟 Block IO 启动准备
+# 进一步自动按 Enter，断言选中镜像后安装虚拟 Block IO
 ./scripts/run-qemu.sh --bus nvme --layout split --sector-size 4096 --image ~/Downloads/ubuntu.iso --smoke-boot
+
+# 自动生成一个最小 UEFI ISO，并断言 ISO 内 BOOTX64.EFI 被链式启动
+./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
 
 # 只生成 GPT/FAT32 测试盘，不启动虚拟机
 ./scripts/run-qemu.sh --bus sata --no-run
@@ -123,8 +126,9 @@ size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异�
 默认写盘布局和 FAT32 兼容布局。生成后脚本会调用 `verify-qemu-image.py` 校验 GPT
 CRC、分区布局、FAT32/exFAT 目录、`BOOTX64.EFI`、`/ISO` 文件和物理 extent；`--smoke`
 会继续启动 QEMU 并检查 NextBoot 日志里是否进入扫描/菜单阶段；`--smoke-boot` 会
-自动按 Enter 并检查是否进入虚拟 Block IO 启动准备；必要时可用 `--skip-verify`
-跳过镜像结构检查。
+自动按 Enter 并检查是否安装虚拟 Block IO；`--smoke-efi-iso` 会生成一个内含
+`/EFI/BOOT/BOOTX64.EFI` 的最小 ISO，并继续验证该 EFI loader 被链式启动；必要时
+可用 `--skip-verify` 跳过镜像结构检查。
 
 ### 写入 U 盘
 

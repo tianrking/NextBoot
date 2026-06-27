@@ -1,0 +1,7 @@
+[package]
+name = "nextboot-smoke-efi"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+uefi.workspace = true

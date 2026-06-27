@@ -12,6 +12,7 @@
 #   ./scripts/run-qemu.sh --bus nvme --image ~/Downloads/ubuntu.iso
 #   ./scripts/run-qemu.sh --bus nvme --sector-size 4096 --no-run
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --image ~/Downloads/ubuntu.iso
+#   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
 #   ./scripts/run-qemu.sh --bus usb --mode release --no-run
 
 set -eo pipefail
@@ -37,6 +38,7 @@ NO_RUN=0
 VERIFY_IMAGE=1
 SMOKE=0
 SMOKE_BOOT=0
+SMOKE_EFI_ISO=0
 SMOKE_TIMEOUT=20
 MEMORY="1024M"
 IMAGES=()
@@ -62,6 +64,7 @@ Options:
   --skip-verify      Do not verify the generated GPT/filesystem image
   --smoke            Run QEMU until NextBoot scan/menu log markers appear
   --smoke-boot       With --smoke, press Enter and verify boot preparation starts
+  --smoke-efi-iso    Generate a minimal UEFI ISO and verify its loader starts
   --smoke-timeout S  Seconds to wait for --smoke markers (default: 20)
   --no-run           Create the disk image and print the QEMU command only
   -h, --help         Show this help
@@ -71,6 +74,7 @@ Examples:
   $0 release --bus sata --disk-size 4096
   $0 --bus nvme --sector-size 4096 --no-run
   $0 --bus nvme --layout split --data-fs exfat --image ~/Downloads/Win11.iso
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
   $0 --bus usb --no-run
 USAGE
 }
@@ -157,6 +161,12 @@ while [ $# -gt 0 ]; do
             SMOKE_BOOT=1
             shift
             ;;
+        --smoke-efi-iso)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_EFI_ISO=1
+            shift
+            ;;
         --smoke-timeout)
             [ $# -ge 2 ] || die "--smoke-timeout requires a value"
             SMOKE_TIMEOUT="$2"
@@ -217,7 +227,7 @@ if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ]; then
     die "--smoke cannot be combined with --no-run"
 fi
 
-if [ "$SMOKE_BOOT" -eq 1 ] && [ "${#IMAGES[@]}" -eq 0 ]; then
+if [ "$SMOKE_BOOT" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "${#IMAGES[@]}" -eq 0 ]; then
     die "--smoke-boot requires at least one --image"
 fi
 
@@ -248,6 +258,18 @@ fi
 EFI_FILE="${PROJECT_DIR}/target/${TARGET}/${BUILD_MODE}/nextboot-boot.efi"
 if [ ! -f "$EFI_FILE" ]; then
     die "EFI file not found: ${EFI_FILE}. Run ./scripts/build.sh ${BUILD_MODE} first."
+fi
+
+if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
+    SMOKE_EFI_FILE="${PROJECT_DIR}/target/${TARGET}/${BUILD_MODE}/nextboot-smoke-efi.efi"
+    SMOKE_ISO_FILE="${PROJECT_DIR}/target/nextboot-smoke-efi.iso"
+    if [ ! -f "$SMOKE_EFI_FILE" ]; then
+        die "Smoke EFI file not found: ${SMOKE_EFI_FILE}. Run ./scripts/build.sh ${BUILD_MODE} first."
+    fi
+    require_command python3 "python3 is required to create the smoke ISO"
+    warn "Creating minimal UEFI smoke ISO..."
+    python3 "${SCRIPT_DIR}/create-smoke-iso.py" --efi "$SMOKE_EFI_FILE" "$SMOKE_ISO_FILE"
+    IMAGES=("$SMOKE_ISO_FILE" "${IMAGES[@]}")
 fi
 
 for image in "${IMAGES[@]}"; do
@@ -1021,7 +1043,14 @@ if [ "$SMOKE" -eq 1 ]; then
                 --expect "Phase 4: Booting selected ISO"
                 --expect "Preparing to boot:"
                 --expect "Creating virtual Block IO"
+                --expect "Virtual Block IO installed"
             )
+            if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
+                EXPECT_ARGS+=(
+                    --expect "Loaded EFI image"
+                    --expect "NEXTBOOT_SMOKE_EFI_STARTED"
+                )
+            fi
         fi
     else
         EXPECT_ARGS+=(--expect "No ISO files found")
