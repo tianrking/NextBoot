@@ -1,14 +1,12 @@
 //! 控制台输出封装
 
-use uefi::proto::console::text::{
-    Color as TextColor, Input as UefiInput, Key, Output,
-};
-use uefi::table::boot::BootServices;
-use uefi::ResultExt;
-use crate::Input as MenuInput;
 use crate::gop::Color;
+use crate::Input as MenuInput;
 use alloc::vec::Vec;
 use core::fmt::Write;
+use uefi::proto::console::text::{Color as TextColor, Input as UefiInput, Key, Output};
+use uefi::table::boot::BootServices;
+use uefi::ResultExt;
 
 /// 控制台上下文
 pub struct ConsoleContext<'a> {
@@ -22,7 +20,12 @@ impl<'a> ConsoleContext<'a> {
     /// 创建控制台上下文
     pub fn new(stdout: &'a mut Output, stdin: &'a mut UefiInput) -> Self {
         let (width, height) = get_console_size(stdout);
-        Self { stdout, stdin, width, height }
+        Self {
+            stdout,
+            stdin,
+            width,
+            height,
+        }
     }
 
     /// 获取控制台尺寸
@@ -70,12 +73,16 @@ impl<'a> ConsoleContext<'a> {
     /// 设置颜色属性
     pub fn set_color(&mut self, fg: Color, bg: Color) {
         // UEFI 控制台颜色映射
-        let _ = self.stdout.set_color(Self::color_to_attr(fg), Self::color_to_attr(bg));
+        let _ = self
+            .stdout
+            .set_color(Self::color_to_attr(fg), Self::color_to_attr(bg));
     }
 
     /// 设置前景色
     pub fn set_fg(&mut self, color: Color) {
-        let _ = self.stdout.set_color(Self::color_to_attr(color), TextColor::Black);
+        let _ = self
+            .stdout
+            .set_color(Self::color_to_attr(color), TextColor::Black);
     }
 
     /// 颜色转控制台属性
@@ -268,12 +275,7 @@ pub fn show_progress(
 }
 
 /// 显示消息框
-pub fn show_message_box(
-    console: &mut ConsoleContext,
-    title: &str,
-    message: &str,
-    width: usize,
-) {
+pub fn show_message_box(console: &mut ConsoleContext, title: &str, message: &str, width: usize) {
     let height = 5;
     let (con_w, con_h) = console.size();
     let x = (con_w.saturating_sub(width)) / 2;
