@@ -8,11 +8,12 @@ use crate::source_disk::{
     SourceDiskIdentity,
 };
 use crate::vdi;
+use crate::ventoy_config::{VentoyConfig, VentoyConfigError};
 use crate::vhdx;
 use crate::wim;
 use alloc::format;
 use alloc::rc::Rc;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::ptr::{self, NonNull};
 use nextboot_fs::exfat::ExFat;
@@ -25,18 +26,22 @@ use nextboot_virtio::{
 use uefi::data_types::CString16;
 use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
-use uefi::proto::media::file::{Directory, File, FileAttribute, FileMode};
+use uefi::proto::media::file::{Directory, File, FileAttribute, FileInfo, FileMode};
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::table::boot::{BootServices, SearchType};
 use uefi::{Handle, Identify};
 
 const MAX_SCAN_DEPTH: usize = 4;
+const VENTOY_CONFIG_PATH: &str = "/ventoy/ventoy.json";
+const VENTOY_CONFIG_MAX_SIZE: usize = 256 * 1024;
 
 /// ISO 文件信息
 #[derive(Debug, Clone)]
 pub struct IsoFile {
     /// 文件路径
     pub path: String,
+    /// Ventoy menu_alias 插件提供的显示名。
+    pub menu_alias: Option<String>,
     /// 文件大小 (字节)
     pub size: u64,
     /// 启动时呈现给固件/系统的虚拟介质大小
@@ -344,7 +349,7 @@ impl<'a> IsoScanner<'a> {
         ];
 
         // 扫描常见目录
-        let search_paths = [
+        let default_search_paths = [
             root, "/", "/ISO", "/iso", "/Images", "/images", "/Boot", "/boot",
         ];
 
@@ -357,11 +362,18 @@ impl<'a> IsoScanner<'a> {
                 Ok(fs) => fs,
                 Err(_) => continue,
             };
+            let config = self.load_ventoy_config(&mut fs);
+            let search_paths = config.search_roots(&default_search_paths);
 
             for search_path in &search_paths {
-                if let Ok(files) =
-                    self.scan_volume_path(volume_index, handle, &mut fs, search_path, &extensions)
-                {
+                if let Ok(files) = self.scan_volume_path(
+                    volume_index,
+                    handle,
+                    &mut fs,
+                    search_path,
+                    &extensions,
+                    &config,
+                ) {
                     iso_files.extend(files);
                 }
             }
@@ -402,9 +414,10 @@ impl<'a> IsoScanner<'a> {
                 Ok(fs) => fs,
                 Err(_) => continue,
             };
+            let config = self.load_ventoy_config(&mut fs);
 
             if let Ok(mut volume_files) =
-                self.scan_volume_path(volume_index, handle, &mut fs, path, extensions)
+                self.scan_volume_path(volume_index, handle, &mut fs, path, extensions, &config)
             {
                 files.append(&mut volume_files);
             }
@@ -442,6 +455,7 @@ impl<'a> IsoScanner<'a> {
         fs: &mut SimpleFileSystem,
         path: &str,
         extensions: &[&str],
+        config: &VentoyConfig,
     ) -> uefi::Result<Vec<IsoFile>> {
         let mut root = fs.open_volume()?;
         let normalized = normalize_scan_path(path);
@@ -463,6 +477,7 @@ impl<'a> IsoScanner<'a> {
             &mut dir,
             &normalized,
             extensions,
+            config,
             0,
             &mut files,
         )?;
@@ -477,6 +492,7 @@ impl<'a> IsoScanner<'a> {
         dir: &mut Directory,
         display_path: &str,
         extensions: &[&str],
+        config: &VentoyConfig,
         depth: usize,
         files: &mut Vec<IsoFile>,
     ) -> uefi::Result<()> {
@@ -502,6 +518,7 @@ impl<'a> IsoScanner<'a> {
                         &mut child,
                         &full_path,
                         extensions,
+                        config,
                         depth + 1,
                         files,
                     );
@@ -509,7 +526,10 @@ impl<'a> IsoScanner<'a> {
                 continue;
             }
 
-            if has_supported_extension(&name, extensions) {
+            if has_supported_extension(&name, extensions)
+                && config.supports_image_name(&name)
+                && config.allows_image_path(&full_path)
+            {
                 let image_format = ImageFormat::detect_from_path(&full_path);
                 let ResolvedImageMetadata {
                     block_size,
@@ -542,6 +562,7 @@ impl<'a> IsoScanner<'a> {
 
                 files.push(IsoFile {
                     path: full_path.clone(),
+                    menu_alias: config.menu_alias_for(&full_path).map(ToString::to_string),
                     size: entry.file_size(),
                     virtual_size,
                     virtual_block_size,
@@ -561,6 +582,61 @@ impl<'a> IsoScanner<'a> {
         }
 
         Ok(())
+    }
+
+    fn load_ventoy_config(&self, fs: &mut SimpleFileSystem) -> VentoyConfig {
+        match self.read_ventoy_config(fs) {
+            Ok(config) => config,
+            Err(VentoyConfigError::NotFound) => VentoyConfig::default(),
+            Err(err) => {
+                log::warn!("Ignoring {}: {:?}", VENTOY_CONFIG_PATH, err);
+                VentoyConfig::default()
+            }
+        }
+    }
+
+    fn read_ventoy_config(
+        &self,
+        fs: &mut SimpleFileSystem,
+    ) -> Result<VentoyConfig, VentoyConfigError> {
+        let mut root = fs
+            .open_volume()
+            .map_err(|_| VentoyConfigError::InvalidJson)?;
+        let uefi_path = to_uefi_relative_path(VENTOY_CONFIG_PATH);
+        let c_path =
+            CString16::try_from(uefi_path.as_str()).map_err(|_| VentoyConfigError::InvalidJson)?;
+        let handle = root
+            .open(c_path.as_ref(), FileMode::Read, FileAttribute::empty())
+            .map_err(|_| VentoyConfigError::NotFound)?;
+        let mut file = handle
+            .into_regular_file()
+            .ok_or(VentoyConfigError::InvalidJson)?;
+        let info = file
+            .get_boxed_info::<FileInfo>()
+            .map_err(|_| VentoyConfigError::InvalidJson)?;
+        let file_size =
+            usize::try_from(info.file_size()).map_err(|_| VentoyConfigError::FileTooLarge)?;
+        if file_size > VENTOY_CONFIG_MAX_SIZE {
+            return Err(VentoyConfigError::FileTooLarge);
+        }
+
+        let mut data = Vec::new();
+        data.try_reserve_exact(file_size)
+            .map_err(|_| VentoyConfigError::OutOfMemory)?;
+        data.resize(file_size, 0);
+        let mut offset = 0;
+        while offset < data.len() {
+            let read = file
+                .read(&mut data[offset..])
+                .map_err(|_| VentoyConfigError::InvalidJson)?;
+            if read == 0 {
+                break;
+            }
+            offset += read;
+        }
+        data.truncate(offset);
+
+        VentoyConfig::parse(&data)
     }
 
     fn resolve_image_metadata(

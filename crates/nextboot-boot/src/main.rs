@@ -23,6 +23,7 @@ mod scanner;
 mod source_disk;
 mod vdi;
 mod ventoy;
+mod ventoy_config;
 mod vhdx;
 mod virtual_fs;
 mod wim;
@@ -192,7 +193,9 @@ fn show_menu<'a>(
         .iter()
         .map(|iso| {
             let filename = iso.path.split('/').last().unwrap_or(&iso.path);
-            let label = if has_duplicate_filename(iso_files, filename) {
+            let label = if let Some(alias) = iso.menu_alias.as_ref() {
+                alias.clone()
+            } else if has_duplicate_filename(iso_files, filename) {
                 format!("{} [vol {}]", filename, iso.volume_index)
             } else {
                 filename.to_string()
