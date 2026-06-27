@@ -38,12 +38,21 @@ use uefi::{Handle, Identify};
 
 const VENTOY_CONFIG_PATH: &str = "/ventoy/ventoy.json";
 const VENTOY_CONFIG_MAX_SIZE: usize = 256 * 1024;
-const PARTITION_TABLE_SCAN_BYTES: usize = 256 * 1024;
 const MBR_PARTITION_TABLE_OFFSET: usize = 0x1be;
 const MBR_PARTITION_ENTRY_SIZE: usize = 16;
 const MBR_PRIMARY_PARTITION_COUNT: usize = 4;
 const MBR_LOGICAL_PARTITION_NUMBER_BASE: u32 = 5;
 const MBR_MAX_LOGICAL_PARTITIONS: usize = 128;
+const GPT_HEADER_LBA: u64 = 1;
+const GPT_SIGNATURE: &[u8; 8] = b"EFI PART";
+const GPT_HEADER_MIN_SIZE: u32 = 92;
+const GPT_PARTITION_ENTRY_LBA_OFFSET: usize = 72;
+const GPT_NUM_PARTITION_ENTRIES_OFFSET: usize = 80;
+const GPT_PARTITION_ENTRY_SIZE_OFFSET: usize = 84;
+const GPT_MIN_PARTITION_ENTRY_SIZE: usize = 128;
+const GPT_MAX_PARTITION_ENTRY_SIZE: usize = 4096;
+const GPT_MAX_PARTITION_ENTRIES: usize = 4096;
+const GPT_MAX_PARTITION_ENTRY_ARRAY_BYTES: usize = 1024 * 1024;
 
 /// ISO 文件信息
 #[derive(Debug, Clone)]
@@ -1877,34 +1886,41 @@ fn discover_gpt_partitions(
         return None;
     }
 
-    let data = read_partition_table_prefix(shared)?;
-    let block_size = usize::try_from(data.block_size).ok()?;
-    let header_offset = block_size;
-    let header = data.bytes.get(header_offset..header_offset + block_size)?;
-    if header.get(0..8)? != b"EFI PART" {
+    let header_block = read_one_block(&shared, GPT_HEADER_LBA)?;
+    let header = header_block.as_slice();
+    if header.get(0..8)? != GPT_SIGNATURE {
         return None;
     }
 
     let header_size = read_le_u32(header, 12)?;
-    if header_size < 92 {
+    if header_size < GPT_HEADER_MIN_SIZE
+        || usize::try_from(header_size)
+            .ok()
+            .map_or(true, |len| len > header.len())
+    {
         return None;
     }
-    let entry_lba = read_le_u64(header, 72)?;
-    let num_entries = read_le_u32(header, 80)?;
-    let entry_size = read_le_u32(header, 84)?;
-    if entry_size < 128 || entry_size > 4096 {
+    let entry_lba = read_le_u64(header, GPT_PARTITION_ENTRY_LBA_OFFSET)?;
+    let num_entries = read_le_u32(header, GPT_NUM_PARTITION_ENTRIES_OFFSET)?;
+    let entry_size = read_le_u32(header, GPT_PARTITION_ENTRY_SIZE_OFFSET)?;
+    let entry_size = usize::try_from(entry_size).ok()?;
+    if !(GPT_MIN_PARTITION_ENTRY_SIZE..=GPT_MAX_PARTITION_ENTRY_SIZE).contains(&entry_size) {
         return None;
     }
 
-    let entry_lba = usize::try_from(entry_lba).ok()?;
-    let entry_size = usize::try_from(entry_size).ok()?;
-    let num_entries = usize::try_from(num_entries).ok()?.min(1024);
-    let entries_offset = entry_lba.checked_mul(block_size)?;
+    let num_entries = usize::try_from(num_entries)
+        .ok()?
+        .min(GPT_MAX_PARTITION_ENTRIES);
+    let entry_bytes_len = num_entries.checked_mul(entry_size)?;
+    if entry_bytes_len == 0 || entry_bytes_len > GPT_MAX_PARTITION_ENTRY_ARRAY_BYTES {
+        return None;
+    }
+    let entry_bytes = read_block_range(&shared, entry_lba, entry_bytes_len)?;
 
     let mut out = Vec::new();
     for index in 0..num_entries {
-        let offset = entries_offset.checked_add(index.checked_mul(entry_size)?)?;
-        let entry = match data.bytes.get(offset..offset + entry_size) {
+        let offset = index.checked_mul(entry_size)?;
+        let entry = match entry_bytes.get(offset..offset + entry_size) {
             Some(entry) => entry,
             None => break,
         };
@@ -2159,43 +2175,65 @@ mod tests {
     use super::*;
 
     struct MemoryBlockIo {
-        blocks: Vec<[u8; 512]>,
+        block_size: usize,
+        bytes: Vec<u8>,
     }
 
     impl MemoryBlockIo {
         fn new(block_count: usize) -> Self {
-            let mut blocks = Vec::new();
-            blocks.resize(block_count, [0; 512]);
-            Self { blocks }
+            Self::with_block_size(block_count, 512)
+        }
+
+        fn with_block_size(block_count: usize, block_size: usize) -> Self {
+            let mut bytes = Vec::new();
+            bytes.resize(block_count * block_size, 0);
+            Self { block_size, bytes }
+        }
+
+        fn block(&self, lba: usize) -> &[u8] {
+            let start = lba * self.block_size;
+            &self.bytes[start..start + self.block_size]
+        }
+
+        fn block_mut(&mut self, lba: usize) -> &mut [u8] {
+            let start = lba * self.block_size;
+            &mut self.bytes[start..start + self.block_size]
         }
     }
 
     impl BlockIoOps for MemoryBlockIo {
         fn block_size(&self) -> u32 {
-            512
+            self.block_size as u32
         }
 
         fn total_blocks(&self) -> u64 {
-            self.blocks.len() as u64
+            (self.bytes.len() / self.block_size) as u64
         }
 
         fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
-            if buf.is_empty() || buf.len() % 512 != 0 {
+            if buf.is_empty() || buf.len() % self.block_size != 0 {
                 return Err(FsError::InvalidArgument);
             }
             let start = usize::try_from(lba).map_err(|_| FsError::ReadError)?;
-            let block_count = buf.len() / 512;
-            let end = start.checked_add(block_count).ok_or(FsError::ReadError)?;
-            let blocks = self.blocks.get(start..end).ok_or(FsError::ReadError)?;
-            for (chunk, block) in buf.chunks_exact_mut(512).zip(blocks.iter()) {
-                chunk.copy_from_slice(block);
-            }
+            let block_count = buf.len() / self.block_size;
+            let end_block = start.checked_add(block_count).ok_or(FsError::ReadError)?;
+            let byte_start = start
+                .checked_mul(self.block_size)
+                .ok_or(FsError::ReadError)?;
+            let byte_end = end_block
+                .checked_mul(self.block_size)
+                .ok_or(FsError::ReadError)?;
+            let bytes = self
+                .bytes
+                .get(byte_start..byte_end)
+                .ok_or(FsError::ReadError)?;
+            buf.copy_from_slice(bytes);
             Ok(())
         }
     }
 
     fn write_mbr_entry(
-        block: &mut [u8; 512],
+        block: &mut [u8],
         index: usize,
         partition_type: u8,
         start_lba: u32,
@@ -2209,16 +2247,38 @@ mod tests {
         block[offset + 12..offset + 16].copy_from_slice(&total_sectors.to_le_bytes());
     }
 
+    fn write_protective_mbr(block: &mut [u8]) {
+        write_mbr_entry(block, 0, 0xee, 1, u32::MAX);
+    }
+
+    fn write_gpt_header(block: &mut [u8], entry_lba: u64, num_entries: u32, entry_size: u32) {
+        block[0..8].copy_from_slice(GPT_SIGNATURE);
+        block[8..12].copy_from_slice(&0x0001_0000u32.to_le_bytes());
+        block[12..16].copy_from_slice(&GPT_HEADER_MIN_SIZE.to_le_bytes());
+        block[24..32].copy_from_slice(&GPT_HEADER_LBA.to_le_bytes());
+        block[72..80].copy_from_slice(&entry_lba.to_le_bytes());
+        block[80..84].copy_from_slice(&num_entries.to_le_bytes());
+        block[84..88].copy_from_slice(&entry_size.to_le_bytes());
+    }
+
+    fn write_gpt_entry(block: &mut [u8], offset: usize, start_lba: u64, end_lba: u64) {
+        let entry = &mut block[offset..offset + GPT_MIN_PARTITION_ENTRY_SIZE];
+        entry[0] = 1;
+        entry[16] = 2;
+        entry[32..40].copy_from_slice(&start_lba.to_le_bytes());
+        entry[40..48].copy_from_slice(&end_lba.to_le_bytes());
+    }
+
     #[test]
     fn discovers_mbr_logical_partitions_from_ebr_chain() {
         let mut disk = MemoryBlockIo::new(32_000);
-        write_mbr_entry(&mut disk.blocks[0], 1, 0x07, 2048, 4096);
-        write_mbr_entry(&mut disk.blocks[0], 2, 0x0f, 10_000, 10_000);
-        write_mbr_entry(&mut disk.blocks[10_000], 0, 0x07, 63, 1000);
-        write_mbr_entry(&mut disk.blocks[10_000], 1, 0x05, 2000, 8000);
-        write_mbr_entry(&mut disk.blocks[12_000], 0, 0x0b, 128, 500);
+        write_mbr_entry(disk.block_mut(0), 1, 0x07, 2048, 4096);
+        write_mbr_entry(disk.block_mut(0), 2, 0x0f, 10_000, 10_000);
+        write_mbr_entry(disk.block_mut(10_000), 0, 0x07, 63, 1000);
+        write_mbr_entry(disk.block_mut(10_000), 1, 0x05, 2000, 8000);
+        write_mbr_entry(disk.block_mut(12_000), 0, 0x0b, 128, 500);
 
-        let first_block = disk.blocks[0];
+        let first_block = disk.block(0).to_vec();
         let shared: nextboot_fs::SharedBlockIo = Rc::new(disk);
         let partitions = discover_mbr_partitions(shared, &first_block);
 
@@ -2234,40 +2294,61 @@ mod tests {
         assert_eq!(partitions[2].start_lba, 12_128);
         assert_eq!(partitions[2].block_count, 500);
     }
+
+    #[test]
+    fn discovers_gpt_partitions_from_entry_array_beyond_prefix_window() {
+        let mut disk = MemoryBlockIo::new(2048);
+        let entry_lba = 600;
+        write_protective_mbr(disk.block_mut(0));
+        write_gpt_header(
+            disk.block_mut(1),
+            entry_lba,
+            2,
+            GPT_MIN_PARTITION_ENTRY_SIZE as u32,
+        );
+        write_gpt_entry(disk.block_mut(entry_lba as usize), 0, 700, 799);
+        write_gpt_entry(
+            disk.block_mut(entry_lba as usize),
+            GPT_MIN_PARTITION_ENTRY_SIZE,
+            1024,
+            1535,
+        );
+
+        let first_block = disk.block(0).to_vec();
+        let shared: nextboot_fs::SharedBlockIo = Rc::new(disk);
+        let partitions = discover_gpt_partitions(shared, &first_block).expect("gpt partitions");
+
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(partitions[0].number, 1);
+        assert_eq!(partitions[0].start_lba, 700);
+        assert_eq!(partitions[0].block_count, 100);
+        assert_eq!(partitions[0].format, PartitionFormat::Gpt);
+        assert_eq!(partitions[1].number, 2);
+        assert_eq!(partitions[1].start_lba, 1024);
+        assert_eq!(partitions[1].block_count, 512);
+    }
+
+    #[test]
+    fn discovers_gpt_partitions_on_4k_native_disk() {
+        let mut disk = MemoryBlockIo::with_block_size(128, 4096);
+        write_protective_mbr(disk.block_mut(0));
+        write_gpt_header(disk.block_mut(1), 2, 1, GPT_MIN_PARTITION_ENTRY_SIZE as u32);
+        write_gpt_entry(disk.block_mut(2), 0, 16, 63);
+
+        let first_block = disk.block(0).to_vec();
+        let shared: nextboot_fs::SharedBlockIo = Rc::new(disk);
+        let partitions = discover_gpt_partitions(shared, &first_block).expect("gpt partitions");
+
+        assert_eq!(partitions.len(), 1);
+        assert_eq!(partitions[0].number, 1);
+        assert_eq!(partitions[0].start_lba, 16);
+        assert_eq!(partitions[0].block_count, 48);
+        assert_eq!(partitions[0].format, PartitionFormat::Gpt);
+    }
 }
 
 fn has_mbr_signature(block: &[u8]) -> bool {
     block.get(510) == Some(&0x55) && block.get(511) == Some(&0xaa)
-}
-
-struct PartitionTablePrefix {
-    bytes: Vec<u8>,
-    block_size: u32,
-}
-
-fn read_partition_table_prefix(shared: nextboot_fs::SharedBlockIo) -> Option<PartitionTablePrefix> {
-    let block_size = usize::try_from(shared.block_size()).ok()?;
-    if block_size == 0 {
-        return None;
-    }
-    let total_blocks = shared.total_blocks();
-    if total_blocks == 0 {
-        return None;
-    }
-
-    let wanted_blocks = div_round_up_usize(PARTITION_TABLE_SCAN_BYTES, block_size)
-        .max(2)
-        .min(usize::try_from(total_blocks).ok()?);
-    let len = wanted_blocks.checked_mul(block_size)?;
-    let mut bytes = Vec::new();
-    bytes.try_reserve_exact(len).ok()?;
-    bytes.resize(len, 0);
-    shared.read_blocks(0, &mut bytes).ok()?;
-
-    Some(PartitionTablePrefix {
-        bytes,
-        block_size: u32::try_from(block_size).ok()?,
-    })
 }
 
 fn partition_source_disk_identity(
@@ -2293,6 +2374,37 @@ fn partition_source_disk_identity(
         volume_info.block_size,
         Some(info),
     )
+}
+
+fn read_block_range(
+    shared: &nextboot_fs::SharedBlockIo,
+    start_lba: u64,
+    byte_len: usize,
+) -> Option<Vec<u8>> {
+    if byte_len == 0 {
+        return Some(Vec::new());
+    }
+
+    let block_size = usize::try_from(shared.block_size()).ok()?;
+    if block_size == 0 {
+        return None;
+    }
+    let block_count = div_round_up_usize(byte_len, block_size);
+    let block_count_u64 = u64::try_from(block_count).ok()?;
+    if start_lba
+        .checked_add(block_count_u64)
+        .map_or(true, |end| end > shared.total_blocks())
+    {
+        return None;
+    }
+
+    let len = block_count.checked_mul(block_size)?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(len).ok()?;
+    bytes.resize(len, 0);
+    shared.read_blocks(start_lba, &mut bytes).ok()?;
+    bytes.truncate(byte_len);
+    Some(bytes)
 }
 
 fn offset_extents_for_physical_read(
