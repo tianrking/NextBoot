@@ -20,12 +20,74 @@ use uefi::proto::media::block::BlockIO;
 use uefi::table::boot::{BootServices, LoadImageSource};
 use uefi::{Handle, Status};
 
-const DEFAULT_EFI_BOOT_PATHS: &[&str] = &[
-    "\\EFI\\BOOT\\BOOTX64.EFI",
-    "\\EFI\\BOOT\\BOOTAA64.EFI",
-    "\\EFI\\BOOT\\BOOTIA32.EFI",
-    "\\EFI\\BOOT\\BOOTARM.EFI",
-];
+const EFI_BOOT_X64: &str = "\\EFI\\BOOT\\BOOTX64.EFI";
+const EFI_BOOT_AA64: &str = "\\EFI\\BOOT\\BOOTAA64.EFI";
+const EFI_BOOT_IA32: &str = "\\EFI\\BOOT\\BOOTIA32.EFI";
+const EFI_BOOT_ARM: &str = "\\EFI\\BOOT\\BOOTARM.EFI";
+
+fn default_efi_boot_paths() -> &'static [&'static str] {
+    #[cfg(target_arch = "aarch64")]
+    {
+        &[EFI_BOOT_AA64, EFI_BOOT_X64, EFI_BOOT_IA32, EFI_BOOT_ARM]
+    }
+
+    #[cfg(target_arch = "arm")]
+    {
+        &[EFI_BOOT_ARM, EFI_BOOT_AA64, EFI_BOOT_X64, EFI_BOOT_IA32]
+    }
+
+    #[cfg(target_arch = "x86")]
+    {
+        &[EFI_BOOT_IA32, EFI_BOOT_X64, EFI_BOOT_AA64, EFI_BOOT_ARM]
+    }
+
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "arm", target_arch = "x86")))]
+    {
+        &[EFI_BOOT_X64, EFI_BOOT_AA64, EFI_BOOT_IA32, EFI_BOOT_ARM]
+    }
+}
+
+fn generic_efi_boot_paths() -> &'static [&'static str] {
+    #[cfg(target_arch = "aarch64")]
+    {
+        &[
+            "/efi/boot/bootaa64.efi",
+            "/efi/boot/bootx64.efi",
+            "/efi/boot/bootia32.efi",
+            "/efi/boot/bootarm.efi",
+        ]
+    }
+
+    #[cfg(target_arch = "arm")]
+    {
+        &[
+            "/efi/boot/bootarm.efi",
+            "/efi/boot/bootaa64.efi",
+            "/efi/boot/bootx64.efi",
+            "/efi/boot/bootia32.efi",
+        ]
+    }
+
+    #[cfg(target_arch = "x86")]
+    {
+        &[
+            "/efi/boot/bootia32.efi",
+            "/efi/boot/bootx64.efi",
+            "/efi/boot/bootaa64.efi",
+            "/efi/boot/bootarm.efi",
+        ]
+    }
+
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "arm", target_arch = "x86")))]
+    {
+        &[
+            "/efi/boot/bootx64.efi",
+            "/efi/boot/bootaa64.efi",
+            "/efi/boot/bootia32.efi",
+            "/efi/boot/bootarm.efi",
+        ]
+    }
+}
 
 /// 引导管理器
 pub struct BootManager<'a> {
@@ -162,14 +224,7 @@ impl<'a> BootManager<'a> {
     fn boot_generic(&self) -> uefi::Result<()> {
         info!("Attempting generic boot...");
 
-        // 检查 ISO 中的 EFI 引导文件
-        let efi_boot_paths = [
-            "/efi/boot/bootx64.efi",
-            "/efi/boot/bootia32.efi",
-            "/boot/efi/bootx64.efi",
-        ];
-
-        for path in &efi_boot_paths {
+        for path in generic_efi_boot_paths() {
             if let Ok(data) = self.load_file(path) {
                 if !data.is_empty() {
                     info!("Found EFI boot file: {}", path);
@@ -185,15 +240,33 @@ impl<'a> BootManager<'a> {
 
     /// 链式加载 EFI 文件
     fn chain_load(&self, path: &str, data: &[u8]) -> uefi::Result<()> {
-        info!("Chain loading: {}", path);
+        info!("Chain loading: {} ({} bytes)", path, data.len());
 
-        // TODO: 实现链式加载
-        // 1. 分配内存
-        // 2. 复制 EFI 镜像
-        // 3. 调用 LoadImage
-        // 4. 调用 StartImage
+        if data.is_empty() {
+            return Err(Status::LOAD_ERROR.into());
+        }
 
-        Err(Status::UNSUPPORTED.into())
+        let image = self.bt.load_image(
+            self.parent_image,
+            LoadImageSource::FromBuffer {
+                buffer: data,
+                file_path: None,
+            },
+        )?;
+
+        info!("Loaded chained EFI image {:?} from {}", image, path);
+        match self.bt.start_image(image) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                warn!(
+                    "StartImage failed for chained image {}: {:?}",
+                    path,
+                    err.status()
+                );
+                let _ = self.bt.unload_image(image);
+                Err(err)
+            }
+        }
     }
 
     /// 从 ISO 加载文件
@@ -350,7 +423,7 @@ impl<'a> BootManager<'a> {
         }
 
         let mut last_status = Status::NOT_FOUND;
-        for path in DEFAULT_EFI_BOOT_PATHS {
+        for path in default_efi_boot_paths() {
             let full_path = append_file_path_device_path(&device.device_path, path)
                 .ok_or(Status::INVALID_PARAMETER)?;
             let device_path =
