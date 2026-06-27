@@ -2,31 +2,27 @@
 //!
 //! 定义与 UEFI 兼容的协议接口
 
+use crate::{VirtIoError, VirtualBlockIo, VirtualMediaInfo};
 use bitflags::bitflags;
-use crate::{VirtIoError, VirtualMediaInfo, VirtualBlockIo};
 
 /// UEFI Block IO Protocol GUID
 pub const BLOCK_IO_GUID: [u8; 16] = [
-    0x96, 0x5e, 0x3b, 0x09, 0x63, 0x30, 0xd3, 0x11,
-    0x8d, 0xbd, 0x00, 0xa0, 0xc9, 0x06, 0xec, 0x9b,
+    0x96, 0x5e, 0x3b, 0x09, 0x63, 0x30, 0xd3, 0x11, 0x8d, 0xbd, 0x00, 0xa0, 0xc9, 0x06, 0xec, 0x9b,
 ];
 
 /// UEFI Block IO 2 Protocol GUID
 pub const BLOCK_IO_2_GUID: [u8; 16] = [
-    0xa8, 0x63, 0x9a, 0x14, 0x5d, 0x37, 0x7b, 0x4e,
-    0xa9, 0x88, 0x6c, 0x42, 0xf4, 0x3e, 0x4c, 0x9a,
+    0xa8, 0x63, 0x9a, 0x14, 0x5d, 0x37, 0x7b, 0x4e, 0xa9, 0x88, 0x6c, 0x42, 0xf4, 0x3e, 0x4c, 0x9a,
 ];
 
 /// 设备路径协议 GUID
 pub const DEVICE_PATH_GUID: [u8; 16] = [
-    0x9b, 0x9a, 0x2d, 0x09, 0x62, 0x30, 0xd3, 0x11,
-    0x8d, 0xbd, 0x00, 0xa0, 0xc9, 0x06, 0xec, 0x9b,
+    0x9b, 0x9a, 0x2d, 0x09, 0x62, 0x30, 0xd3, 0x11, 0x8d, 0xbd, 0x00, 0xa0, 0xc9, 0x06, 0xec, 0x9b,
 ];
 
 /// 加载的镜像协议 GUID
 pub const LOADED_IMAGE_GUID: [u8; 16] = [
-    0xa1, 0x51, 0xbc, 0x5c, 0x16, 0x4a, 0x76, 0x4d,
-    0x87, 0x2c, 0x3a, 0x4e, 0xaa, 0x9b, 0x66, 0x53,
+    0xa1, 0x51, 0xbc, 0x5c, 0x16, 0x4a, 0x76, 0x4d, 0x87, 0x2c, 0x3a, 0x4e, 0xaa, 0x9b, 0x66, 0x53,
 ];
 
 bitflags! {
@@ -86,7 +82,7 @@ pub enum MessagingSubtype {
 pub struct DevicePathHeader {
     pub type_: u8,
     pub subtype: u8,
-    pub length: [u8; 2],  // Little-endian u16
+    pub length: [u8; 2], // Little-endian u16
 }
 
 impl DevicePathHeader {
@@ -121,11 +117,7 @@ impl HardDriveDevicePath {
     /// 创建新的硬盘设备路径
     pub fn new(partition_number: u32, start: u64, size: u64) -> Self {
         Self {
-            header: DevicePathHeader::new(
-                DevicePathType::MEDIA,
-                MediaSubtype::HardDrive as u8,
-                42,
-            ),
+            header: DevicePathHeader::new(DevicePathType::MEDIA, MediaSubtype::HardDrive as u8, 42),
             partition_number,
             partition_start: start,
             partition_size: size,
@@ -149,11 +141,7 @@ impl CdRomDevicePath {
     /// 创建新的 CD-ROM 设备路径
     pub fn new(boot_entry: u32, start: u64, size: u64) -> Self {
         Self {
-            header: DevicePathHeader::new(
-                DevicePathType::MEDIA,
-                MediaSubtype::CdRom as u8,
-                24,
-            ),
+            header: DevicePathHeader::new(DevicePathType::MEDIA, MediaSubtype::CdRom as u8, 24),
             boot_entry,
             partition_start: start,
             partition_size: size,
@@ -213,7 +201,7 @@ impl EndDevicePath {
         Self {
             header: DevicePathHeader::new(
                 DevicePathType::END,
-                0xFF,  // End Entire
+                0xFF, // End Entire
                 4,
             ),
         }
@@ -237,8 +225,10 @@ pub struct BlockIoProtocol {
     pub revision: u64,
     pub media: *const BlockIoMedia,
     pub reset: extern "efiapi" fn(*mut BlockIoProtocol, bool) -> u64,
-    pub read_blocks: extern "efiapi" fn(*mut BlockIoProtocol, u32, u64, u64, *mut core::ffi::c_void) -> u64,
-    pub write_blocks: extern "efiapi" fn(*mut BlockIoProtocol, u32, u64, u64, *const core::ffi::c_void) -> u64,
+    pub read_blocks:
+        extern "efiapi" fn(*mut BlockIoProtocol, u32, u64, u64, *mut core::ffi::c_void) -> u64,
+    pub write_blocks:
+        extern "efiapi" fn(*mut BlockIoProtocol, u32, u64, u64, *const core::ffi::c_void) -> u64,
     pub flush_blocks: extern "efiapi" fn(*mut BlockIoProtocol) -> u64,
 }
 
@@ -247,8 +237,22 @@ pub struct BlockIoProtocol {
 pub struct BlockIo2Protocol {
     pub media: *const BlockIoMedia,
     pub reset: extern "efiapi" fn(*mut BlockIo2Protocol, bool) -> u64,
-    pub read_blocks_ex: extern "efiapi" fn(*mut BlockIo2Protocol, u32, u64, u64, *mut core::ffi::c_void, *mut BlockIo2Token) -> u64,
-    pub write_blocks_ex: extern "efiapi" fn(*mut BlockIo2Protocol, u32, u64, u64, *const core::ffi::c_void, *mut BlockIo2Token) -> u64,
+    pub read_blocks_ex: extern "efiapi" fn(
+        *mut BlockIo2Protocol,
+        u32,
+        u64,
+        u64,
+        *mut core::ffi::c_void,
+        *mut BlockIo2Token,
+    ) -> u64,
+    pub write_blocks_ex: extern "efiapi" fn(
+        *mut BlockIo2Protocol,
+        u32,
+        u64,
+        u64,
+        *const core::ffi::c_void,
+        *mut BlockIo2Token,
+    ) -> u64,
     pub flush_blocks_ex: extern "efiapi" fn(*mut BlockIo2Protocol, *mut BlockIo2Token) -> u64,
 }
 
@@ -332,6 +336,7 @@ impl From<VirtIoError> for UefiStatus {
 }
 
 /// 虚拟 Block IO 协议包装器
+#[repr(C)]
 pub struct VirtualBlockIoProtocol {
     protocol: BlockIoProtocol,
     media: BlockIoMedia,
@@ -341,7 +346,6 @@ pub struct VirtualBlockIoProtocol {
 impl VirtualBlockIoProtocol {
     /// 创建新的虚拟 Block IO 协议
     pub fn new(vbio: VirtualBlockIo) -> Self {
-        let info = vbio.device_info();
         let media = BlockIoMedia::from_virtual_info(&VirtualMediaInfo::from_config(vbio.config()));
 
         Self {
@@ -365,8 +369,15 @@ impl VirtualBlockIoProtocol {
     }
 
     /// Reset 处理函数
-    extern "efiapi" fn reset_handler(_this: *mut BlockIoProtocol, _extended: bool) -> u64 {
-        UefiStatus::Success as u64
+    extern "efiapi" fn reset_handler(this: *mut BlockIoProtocol, extended: bool) -> u64 {
+        let Some(wrapper) = Self::from_protocol(this) else {
+            return UefiStatus::InvalidParameter as u64;
+        };
+
+        let vbio = unsafe { &*wrapper.vbio.get() };
+        vbio.reset(extended)
+            .map(|_| UefiStatus::Success as u64)
+            .unwrap_or_else(|err| UefiStatus::from(err) as u64)
     }
 
     /// ReadBlocks 处理函数
@@ -377,35 +388,80 @@ impl VirtualBlockIoProtocol {
         buffer_size: u64,
         buffer: *mut core::ffi::c_void,
     ) -> u64 {
-        // 安全: 这是一个回调，需要确保调用是有效的
-        unsafe {
-            let protocol = &*this;
-            let block_size = (*protocol.media).block_size;
+        let Some(wrapper) = Self::from_protocol(this) else {
+            return UefiStatus::InvalidParameter as u64;
+        };
 
-            if buffer_size % block_size as u64 != 0 {
-                return UefiStatus::BadBufferSize as u64;
-            }
-
-            // 这里需要访问实际的 VirtualBlockIo
-            // 简化实现，返回成功
-            UefiStatus::Success as u64
+        if buffer.is_null() {
+            return UefiStatus::InvalidParameter as u64;
         }
+
+        let block_size = wrapper.media.block_size;
+        if block_size == 0 || buffer_size % block_size as u64 != 0 {
+            return UefiStatus::BadBufferSize as u64;
+        }
+
+        if buffer_size > usize::MAX as u64 {
+            return UefiStatus::InvalidParameter as u64;
+        }
+
+        let buf =
+            unsafe { core::slice::from_raw_parts_mut(buffer.cast::<u8>(), buffer_size as usize) };
+        let vbio = unsafe { &*wrapper.vbio.get() };
+
+        vbio.read_blocks(media_id, lba, buf)
+            .map(|_| UefiStatus::Success as u64)
+            .unwrap_or_else(|err| UefiStatus::from(err) as u64)
     }
 
     /// WriteBlocks 处理函数
     extern "efiapi" fn write_blocks_handler(
-        _this: *mut BlockIoProtocol,
-        _media_id: u32,
-        _lba: u64,
-        _buffer_size: u64,
-        _buffer: *const core::ffi::c_void,
+        this: *mut BlockIoProtocol,
+        media_id: u32,
+        lba: u64,
+        buffer_size: u64,
+        buffer: *const core::ffi::c_void,
     ) -> u64 {
-        UefiStatus::WriteProtected as u64
+        let Some(wrapper) = Self::from_protocol(this) else {
+            return UefiStatus::InvalidParameter as u64;
+        };
+
+        if buffer.is_null() {
+            return UefiStatus::InvalidParameter as u64;
+        }
+
+        if buffer_size > usize::MAX as u64 {
+            return UefiStatus::InvalidParameter as u64;
+        }
+
+        let buf = unsafe { core::slice::from_raw_parts(buffer.cast::<u8>(), buffer_size as usize) };
+        let vbio = unsafe { &*wrapper.vbio.get() };
+
+        vbio.write_blocks(media_id, lba, buf)
+            .map(|_| UefiStatus::Success as u64)
+            .unwrap_or_else(|err| UefiStatus::from(err) as u64)
     }
 
     /// Flush 处理函数
-    extern "efiapi" fn flush_handler(_this: *mut BlockIoProtocol) -> u64 {
-        UefiStatus::Success as u64
+    extern "efiapi" fn flush_handler(this: *mut BlockIoProtocol) -> u64 {
+        let Some(wrapper) = Self::from_protocol(this) else {
+            return UefiStatus::InvalidParameter as u64;
+        };
+
+        let vbio = unsafe { &*wrapper.vbio.get() };
+        vbio.flush()
+            .map(|_| UefiStatus::Success as u64)
+            .unwrap_or_else(|err| UefiStatus::from(err) as u64)
+    }
+
+    fn from_protocol(this: *mut BlockIoProtocol) -> Option<&'static mut Self> {
+        if this.is_null() {
+            return None;
+        }
+
+        // `protocol` is the first field and the type is repr(C), so both
+        // pointers have the same address.
+        Some(unsafe { &mut *(this.cast::<Self>()) })
     }
 }
 
@@ -461,4 +517,82 @@ pub fn format_guid(guid: &[u8; 16]) -> alloc::string::String {
         guid[8], guid[9],
         guid[10], guid[11], guid[12], guid[13], guid[14], guid[15]
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
+
+    fn fill_from_lba(lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
+        for byte in buf {
+            *byte = lba as u8;
+        }
+        Ok(())
+    }
+
+    fn make_protocol() -> VirtualBlockIoProtocol {
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::HardDisk, 10, 1024, 512);
+        let mut vbio = VirtualBlockIo::new(config);
+        vbio.set_physical_read(fill_from_lba);
+        VirtualBlockIoProtocol::new(vbio)
+    }
+
+    #[test]
+    fn read_blocks_handler_delegates_to_virtual_block_io() {
+        let mut protocol = make_protocol();
+        let ptr = protocol.as_ptr();
+        let media_id = protocol.media.media_id;
+        let mut buf = [0u8; 1024];
+
+        let status = unsafe {
+            ((*ptr).read_blocks)(ptr, media_id, 0, buf.len() as u64, buf.as_mut_ptr().cast())
+        };
+
+        assert_eq!(status, UefiStatus::Success as u64);
+        assert!(buf[..512].iter().all(|byte| *byte == 10));
+        assert!(buf[512..].iter().all(|byte| *byte == 11));
+    }
+
+    #[test]
+    fn read_blocks_handler_reports_media_change_and_bad_buffer_size() {
+        let mut protocol = make_protocol();
+        let ptr = protocol.as_ptr();
+        let mut buf = [0u8; 512];
+
+        let wrong_media = unsafe {
+            ((*ptr).read_blocks)(
+                ptr,
+                0xDEAD_BEEF,
+                0,
+                buf.len() as u64,
+                buf.as_mut_ptr().cast(),
+            )
+        };
+        assert_eq!(wrong_media, UefiStatus::MediaChanged as u64);
+
+        let bad_size = unsafe {
+            ((*ptr).read_blocks)(ptr, protocol.media.media_id, 0, 7, buf.as_mut_ptr().cast())
+        };
+        assert_eq!(bad_size, UefiStatus::BadBufferSize as u64);
+    }
+
+    #[test]
+    fn write_blocks_handler_stays_write_protected() {
+        let mut protocol = make_protocol();
+        let ptr = protocol.as_ptr();
+        let buf = [0u8; 512];
+
+        let status = unsafe {
+            ((*ptr).write_blocks)(
+                ptr,
+                protocol.media.media_id,
+                0,
+                buf.len() as u64,
+                buf.as_ptr().cast(),
+            )
+        };
+
+        assert_eq!(status, UefiStatus::WriteProtected as u64);
+    }
 }
