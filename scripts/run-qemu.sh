@@ -13,6 +13,7 @@
 #   ./scripts/run-qemu.sh --bus nvme --sector-size 4096 --no-run
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --image ~/Downloads/ubuntu.iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
+#   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vlnk-iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
@@ -42,6 +43,7 @@ VERIFY_IMAGE=1
 SMOKE=0
 SMOKE_BOOT=0
 SMOKE_EFI_ISO=0
+SMOKE_VLNK_ISO=0
 SMOKE_WINDOWS_ISO=0
 SMOKE_WINDOWS_WIMBOOT=0
 SMOKE_LINUX_ISO=0
@@ -73,6 +75,7 @@ Options:
   --smoke            Run QEMU until NextBoot scan/menu log markers appear
   --smoke-boot       With --smoke, press Enter and verify boot preparation starts
   --smoke-efi-iso    Generate a minimal UEFI ISO and verify its loader starts
+  --smoke-vlnk-iso   Generate a minimal UEFI ISO behind a Ventoy .vlnk pointer
   --smoke-windows-iso
                      Generate a Windows-style smoke ISO and verify bootmgfw starts
   --smoke-windows-wimboot
@@ -90,6 +93,7 @@ Examples:
   $0 --bus nvme --sector-size 4096 --no-run
   $0 --bus nvme --layout split --data-fs exfat --image ~/Downloads/Win11.iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vlnk-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
   $0 --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
@@ -183,6 +187,13 @@ while [ $# -gt 0 ]; do
             SMOKE=1
             SMOKE_BOOT=1
             SMOKE_EFI_ISO=1
+            shift
+            ;;
+        --smoke-vlnk-iso)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_EFI_ISO=1
+            SMOKE_VLNK_ISO=1
             shift
             ;;
         --smoke-windows-iso)
@@ -341,6 +352,10 @@ if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
         "$SMOKE_ISO_FILE"
     IMAGES=("$SMOKE_ISO_FILE" "${IMAGES[@]}")
 fi
+SMOKE_VLNK_FILE=""
+if [ "$SMOKE_VLNK_ISO" -eq 1 ]; then
+    SMOKE_VLNK_FILE="${PROJECT_DIR}/target/nextboot-smoke-vlnk.vlnk.iso"
+fi
 
 for image in "${IMAGES[@]}"; do
     [ -f "$image" ] || die "Image file not found: ${image}"
@@ -375,6 +390,8 @@ PY_ARGS=(
     "$EFI_FILE"
     "$SMOKE_LINUX_PLUGINS"
     "$SMOKE_WINDOWS_WIMBOOT"
+    "$SMOKE_VLNK_ISO"
+    "$SMOKE_VLNK_FILE"
     "$SMOKE_HELPER_FILE"
 )
 if [ "${#IMAGES[@]}" -gt 0 ]; then
@@ -398,8 +415,10 @@ data_fs = sys.argv[5]
 efi_file = sys.argv[6]
 smoke_linux_plugins = sys.argv[7] == "1"
 smoke_windows_wimboot = sys.argv[8] == "1"
-smoke_helper_file = sys.argv[9]
-image_files = sys.argv[10:]
+smoke_vlnk_iso = sys.argv[9] == "1"
+smoke_vlnk_file = sys.argv[10]
+smoke_helper_file = sys.argv[11]
+image_files = sys.argv[12:]
 if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
@@ -604,6 +623,7 @@ def short_to_display_name(name11):
     return base if not ext else f"{base}.{ext}"
 
 disk_guid = uuid.uuid5(uuid.NAMESPACE_URL, f"nextboot-qemu:{os.path.abspath(path)}").bytes_le
+disk_signature = zlib.crc32(disk_guid) & 0xFFFFFFFF
 esp_type = uuid.UUID("c12a7328-f81f-11d2-ba4b-00a0c93ec93b").bytes_le
 ms_basic_type = uuid.UUID("ebd0a0a2-b9e5-4433-87c0-68b6b72699c7").bytes_le
 
@@ -734,6 +754,51 @@ else:
         )
     )
 
+def crc32c(data, crc=0):
+    crc ^= 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            mask = -(crc & 1) & 0xFFFFFFFF
+            crc = ((crc >> 1) ^ (0x82F63B78 & mask)) & 0xFFFFFFFF
+    return crc ^ 0xFFFFFFFF
+
+def make_vlnk_file(disksig, part_offset_bytes, target_path):
+    data = bytearray(32768)
+    data[0:16] = bytes.fromhex("20207777772e76656e746f792e6e6574")
+    struct.pack_into("<I", data, 20, disksig)
+    struct.pack_into("<Q", data, 24, part_offset_bytes)
+    encoded = target_path.encode("utf-8")
+    if len(encoded) >= 384:
+        raise SystemExit(f"VLNK target path is too long: {target_path}")
+    data[32:32 + len(encoded)] = encoded
+    crc = crc32c(data[:512])
+    struct.pack_into("<I", data, 16, crc)
+    return bytes(data)
+
+if smoke_vlnk_iso:
+    if not image_files:
+        raise SystemExit("VLNK smoke requires a generated image file")
+    target_part = next((part for part in partitions if part["include_images"]), None)
+    if target_part is None:
+        raise SystemExit("VLNK smoke requires an image/data partition")
+    with open(image_files[0], "rb") as src:
+        extra_files.append(("/ventoy/vlnk-target.iso", src.read()))
+    vlnk_data = make_vlnk_file(
+        disk_signature,
+        target_part["start_lba"] * sector_size,
+        "/ventoy/vlnk-target.iso",
+    )
+    if smoke_vlnk_file:
+        with open(smoke_vlnk_file, "wb") as dst:
+            dst.write(vlnk_data)
+    extra_files.append(
+        (
+            "/ISO/nextboot-smoke-vlnk.vlnk.iso",
+            vlnk_data,
+        )
+    )
+
 def fat_label(label):
     return label.upper().encode("ascii", "ignore")[:11].ljust(11, b" ")
 
@@ -854,9 +919,10 @@ def write_fat32_volume(f, part):
         copy_file(efi_file, boot, "BOOTX64.EFI")
 
     if part["include_images"]:
-        iso = ensure_directory("/ISO")
-        for image in image_files:
-            copy_file(image, iso, os.path.basename(image))
+        if not smoke_vlnk_iso:
+            iso = ensure_directory("/ISO")
+            for image in image_files:
+                copy_file(image, iso, os.path.basename(image))
         for virtual_path, data in extra_files:
             parts = split_virtual_path(virtual_path)
             target_dir = ensure_directory("/" + "/".join(parts[:-1]))
@@ -1035,8 +1101,9 @@ def write_exfat_volume(f, part):
         add_tree_file("/EFI/BOOT/BOOTX64.EFI", source=efi_file)
 
     if part["include_images"]:
-        for image in image_files:
-            add_tree_file(f"/ISO/{os.path.basename(image)}", source=image)
+        if not smoke_vlnk_iso:
+            for image in image_files:
+                add_tree_file(f"/ISO/{os.path.basename(image)}", source=image)
         for virtual_path, data in extra_files:
             add_tree_file(virtual_path, data=data)
 
@@ -1146,8 +1213,9 @@ def write_ntfs_volume(f, part):
         add_ntfs_file("/EFI/BOOT/BOOTX64.EFI", source=efi_file)
 
     if part["include_images"]:
-        for image in image_files:
-            add_ntfs_file(f"/ISO/{os.path.basename(image)}", source=image)
+        if not smoke_vlnk_iso:
+            for image in image_files:
+                add_ntfs_file(f"/ISO/{os.path.basename(image)}", source=image)
         for virtual_path, data in extra_files:
             add_ntfs_file(virtual_path, data=data)
 
@@ -1403,6 +1471,7 @@ with open(path, "wb") as f:
     f.truncate(total_sectors * sector_size)
 
     mbr = bytearray(sector_size)
+    mbr[0x1B8:0x1BC] = struct.pack("<I", disk_signature)
     mbr[0x1BE] = 0x00
     mbr[0x1BE + 4] = 0xEE
     mbr[0x1BE + 8:0x1BE + 12] = struct.pack("<I", 1)
@@ -1473,9 +1542,13 @@ if [ "$VERIFY_IMAGE" -eq 1 ]; then
         --data-fs "$DATA_FS"
         --efi-file "$EFI_FILE"
     )
-    for image in "${IMAGES[@]}"; do
-        VERIFY_ARGS+=(--image "$image")
-    done
+    if [ "$SMOKE_VLNK_ISO" -eq 1 ]; then
+        VERIFY_ARGS+=(--image "$SMOKE_VLNK_FILE")
+    else
+        for image in "${IMAGES[@]}"; do
+            VERIFY_ARGS+=(--image "$image")
+        done
+    fi
     python3 "$VERIFY_SCRIPT" "${VERIFY_ARGS[@]}"
 fi
 
@@ -1570,9 +1643,16 @@ if [ "$SMOKE" -eq 1 ]; then
     )
     if [ "${#IMAGES[@]}" -gt 0 ]; then
         EXPECT_ARGS+=(--expect "Found ${#IMAGES[@]} ISO file(s)")
-        for image in "${IMAGES[@]}"; do
-            EXPECT_ARGS+=(--expect "$(basename "$image")")
-        done
+        if [ "$SMOKE_VLNK_ISO" -eq 1 ]; then
+            EXPECT_ARGS+=(
+                --expect "Resolved Ventoy VLNK /ISO/nextboot-smoke-vlnk.vlnk.iso -> /ventoy/vlnk-target.iso"
+                --expect "nextboot-smoke-vlnk.vlnk.iso"
+            )
+        else
+            for image in "${IMAGES[@]}"; do
+                EXPECT_ARGS+=(--expect "$(basename "$image")")
+            done
+        fi
         EXPECT_ARGS+=(--expect "Phase 3: Displaying boot menu")
         if [ "$SMOKE_BOOT" -eq 1 ]; then
             EXPECT_ARGS+=(

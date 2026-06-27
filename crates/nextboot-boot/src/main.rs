@@ -26,6 +26,7 @@ mod ventoy_config;
 mod ventoy_linux;
 mod vhdx;
 mod virtual_fs;
+mod vlnk;
 mod wim;
 mod wimboot;
 mod xz;
@@ -125,15 +126,21 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
                 )
             })
             .unwrap_or_default();
+        let vlnk_detail = iso
+            .vlnk_target_path
+            .as_ref()
+            .map(|target| format!(" vlnk_target={}", target))
+            .unwrap_or_default();
         info!(
-            "  [{}] vol{}:{} [{}] file={} virtual={}{}",
+            "  [{}] vol{}:{} [{}] file={} virtual={}{}{}",
             i,
             iso.volume_index,
             iso.path,
             iso.image_format,
             format_size(iso.size),
             format_size(iso.virtual_size),
-            wim_detail
+            wim_detail,
+            vlnk_detail
         );
     }
 

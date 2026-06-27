@@ -119,6 +119,9 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 # 自动生成 Windows 风格 ISO，并断言 DVD-ROM/bootmgfw.efi 分支被链式启动
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-windows-iso
 
+# 自动生成 Ventoy .vlnk 指针文件，真实 ISO 隐藏在 /ventoy 下，并断言 vlnk 目标被启动
+./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-vlnk-iso
+
 # 自动生成无默认 Windows EFI loader 的 ISO，并断言 WIMBOOT fallback 分支被链式启动
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
 
@@ -143,7 +146,10 @@ CRC、分区布局、FAT32/exFAT/NTFS 目录、`BOOTX64.EFI`、`/ISO` 文件和�
 会继续启动 QEMU 并检查 NextBoot 日志里是否进入扫描/菜单阶段；`--smoke-boot` 会
 自动按 Enter 并检查是否安装虚拟 Block IO；`--smoke-efi-iso` 会生成一个带 EFI
 El Torito boot catalog、内含 `/EFI/BOOT/BOOTX64.EFI` 的最小 ISO，并继续验证该 EFI
-loader 被链式启动；`--smoke-windows-iso` 会生成 Windows 风格 ISO，验证 Windows/WinPE
+loader 被链式启动；`--smoke-vlnk-iso` 会生成 Ventoy 兼容 `.vlnk.iso` 指针文件，
+指向同一 Data 分区 `/ventoy/vlnk-target.iso` 下的真实 ISO，并验证 VLNK 解析、
+目标 extent 映射、VentoyOsParam 的 vlnk 标记和目标 ISO 的 EFI loader 启动；
+`--smoke-windows-iso` 会生成 Windows 风格 ISO，验证 Windows/WinPE
 的 DVD-ROM 虚拟设备与 `/efi/microsoft/boot/bootmgfw.efi` 链式启动路径；
 `--smoke-windows-wimboot` 会生成一个没有默认 Windows EFI loader、但包含 `boot.wim`、BCD
 和 `boot.sdi` 的 ISO，同时在 Data 分区放入 `/ventoy/wimboot.x86_64.xz`，验证 Windows ISO

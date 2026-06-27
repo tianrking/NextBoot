@@ -2139,8 +2139,8 @@ impl<'a> BootManager<'a> {
     fn load_source_volume_file(&self, path: &str) -> uefi::Result<SourceVolumeFile> {
         let source_block_io = self
             .bt
-            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let fs = SourceVolumeFileSystem::open(&source_block_io, self.iso.source_disk)?;
+            .open_protocol_exclusive::<BlockIO>(self.iso.asset_volume_handle)?;
+        let fs = SourceVolumeFileSystem::open(&source_block_io, self.iso.asset_source_disk)?;
         fs.load_file(path)
     }
 
@@ -2215,8 +2215,8 @@ impl<'a> BootManager<'a> {
     fn source_volume_file_metadata(&self, path: &str) -> uefi::Result<SourceVolumeFileMetadata> {
         let source_block_io = self
             .bt
-            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let fs = SourceVolumeFileSystem::open(&source_block_io, self.iso.source_disk)?;
+            .open_protocol_exclusive::<BlockIO>(self.iso.asset_volume_handle)?;
+        let fs = SourceVolumeFileSystem::open(&source_block_io, self.iso.asset_source_disk)?;
         fs.file_metadata(path)
     }
 
@@ -2721,7 +2721,7 @@ impl<'a> BootManager<'a> {
             .with_iso_udf(self.iso.is_udf)
             .with_windows_cd_prompt(windows_cd_prompt)
             .with_linux_remount(self.iso.ventoy_linux_remount)
-            .with_vlnk(false)
+            .with_vlnk(self.iso.is_vlnk)
             .with_disk_signature(disk_signature)
             .with_windows_max_resolution(windows_resolution_lock)
     }
