@@ -16,8 +16,12 @@ use core::ffi::c_void;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
 use log::{info, warn};
+use nextboot_fs::exfat::ExFat;
+use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::Iso9660;
-use nextboot_fs::{BlockIoOps, FileSystem, FsError};
+use nextboot_fs::{
+    detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError, SharedBlockIo,
+};
 use nextboot_virtio::mapping::ByteMappingTable;
 use nextboot_virtio::protocol::append_file_path_device_path;
 use nextboot_virtio::{
@@ -110,6 +114,24 @@ const VHD_DYNAMIC_HEADER_SIZE: usize = 1024;
 const VHD_UNUSED_BAT_ENTRY: u32 = 0xFFFF_FFFF;
 const WIMBOOT_MAX_CALLBACK_PATH: usize = 512;
 const WIMBOOT_BOOT_WIM_CALLBACK_PATH: &str = "nb-boot-wim";
+const WIMBOOT_BCD_CALLBACK_PATH: &str = "nb-bcd";
+const WIMBOOT_BOOT_SDI_CALLBACK_PATH: &str = "nb-boot-sdi";
+const WIMBOOT_SELF_CALLBACK_PATH: &str = "nb-wimboot";
+const WIMBOOT_BCD_CANDIDATES: &[&str] = &[
+    "/ventoy/common_bcd",
+    "/ventoy/bcd",
+    "/boot/bcd",
+    "/efi/microsoft/boot/bcd",
+];
+const WIMBOOT_BOOT_SDI_CANDIDATES: &[&str] = &[
+    "/boot/boot.sdi",
+    "/2K10/FONTS/boot.sdi",
+    "/SSTR/boot.sdi",
+    "/ISPE/BOOT.SDI",
+    "/boot/uqi.sdi",
+    "/ISYL/boot.sdi",
+    "/WEPE/WEPE.SDI",
+];
 
 static WIMBOOT_RUNTIME_CONTEXT: AtomicPtr<WimbootRuntimeContext> = AtomicPtr::new(ptr::null_mut());
 
@@ -174,6 +196,50 @@ fn generic_efi_boot_paths() -> &'static [&'static str] {
             "/efi/boot/bootia32.efi",
             "/efi/boot/bootarm.efi",
         ]
+    }
+}
+
+fn wimboot_helper_candidates() -> &'static [&'static str] {
+    #[cfg(target_arch = "x86_64")]
+    {
+        &[
+            "/ventoy/wimboot.x86_64",
+            "/ventoy/wimboot.x86_64.efi",
+            "/ventoy/wimboot_x64.efi",
+            "/ventoy/wimboot.efi",
+        ]
+    }
+
+    #[cfg(target_arch = "x86")]
+    {
+        &[
+            "/ventoy/wimboot.i386.efi",
+            "/ventoy/wimboot.i386",
+            "/ventoy/wimboot_ia32.efi",
+            "/ventoy/wimboot.efi",
+        ]
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+    {
+        &[]
+    }
+}
+
+fn compressed_wimboot_helper_candidates() -> &'static [&'static str] {
+    #[cfg(target_arch = "x86_64")]
+    {
+        &["/ventoy/wimboot.x86_64.xz"]
+    }
+
+    #[cfg(target_arch = "x86")]
+    {
+        &["/ventoy/wimboot.i386.efi.xz"]
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+    {
+        &[]
     }
 }
 
@@ -288,12 +354,12 @@ impl<'a> BootManager<'a> {
             return Err(Status::UNSUPPORTED.into());
         }
 
-        let runtime = self.register_wimboot_runtime_files()?;
-        let boot_wim = WimbootVirtualFile::new("boot.wim", WIMBOOT_BOOT_WIM_CALLBACK_PATH)
-            .map_err(|_| Status::INVALID_PARAMETER)?;
+        let helper = self.load_wimboot_helper()?;
+        let inputs = self.prepare_wimboot_runtime_inputs(&helper)?;
+        let runtime = self.register_wimboot_runtime_files(inputs.runtime_files)?;
         let callbacks = runtime.callbacks();
         let load_options = wimboot::build_wimboot_command_line(
-            &[boot_wim],
+            &inputs.virtual_files,
             Some(callbacks),
             Some(wim_info.boot_index),
         )
@@ -307,26 +373,145 @@ impl<'a> BootManager<'a> {
             "Registered WIMBOOT runtime file callbacks: pfsize=0x{:x} pfread=0x{:x}",
             callbacks.file_size, callbacks.file_read
         );
-        warn!("WIMBOOT helper file injection and chain-loading are not implemented yet");
 
-        Err(Status::UNSUPPORTED.into())
+        let source_device = VirtualBootDevice {
+            handle: self.iso.volume_handle,
+            device_path: self.handle_device_path_bytes(self.iso.volume_handle)?,
+        };
+
+        self.chain_load_with_options(
+            &source_device,
+            &helper.path,
+            &helper.data,
+            Some(&load_options),
+        )
     }
 
-    fn register_wimboot_runtime_files(&self) -> uefi::Result<WimbootRuntimeRegistration<'a>> {
+    fn prepare_wimboot_runtime_inputs(
+        &self,
+        helper: &SourceVolumeFile,
+    ) -> uefi::Result<WimbootRuntimeInputs> {
+        let mut runtime_files = Vec::new();
+        runtime_files
+            .try_reserve_exact(4)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        runtime_files.push(WimbootRuntimeFile::from_iso(
+            self.iso,
+            WIMBOOT_BOOT_WIM_CALLBACK_PATH,
+        )?);
+        runtime_files.push(WimbootRuntimeFile::from_source_file(
+            &helper.metadata,
+            WIMBOOT_SELF_CALLBACK_PATH,
+        )?);
+
+        let bcd = self.find_source_volume_file_metadata(WIMBOOT_BCD_CANDIDATES)?;
+        runtime_files.push(WimbootRuntimeFile::from_source_file(
+            &bcd,
+            WIMBOOT_BCD_CALLBACK_PATH,
+        )?);
+
+        let boot_sdi =
+            match self.find_optional_source_volume_file_metadata(WIMBOOT_BOOT_SDI_CANDIDATES) {
+                Ok(Some(file)) => {
+                    runtime_files.push(WimbootRuntimeFile::from_source_file(
+                        &file,
+                        WIMBOOT_BOOT_SDI_CALLBACK_PATH,
+                    )?);
+                    true
+                }
+                Ok(None) => {
+                    info!("WIMBOOT boot.sdi was not found; continuing without boot.sdi vf entry");
+                    false
+                }
+                Err(err) => return Err(err),
+            };
+
+        let mut virtual_files = Vec::new();
+        virtual_files
+            .try_reserve_exact(if boot_sdi { 4 } else { 3 })
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        virtual_files.push(
+            WimbootVirtualFile::new("boot.wim", WIMBOOT_BOOT_WIM_CALLBACK_PATH)
+                .map_err(|_| Status::INVALID_PARAMETER)?,
+        );
+        virtual_files.push(
+            WimbootVirtualFile::new("vtoy_wimboot", WIMBOOT_SELF_CALLBACK_PATH)
+                .map_err(|_| Status::INVALID_PARAMETER)?,
+        );
+        virtual_files.push(
+            WimbootVirtualFile::new("bcd", WIMBOOT_BCD_CALLBACK_PATH)
+                .map_err(|_| Status::INVALID_PARAMETER)?,
+        );
+        if boot_sdi {
+            virtual_files.push(
+                WimbootVirtualFile::new("boot.sdi", WIMBOOT_BOOT_SDI_CALLBACK_PATH)
+                    .map_err(|_| Status::INVALID_PARAMETER)?,
+            );
+        }
+
+        Ok(WimbootRuntimeInputs {
+            runtime_files,
+            virtual_files,
+        })
+    }
+
+    fn register_wimboot_runtime_files(
+        &self,
+        files: Vec<WimbootRuntimeFile>,
+    ) -> uefi::Result<WimbootRuntimeRegistration<'a>> {
         let bt: &'a BootServices = self.bt;
         let source_block_io = bt.open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
         let reader = UefiPhysicalReader::new(&source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
-        let file = WimbootRuntimeFile::from_iso(self.iso, WIMBOOT_BOOT_WIM_CALLBACK_PATH)?;
-        let mut files = Vec::new();
-        files
-            .try_reserve_exact(1)
-            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        files.push(file);
 
         Ok(WimbootRuntimeRegistration::install(
             WimbootRuntimeContext { reader, files },
             source_block_io,
         ))
+    }
+
+    fn load_wimboot_helper(&self) -> uefi::Result<SourceVolumeFile> {
+        let candidates = wimboot_helper_candidates();
+        if candidates.is_empty() {
+            warn!("WIMBOOT EFI helper is not available for this firmware architecture");
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let mut last_status = Status::NOT_FOUND;
+        for path in candidates {
+            match self.load_source_volume_file(path) {
+                Ok(file) => {
+                    info!(
+                        "Loaded WIMBOOT helper {} ({} bytes)",
+                        file.path,
+                        file.data.len()
+                    );
+                    return Ok(file);
+                }
+                Err(err) if err.status() == Status::NOT_FOUND => {
+                    last_status = Status::NOT_FOUND;
+                }
+                Err(err) => {
+                    last_status = err.status();
+                    warn!(
+                        "WIMBOOT helper candidate {} failed: {:?}",
+                        path,
+                        err.status()
+                    );
+                }
+            }
+        }
+
+        for path in compressed_wimboot_helper_candidates() {
+            if self.source_volume_file_metadata(path).is_ok() {
+                warn!(
+                    "Found compressed WIMBOOT helper {}, but XZ decompression is not implemented yet",
+                    path
+                );
+                return Err(Status::UNSUPPORTED.into());
+            }
+        }
+
+        Err(last_status.into())
     }
 
     /// 引导 Linux ISO
@@ -626,6 +811,88 @@ impl<'a> BootManager<'a> {
         info!("Loaded {} bytes from ISO path {}", read, path);
 
         Ok(data)
+    }
+
+    fn load_source_volume_file(&self, path: &str) -> uefi::Result<SourceVolumeFile> {
+        let source_block_io = self
+            .bt
+            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+        let fs = SourceVolumeFileSystem::open(&source_block_io)?;
+        fs.load_file(path)
+    }
+
+    fn source_volume_file_metadata(&self, path: &str) -> uefi::Result<SourceVolumeFileMetadata> {
+        let source_block_io = self
+            .bt
+            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+        let fs = SourceVolumeFileSystem::open(&source_block_io)?;
+        fs.file_metadata(path)
+    }
+
+    fn find_source_volume_file_metadata(
+        &self,
+        candidates: &[&str],
+    ) -> uefi::Result<SourceVolumeFileMetadata> {
+        let mut last_status = Status::NOT_FOUND;
+        for path in candidates {
+            match self.source_volume_file_metadata(path) {
+                Ok(file) => {
+                    info!(
+                        "Found source volume file {} ({} bytes)",
+                        file.path, file.size
+                    );
+                    return Ok(file);
+                }
+                Err(err) if err.status() == Status::NOT_FOUND => {
+                    last_status = Status::NOT_FOUND;
+                }
+                Err(err) => {
+                    last_status = err.status();
+                    warn!(
+                        "Source volume candidate {} failed: {:?}",
+                        path,
+                        err.status()
+                    );
+                }
+            }
+        }
+
+        Err(last_status.into())
+    }
+
+    fn find_optional_source_volume_file_metadata(
+        &self,
+        candidates: &[&str],
+    ) -> uefi::Result<Option<SourceVolumeFileMetadata>> {
+        let mut last_status = Status::NOT_FOUND;
+        for path in candidates {
+            match self.source_volume_file_metadata(path) {
+                Ok(file) => {
+                    info!(
+                        "Found optional source volume file {} ({} bytes)",
+                        file.path, file.size
+                    );
+                    return Ok(Some(file));
+                }
+                Err(err) if err.status() == Status::NOT_FOUND => {
+                    last_status = Status::NOT_FOUND;
+                }
+                Err(err) => {
+                    last_status = err.status();
+                    warn!(
+                        "Optional source volume candidate {} failed: {:?}",
+                        path,
+                        err.status()
+                    );
+                }
+            }
+        }
+
+        if last_status == Status::NOT_FOUND {
+            Ok(None)
+        } else {
+            Err(last_status.into())
+        }
     }
 
     /// 创建虚拟 Block IO
@@ -1689,6 +1956,145 @@ impl PhysicalReader for UefiPhysicalReader {
     }
 }
 
+impl BlockIoOps for UefiPhysicalReader {
+    fn block_size(&self) -> u32 {
+        self.block_size
+    }
+
+    fn total_blocks(&self) -> u64 {
+        self.total_blocks
+    }
+
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        PhysicalReader::read_blocks(self, lba, buf).map_err(virtio_error_to_fs_error)
+    }
+}
+
+struct SourceVolumeFile {
+    path: String,
+    data: Vec<u8>,
+    metadata: SourceVolumeFileMetadata,
+}
+
+struct SourceVolumeFileMetadata {
+    path: String,
+    size: u64,
+    block_size: u32,
+    extents: Vec<IsoExtent>,
+}
+
+enum SourceVolumeFileSystem {
+    Fat32(Fat32),
+    ExFat(ExFat),
+}
+
+impl SourceVolumeFileSystem {
+    fn open(block_io: &BlockIO) -> uefi::Result<Self> {
+        let reader = UefiPhysicalReader::new(block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+        let shared: SharedBlockIo = Rc::new(reader);
+        let block_size =
+            usize::try_from(shared.block_size()).map_err(|_| uefi::Status::INVALID_PARAMETER)?;
+        if block_size == 0 {
+            return Err(Status::INVALID_PARAMETER.into());
+        }
+
+        let mut boot_sector = Vec::new();
+        boot_sector
+            .try_reserve_exact(block_size)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        boot_sector.resize(block_size, 0);
+        shared
+            .read_blocks(0, &mut boot_sector)
+            .map_err(fs_error_to_uefi_status)?;
+
+        match detect_fs_type(&boot_sector) {
+            FileSystemType::Fat32 => Ok(Fat32::open(shared)
+                .map(Self::Fat32)
+                .map_err(fs_error_to_uefi_status)?),
+            FileSystemType::ExFat => Ok(ExFat::open(shared)
+                .map(Self::ExFat)
+                .map_err(fs_error_to_uefi_status)?),
+            _ => Err(Status::UNSUPPORTED.into()),
+        }
+    }
+
+    fn load_file(&self, path: &str) -> uefi::Result<SourceVolumeFile> {
+        let metadata = self.file_metadata(path)?;
+        let file_size =
+            usize::try_from(metadata.size).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(file_size)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        data.resize(file_size, 0);
+
+        let read = self.read_file(&metadata.path, 0, &mut data)?;
+        data.truncate(read);
+
+        Ok(SourceVolumeFile {
+            path: metadata.path.clone(),
+            data,
+            metadata,
+        })
+    }
+
+    fn file_metadata(&self, path: &str) -> uefi::Result<SourceVolumeFileMetadata> {
+        let path = normalize_iso_path(path);
+        let info = self.stat(&path)?;
+        if info.is_dir {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let extents = self
+            .file_extents(&path)?
+            .into_iter()
+            .map(IsoExtent::from)
+            .collect();
+
+        Ok(SourceVolumeFileMetadata {
+            path,
+            size: info.size,
+            block_size: self.block_size(),
+            extents,
+        })
+    }
+
+    fn stat(&self, path: &str) -> uefi::Result<nextboot_fs::FileInfo> {
+        Ok(match self {
+            Self::Fat32(fs) => fs.stat(path),
+            Self::ExFat(fs) => fs.stat(path),
+        }
+        .map_err(fs_error_to_uefi_status)?)
+    }
+
+    fn read_file(&self, path: &str, offset: u64, buf: &mut [u8]) -> uefi::Result<usize> {
+        Ok(match self {
+            Self::Fat32(fs) => fs.read_file(path, offset, buf),
+            Self::ExFat(fs) => fs.read_file(path, offset, buf),
+        }
+        .map_err(fs_error_to_uefi_status)?)
+    }
+
+    fn file_extents(&self, path: &str) -> uefi::Result<Vec<FileExtent>> {
+        Ok(match self {
+            Self::Fat32(fs) => fs.file_extents(path),
+            Self::ExFat(fs) => fs.file_extents(path),
+        }
+        .map_err(fs_error_to_uefi_status)?)
+    }
+
+    fn block_size(&self) -> u32 {
+        match self {
+            Self::Fat32(fs) => fs.block_size(),
+            Self::ExFat(fs) => fs.block_size(),
+        }
+    }
+}
+
+struct WimbootRuntimeInputs {
+    runtime_files: Vec<WimbootRuntimeFile>,
+    virtual_files: Vec<WimbootVirtualFile<'static>>,
+}
+
 struct WimbootRuntimeContext {
     reader: UefiPhysicalReader,
     files: Vec<WimbootRuntimeFile>,
@@ -1720,6 +2126,22 @@ impl WimbootRuntimeFile {
             size: iso.size,
             block_size: iso.block_size,
             extents: iso.extents.clone(),
+        })
+    }
+
+    fn from_source_file(
+        file: &SourceVolumeFileMetadata,
+        callback_path: &str,
+    ) -> uefi::Result<Self> {
+        if file.extents.is_empty() || file.block_size == 0 {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        Ok(Self {
+            callback_path: String::from(callback_path),
+            size: file.size,
+            block_size: file.block_size,
+            extents: file.extents.clone(),
         })
     }
 
@@ -1912,7 +2334,7 @@ fn read_physical_bytes(
         let in_block_offset = usize::try_from(physical_byte % block_size as u64).ok()?;
         let copy_size = (block_size - in_block_offset).min(buf.len() - copied);
 
-        reader.read_blocks(physical_lba, &mut scratch).ok()?;
+        PhysicalReader::read_blocks(reader, physical_lba, &mut scratch).ok()?;
         buf[copied..copied + copy_size]
             .copy_from_slice(&scratch[in_block_offset..in_block_offset + copy_size]);
 

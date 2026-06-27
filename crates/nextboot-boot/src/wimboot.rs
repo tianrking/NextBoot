@@ -152,6 +152,23 @@ mod tests {
     }
 
     #[test]
+    fn preserves_multiple_callback_backed_virtual_files() {
+        let files = [
+            WimbootVirtualFile::new("boot.wim", "nb-boot-wim").unwrap(),
+            WimbootVirtualFile::new("vtoy_wimboot", "nb-wimboot").unwrap(),
+            WimbootVirtualFile::new("bcd", "nb-bcd").unwrap(),
+            WimbootVirtualFile::new("boot.sdi", "nb-boot-sdi").unwrap(),
+        ];
+
+        let command = build_wimboot_command_line(&files, None, Some(1)).unwrap();
+
+        assert_eq!(
+            command,
+            "quiet index=1 vf=boot.wim:nb-boot-wim vf=vtoy_wimboot:nb-wimboot vf=bcd:nb-bcd vf=boot.sdi:nb-boot-sdi"
+        );
+    }
+
+    #[test]
     fn rejects_empty_file_list_and_unsafe_tokens() {
         assert_eq!(
             build_wimboot_command_line(&[], None, None),
