@@ -404,7 +404,7 @@ impl<'a> IsoScanner<'a> {
             }
         }
 
-        if let Ok(mut block_files) = self.scan_ntfs_block_volumes(
+        if let Ok(mut block_files) = self.scan_block_filesystem_volumes(
             simple_fs_handles.len(),
             &simple_fs_handles,
             &default_search_paths,
@@ -458,7 +458,7 @@ impl<'a> IsoScanner<'a> {
             }
         }
 
-        if let Ok(mut block_files) = self.scan_ntfs_block_volumes(
+        if let Ok(mut block_files) = self.scan_block_filesystem_volumes(
             simple_fs_handles.len(),
             &simple_fs_handles,
             &[path],
@@ -536,7 +536,7 @@ impl<'a> IsoScanner<'a> {
         Ok(files)
     }
 
-    fn scan_ntfs_block_volumes(
+    fn scan_block_filesystem_volumes(
         &self,
         volume_index_base: usize,
         simple_fs_handles: &[Handle],
@@ -547,7 +547,7 @@ impl<'a> IsoScanner<'a> {
             .bt
             .locate_handle_buffer(SearchType::ByProtocol(&BlockIO::GUID))?;
         let mut files = Vec::new();
-        let mut ntfs_volume_index = 0usize;
+        let mut block_volume_index = 0usize;
 
         for handle in block_handles.iter().copied() {
             if handle_list_contains(simple_fs_handles, handle) {
@@ -575,58 +575,134 @@ impl<'a> IsoScanner<'a> {
                 Ok(buf) => buf,
                 Err(_) => continue,
             };
-            if shared.read_blocks(0, &mut boot_sector).is_err()
-                || detect_fs_type(&boot_sector) != FileSystemType::Ntfs
-            {
+            if shared.read_blocks(0, &mut boot_sector).is_err() {
                 continue;
             }
 
-            let fs = match Ntfs::open(shared) {
-                Ok(fs) => fs,
-                Err(err) => {
-                    log::warn!("Ignoring NTFS BlockIO volume {:?}: {:?}", handle, err);
-                    continue;
-                }
-            };
+            let fs_type = detect_fs_type(&boot_sector);
+            if !matches!(
+                fs_type,
+                FileSystemType::Fat32 | FileSystemType::ExFat | FileSystemType::Ntfs
+            ) {
+                continue;
+            }
 
-            let volume_index = volume_index_base + ntfs_volume_index;
-            ntfs_volume_index += 1;
-            let config = self.load_ntfs_ventoy_config(&fs);
-            let search_paths = config.search_roots(default_search_paths);
+            let volume_index = volume_index_base + block_volume_index;
             let source_disk = self.resolve_source_disk_identity(handle);
             let source_disk_size = source_disk
                 .map(|disk| disk.disk_size)
                 .or_else(|| block_io_info(&block_io).map(|info| info.total_size))
                 .unwrap_or(0);
 
-            for search_path in &search_paths {
-                let _ = self.scan_ntfs_path(
-                    handle,
-                    volume_index,
-                    source_disk,
-                    source_disk_size,
-                    &block_io,
-                    &fs,
-                    search_path,
-                    extensions,
-                    &config,
-                    0,
-                    &mut files,
-                );
+            match fs_type {
+                FileSystemType::Fat32 => {
+                    let fs = match Fat32::open(shared.clone()) {
+                        Ok(fs) => fs,
+                        Err(err) => {
+                            log::warn!("Ignoring FAT32 BlockIO volume {:?}: {:?}", handle, err);
+                            continue;
+                        }
+                    };
+                    self.scan_block_filesystem_paths(
+                        handle,
+                        volume_index,
+                        source_disk,
+                        source_disk_size,
+                        &block_io,
+                        &fs,
+                        default_search_paths,
+                        extensions,
+                        &mut files,
+                    );
+                }
+                FileSystemType::ExFat => {
+                    let fs = match ExFat::open(shared.clone()) {
+                        Ok(fs) => fs,
+                        Err(err) => {
+                            log::warn!("Ignoring exFAT BlockIO volume {:?}: {:?}", handle, err);
+                            continue;
+                        }
+                    };
+                    self.scan_block_filesystem_paths(
+                        handle,
+                        volume_index,
+                        source_disk,
+                        source_disk_size,
+                        &block_io,
+                        &fs,
+                        default_search_paths,
+                        extensions,
+                        &mut files,
+                    );
+                }
+                FileSystemType::Ntfs => {
+                    let fs = match Ntfs::open(shared) {
+                        Ok(fs) => fs,
+                        Err(err) => {
+                            log::warn!("Ignoring NTFS BlockIO volume {:?}: {:?}", handle, err);
+                            continue;
+                        }
+                    };
+                    self.scan_block_filesystem_paths(
+                        handle,
+                        volume_index,
+                        source_disk,
+                        source_disk_size,
+                        &block_io,
+                        &fs,
+                        default_search_paths,
+                        extensions,
+                        &mut files,
+                    );
+                }
+                _ => {}
             }
+            block_volume_index += 1;
         }
 
         Ok(files)
     }
 
-    fn scan_ntfs_path(
+    fn scan_block_filesystem_paths<F: FileSystem>(
         &self,
         volume_handle: Handle,
         volume_index: usize,
         source_disk: Option<SourceDiskIdentity>,
         source_disk_size: u64,
         block_io: &BlockIO,
-        fs: &Ntfs,
+        fs: &F,
+        default_search_paths: &[&str],
+        extensions: &[&str],
+        files: &mut Vec<IsoFile>,
+    ) {
+        let config = self.load_block_ventoy_config(fs);
+        let search_paths = config.search_roots(default_search_paths);
+
+        for search_path in &search_paths {
+            let _ = self.scan_block_filesystem_path(
+                volume_handle,
+                volume_index,
+                source_disk,
+                source_disk_size,
+                block_io,
+                fs,
+                search_path,
+                extensions,
+                &config,
+                0,
+                files,
+            );
+        }
+    }
+
+    fn scan_block_filesystem_path<F: FileSystem>(
+        &self,
+        volume_handle: Handle,
+        volume_index: usize,
+        source_disk: Option<SourceDiskIdentity>,
+        source_disk_size: u64,
+        block_io: &BlockIO,
+        fs: &F,
         display_path: &str,
         extensions: &[&str],
         config: &VentoyConfig,
@@ -646,7 +722,7 @@ impl<'a> IsoScanner<'a> {
                 if depth >= MAX_SCAN_DEPTH || is_hidden_tree(&entry.name) {
                     continue;
                 }
-                let _ = self.scan_ntfs_path(
+                let _ = self.scan_block_filesystem_path(
                     volume_handle,
                     volume_index,
                     source_disk,
@@ -676,7 +752,13 @@ impl<'a> IsoScanner<'a> {
             {
                 let image_format = ImageFormat::detect_from_path(&full_path);
                 let metadata = self
-                    .resolve_ntfs_image_metadata(block_io, fs, &full_path, entry.size, image_format)
+                    .resolve_block_image_metadata(
+                        block_io,
+                        fs,
+                        &full_path,
+                        entry.size,
+                        image_format,
+                    )
                     .unwrap_or_else(|| ResolvedImageMetadata {
                         block_size: fs.block_size(),
                         extents: Vec::new(),
@@ -901,18 +983,21 @@ impl<'a> IsoScanner<'a> {
         VentoyConfig::parse(&data)
     }
 
-    fn load_ntfs_ventoy_config(&self, fs: &Ntfs) -> VentoyConfig {
-        match self.read_ntfs_ventoy_config(fs) {
+    fn load_block_ventoy_config<F: FileSystem>(&self, fs: &F) -> VentoyConfig {
+        match self.read_block_ventoy_config(fs) {
             Ok(config) => config,
             Err(VentoyConfigError::NotFound) => VentoyConfig::default(),
             Err(err) => {
-                log::warn!("Ignoring NTFS {}: {:?}", VENTOY_CONFIG_PATH, err);
+                log::warn!("Ignoring {} {}: {:?}", F::FS_TYPE, VENTOY_CONFIG_PATH, err);
                 VentoyConfig::default()
             }
         }
     }
 
-    fn read_ntfs_ventoy_config(&self, fs: &Ntfs) -> Result<VentoyConfig, VentoyConfigError> {
+    fn read_block_ventoy_config<F: FileSystem>(
+        &self,
+        fs: &F,
+    ) -> Result<VentoyConfig, VentoyConfigError> {
         let info = fs.stat(VENTOY_CONFIG_PATH).map_err(|err| match err {
             FsError::FileNotFound | FsError::DirectoryNotFound => VentoyConfigError::NotFound,
             _ => VentoyConfigError::InvalidJson,
@@ -1007,10 +1092,10 @@ impl<'a> IsoScanner<'a> {
         })
     }
 
-    fn resolve_ntfs_image_metadata(
+    fn resolve_block_image_metadata<F: FileSystem>(
         &self,
         block_io: &BlockIO,
-        fs: &Ntfs,
+        fs: &F,
         path: &str,
         size: u64,
         image_format: ImageFormat,
