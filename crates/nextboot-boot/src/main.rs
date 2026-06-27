@@ -126,8 +126,13 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
 
             // Phase 5: 启动选中的 ISO
             info!("Phase 5: Booting selected ISO...");
-            let boot_manager =
-                BootManager::new(st.boot_services(), image, &devices[data_device], iso);
+            let boot_manager = BootManager::new(
+                st.boot_services(),
+                st.runtime_services(),
+                image,
+                &devices[data_device],
+                iso,
+            );
             boot_manager.prepare_and_boot()?;
         }
         None => {

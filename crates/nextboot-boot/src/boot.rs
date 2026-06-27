@@ -20,7 +20,8 @@ use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
 use uefi::proto::unsafe_protocol;
 use uefi::table::boot::{BootServices, LoadImageSource};
-use uefi::{Handle, Identify, Status};
+use uefi::table::runtime::{RuntimeServices, VariableAttributes, VariableVendor};
+use uefi::{CString16, Guid, Handle, Identify, Status};
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -61,6 +62,14 @@ const EFI_BOOT_AA64: &str = "\\EFI\\BOOT\\BOOTAA64.EFI";
 const EFI_BOOT_IA32: &str = "\\EFI\\BOOT\\BOOTIA32.EFI";
 const EFI_BOOT_ARM: &str = "\\EFI\\BOOT\\BOOTARM.EFI";
 const WINDOWS_BOOTMGFW_PATH: &str = "/efi/microsoft/boot/bootmgfw.efi";
+const NEXTBOOT_OS_PARAM_NAME: &str = "NextBootOsParam";
+const NEXTBOOT_OS_PARAM_VENDOR_GUID: Guid = uefi::guid!("c1775af2-4211-4f55-9f6f-2cc5ef5667f0");
+const NEXTBOOT_OS_PARAM_MAGIC: &[u8; 8] = b"NBOSPARM";
+const NEXTBOOT_OS_PARAM_VERSION: u16 = 1;
+const NEXTBOOT_OS_PARAM_HEADER_SIZE: usize = 80;
+const NEXTBOOT_OS_PARAM_EXTENT_RECORD_SIZE: usize = 24;
+const NEXTBOOT_OS_PARAM_FLAG_SYNTHETIC_EXTENT: u16 = 0x0001;
+const NEXTBOOT_OS_PARAM_FLAG_EL_TORITO: u16 = 0x0002;
 
 fn default_efi_boot_paths() -> &'static [&'static str] {
     #[cfg(target_arch = "aarch64")]
@@ -129,6 +138,7 @@ fn generic_efi_boot_paths() -> &'static [&'static str] {
 /// 引导管理器
 pub struct BootManager<'a> {
     bt: &'a BootServices,
+    rt: &'a RuntimeServices,
     parent_image: Handle,
     device: &'a StorageDevice,
     iso: &'a IsoFile,
@@ -138,12 +148,14 @@ impl<'a> BootManager<'a> {
     /// 创建新的引导管理器
     pub fn new(
         bt: &'a BootServices,
+        rt: &'a RuntimeServices,
         parent_image: Handle,
         device: &'a StorageDevice,
         iso: &'a IsoFile,
     ) -> Self {
         Self {
             bt,
+            rt,
             parent_image,
             device,
             iso,
@@ -153,7 +165,17 @@ impl<'a> BootManager<'a> {
     /// 准备并执行引导
     pub fn prepare_and_boot(&self) -> uefi::Result<()> {
         info!("Preparing to boot: {}", self.iso.path);
-        let virtual_device = self.create_virtual_block_io()?;
+        let boot_config = self.boot_virtual_config();
+        if let Err(err) = self.publish_os_param(&boot_config) {
+            warn!(
+                "Failed to publish {} for {}: {:?}",
+                NEXTBOOT_OS_PARAM_NAME,
+                self.iso.path,
+                err.status()
+            );
+        }
+
+        let virtual_device = self.create_virtual_block_io(boot_config)?;
 
         match self.boot_virtual_device(&virtual_device) {
             Ok(()) => Ok(()),
@@ -340,7 +362,10 @@ impl<'a> BootManager<'a> {
     }
 
     /// 创建虚拟 Block IO
-    fn create_virtual_block_io(&self) -> uefi::Result<VirtualBootDevice> {
+    fn create_virtual_block_io(
+        &self,
+        config: VirtualDeviceConfig,
+    ) -> uefi::Result<VirtualBootDevice> {
         use nextboot_virtio::protocol::VirtualBlockIoProtocol;
 
         info!("Creating virtual Block IO...");
@@ -349,7 +374,7 @@ impl<'a> BootManager<'a> {
         let source_block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let vbio = self.build_virtual_block_io(self.boot_virtual_config(), &source_block_io)?;
+        let vbio = self.build_virtual_block_io(config, &source_block_io)?;
         let virtual_info = vbio.device_info();
         let registered = VirtualBlockIoProtocol::new(vbio).install(self.bt)?;
         let virtual_handle = registered.handle();
@@ -387,6 +412,104 @@ impl<'a> BootManager<'a> {
             handle: virtual_handle,
             device_path,
         })
+    }
+
+    fn publish_os_param(&self, config: &VirtualDeviceConfig) -> uefi::Result<()> {
+        let data = self.build_os_param_payload(config)?;
+        let name = CString16::try_from(NEXTBOOT_OS_PARAM_NAME)
+            .map_err(|_| uefi::Status::INVALID_PARAMETER)?;
+        let vendor = VariableVendor(NEXTBOOT_OS_PARAM_VENDOR_GUID);
+        let attributes =
+            VariableAttributes::BOOTSERVICE_ACCESS | VariableAttributes::RUNTIME_ACCESS;
+
+        self.rt
+            .set_variable(name.as_ref(), &vendor, attributes, &data)?;
+        info!(
+            "Published {} ({} bytes, {} extent record(s))",
+            NEXTBOOT_OS_PARAM_NAME,
+            data.len(),
+            runtime_extent_count(self.iso)
+        );
+
+        Ok(())
+    }
+
+    fn build_os_param_payload(&self, config: &VirtualDeviceConfig) -> uefi::Result<Vec<u8>> {
+        let path = self.iso.path.as_bytes();
+        let extent_count = runtime_extent_count(self.iso);
+        let path_offset = NEXTBOOT_OS_PARAM_HEADER_SIZE;
+        let path_end = path_offset
+            .checked_add(path.len())
+            .ok_or(uefi::Status::OUT_OF_RESOURCES)?;
+        let extents_offset = align_up(path_end, 8).ok_or(uefi::Status::OUT_OF_RESOURCES)?;
+        let extents_len = extent_count
+            .checked_mul(NEXTBOOT_OS_PARAM_EXTENT_RECORD_SIZE)
+            .ok_or(uefi::Status::OUT_OF_RESOURCES)?;
+        let total_size = extents_offset
+            .checked_add(extents_len)
+            .ok_or(uefi::Status::OUT_OF_RESOURCES)?;
+
+        let mut flags = 0u16;
+        if self.iso.extents.is_empty() {
+            flags |= NEXTBOOT_OS_PARAM_FLAG_SYNTHETIC_EXTENT;
+        }
+        if self.iso.boot_info.is_some() {
+            flags |= NEXTBOOT_OS_PARAM_FLAG_EL_TORITO;
+        }
+
+        let mut data = Vec::new();
+        data.try_reserve_exact(total_size)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        data.extend_from_slice(NEXTBOOT_OS_PARAM_MAGIC);
+        push_u16(&mut data, NEXTBOOT_OS_PARAM_VERSION);
+        push_u16(&mut data, usize_to_u16(NEXTBOOT_OS_PARAM_HEADER_SIZE)?);
+        push_u16(
+            &mut data,
+            usize_to_u16(NEXTBOOT_OS_PARAM_EXTENT_RECORD_SIZE)?,
+        );
+        push_u16(&mut data, flags);
+        push_u32(&mut data, usize_to_u32(total_size)?);
+        push_u32(&mut data, usize_to_u32(self.iso.volume_index)?);
+        push_u32(&mut data, os_type_code(self.iso.os_type));
+        push_u32(&mut data, virtual_device_type_code(config.device_type));
+        push_u64(&mut data, self.iso.size);
+        push_u64(&mut data, self.iso.start_lba);
+        push_u32(&mut data, self.iso.block_size);
+        push_u32(&mut data, config.block_size);
+        push_u32(&mut data, config.physical_block_size);
+        push_u32(&mut data, usize_to_u32(extent_count)?);
+        push_u32(&mut data, usize_to_u32(path_offset)?);
+        push_u32(&mut data, usize_to_u32(path.len())?);
+        push_u32(&mut data, usize_to_u32(extents_offset)?);
+        push_u32(&mut data, usize_to_u32(extents_len)?);
+        debug_assert_eq!(data.len(), NEXTBOOT_OS_PARAM_HEADER_SIZE);
+
+        data.extend_from_slice(path);
+        data.resize(extents_offset, 0);
+        self.append_runtime_extents(&mut data)?;
+        debug_assert_eq!(data.len(), total_size);
+
+        Ok(data)
+    }
+
+    fn append_runtime_extents(&self, data: &mut Vec<u8>) -> uefi::Result<()> {
+        if self.iso.extents.is_empty() {
+            let block_count = div_round_up(self.iso.size, u64::from(self.iso.block_size))
+                .ok_or(uefi::Status::INVALID_PARAMETER)?;
+            push_extent_record(data, 0, self.iso.start_lba, block_count);
+            return Ok(());
+        }
+
+        for extent in &self.iso.extents {
+            push_extent_record(
+                data,
+                extent.virtual_block_start,
+                extent.physical_lba,
+                extent.block_count,
+            );
+        }
+
+        Ok(())
     }
 
     fn boot_virtual_config(&self) -> VirtualDeviceConfig {
@@ -833,6 +956,81 @@ fn normalize_load_file_key(path: &str) -> String {
     let mut normalized = normalize_iso_path(path);
     normalized.make_ascii_lowercase();
     normalized
+}
+
+fn runtime_extent_count(iso: &IsoFile) -> usize {
+    if iso.extents.is_empty() {
+        1
+    } else {
+        iso.extents.len()
+    }
+}
+
+fn align_up(value: usize, align: usize) -> Option<usize> {
+    debug_assert!(align.is_power_of_two());
+    value
+        .checked_add(align - 1)
+        .map(|value| value & !(align - 1))
+}
+
+fn div_round_up(value: u64, divisor: u64) -> Option<u64> {
+    if divisor == 0 {
+        return None;
+    }
+
+    value.checked_add(divisor - 1).map(|value| value / divisor)
+}
+
+fn usize_to_u16(value: usize) -> uefi::Result<u16> {
+    u16::try_from(value).map_err(|_| uefi::Status::OUT_OF_RESOURCES.into())
+}
+
+fn usize_to_u32(value: usize) -> uefi::Result<u32> {
+    u32::try_from(value).map_err(|_| uefi::Status::OUT_OF_RESOURCES.into())
+}
+
+fn os_type_code(os_type: OsType) -> u32 {
+    match os_type {
+        OsType::Unknown => 0,
+        OsType::Windows => 1,
+        OsType::WinPE => 2,
+        OsType::Linux => 10,
+        OsType::Ubuntu => 11,
+        OsType::Debian => 12,
+        OsType::Fedora => 13,
+        OsType::Arch => 14,
+    }
+}
+
+fn virtual_device_type_code(device_type: VirtualDeviceType) -> u32 {
+    match device_type {
+        VirtualDeviceType::DvdRom => 1,
+        VirtualDeviceType::HardDisk => 2,
+        VirtualDeviceType::UsbMassStorage => 3,
+    }
+}
+
+fn push_u16(data: &mut Vec<u8>, value: u16) {
+    data.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32(data: &mut Vec<u8>, value: u32) {
+    data.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u64(data: &mut Vec<u8>, value: u64) {
+    data.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_extent_record(
+    data: &mut Vec<u8>,
+    virtual_block_start: u64,
+    physical_lba: u64,
+    block_count: u64,
+) {
+    push_u64(data, virtual_block_start);
+    push_u64(data, physical_lba);
+    push_u64(data, block_count);
 }
 
 unsafe fn load_file_path_from_device_path(file_path: *const FfiDevicePath) -> Option<String> {
