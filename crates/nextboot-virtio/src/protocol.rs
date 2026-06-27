@@ -13,6 +13,8 @@ use uefi::proto::device_path::DevicePath;
 #[cfg(not(test))]
 use uefi::proto::media::block::BlockIO;
 #[cfg(not(test))]
+use uefi::proto::media::disk::DiskIo;
+#[cfg(not(test))]
 use uefi::table::boot::BootServices;
 #[cfg(not(test))]
 use uefi::{Handle, Identify};
@@ -25,6 +27,11 @@ pub const BLOCK_IO_GUID: [u8; 16] = [
 /// UEFI Block IO 2 Protocol GUID
 pub const BLOCK_IO_2_GUID: [u8; 16] = [
     0xa8, 0x63, 0x9a, 0x14, 0x5d, 0x37, 0x7b, 0x4e, 0xa9, 0x88, 0x6c, 0x42, 0xf4, 0x3e, 0x4c, 0x9a,
+];
+
+/// UEFI Disk IO Protocol GUID
+pub const DISK_IO_GUID: [u8; 16] = [
+    0x71, 0x51, 0x34, 0xce, 0x0b, 0xba, 0xd2, 0x11, 0x8e, 0x4f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b,
 ];
 
 /// 设备路径协议 GUID
@@ -309,6 +316,16 @@ pub struct BlockIoMedia {
     pub optimal_transfer_length_granularity: u32,
 }
 
+/// Disk IO Protocol 结构体 (UEFI 定义)
+#[repr(C)]
+pub struct DiskIoProtocol {
+    pub revision: u64,
+    pub read_disk:
+        extern "efiapi" fn(*mut DiskIoProtocol, u32, u64, usize, *mut core::ffi::c_void) -> u64,
+    pub write_disk:
+        extern "efiapi" fn(*mut DiskIoProtocol, u32, u64, usize, *const core::ffi::c_void) -> u64,
+}
+
 impl BlockIoMedia {
     /// 从虚拟媒体信息创建
     pub fn from_virtual_info(info: &VirtualMediaInfo) -> Self {
@@ -367,6 +384,7 @@ impl From<VirtIoError> for UefiStatus {
 #[repr(C)]
 pub struct VirtualBlockIoProtocol {
     protocol: BlockIoProtocol,
+    disk_io: DiskIoProtocol,
     media: BlockIoMedia,
     vbio: core::cell::UnsafeCell<VirtualBlockIo>,
 }
@@ -385,6 +403,11 @@ impl VirtualBlockIoProtocol {
                 write_blocks: Self::write_blocks_handler,
                 flush_blocks: Self::flush_handler,
             },
+            disk_io: DiskIoProtocol {
+                revision: 0x00010000,
+                read_disk: Self::read_disk_handler,
+                write_disk: Self::write_disk_handler,
+            },
             media,
             vbio: core::cell::UnsafeCell::new(vbio),
         }
@@ -396,6 +419,11 @@ impl VirtualBlockIoProtocol {
         &mut self.protocol
     }
 
+    /// 获取 Disk IO 协议指针
+    pub fn disk_io_ptr(&mut self) -> *mut DiskIoProtocol {
+        &mut self.disk_io
+    }
+
     /// 安装为 UEFI Block IO 协议。
     #[cfg(not(test))]
     pub fn install(self, bt: &BootServices) -> uefi::Result<RegisteredVirtualBlockIo> {
@@ -404,11 +432,24 @@ impl VirtualBlockIoProtocol {
         let handle =
             unsafe { bt.install_protocol_interface(None, &BlockIO::GUID, block_io_interface) }?;
 
+        let disk_io_interface = protocol.disk_io_ptr().cast::<c_void>();
+        if let Err(err) =
+            unsafe { bt.install_protocol_interface(Some(handle), &DiskIo::GUID, disk_io_interface) }
+        {
+            let _ = unsafe {
+                bt.uninstall_protocol_interface(handle, &BlockIO::GUID, block_io_interface)
+            };
+            return Err(err);
+        }
+
         let mut device_path = protocol.device_path_bytes().into_boxed_slice();
         let device_path_interface = device_path.as_mut_ptr().cast::<c_void>();
         if let Err(err) = unsafe {
             bt.install_protocol_interface(Some(handle), &DevicePath::GUID, device_path_interface)
         } {
+            let _ = unsafe {
+                bt.uninstall_protocol_interface(handle, &DiskIo::GUID, disk_io_interface)
+            };
             let _ = unsafe {
                 bt.uninstall_protocol_interface(handle, &BlockIO::GUID, block_io_interface)
             };
@@ -519,6 +560,60 @@ impl VirtualBlockIoProtocol {
             .unwrap_or_else(|err| UefiStatus::from(err) as u64)
     }
 
+    /// ReadDisk 处理函数
+    extern "efiapi" fn read_disk_handler(
+        this: *mut DiskIoProtocol,
+        media_id: u32,
+        offset: u64,
+        buffer_size: usize,
+        buffer: *mut core::ffi::c_void,
+    ) -> u64 {
+        let Some(wrapper) = Self::from_disk_protocol(this) else {
+            return UefiStatus::InvalidParameter as u64;
+        };
+
+        if buffer_size == 0 {
+            return UefiStatus::Success as u64;
+        }
+        if buffer.is_null() {
+            return UefiStatus::InvalidParameter as u64;
+        }
+
+        let buf = unsafe { core::slice::from_raw_parts_mut(buffer.cast::<u8>(), buffer_size) };
+        let vbio = unsafe { &*wrapper.vbio.get() };
+
+        vbio.read_bytes(media_id, offset, buf)
+            .map(|_| UefiStatus::Success as u64)
+            .unwrap_or_else(|err| UefiStatus::from(err) as u64)
+    }
+
+    /// WriteDisk 处理函数
+    extern "efiapi" fn write_disk_handler(
+        this: *mut DiskIoProtocol,
+        media_id: u32,
+        offset: u64,
+        buffer_size: usize,
+        buffer: *const core::ffi::c_void,
+    ) -> u64 {
+        let Some(wrapper) = Self::from_disk_protocol(this) else {
+            return UefiStatus::InvalidParameter as u64;
+        };
+
+        if buffer_size == 0 {
+            return UefiStatus::Success as u64;
+        }
+        if buffer.is_null() {
+            return UefiStatus::InvalidParameter as u64;
+        }
+
+        let buf = unsafe { core::slice::from_raw_parts(buffer.cast::<u8>(), buffer_size) };
+        let vbio = unsafe { &*wrapper.vbio.get() };
+
+        vbio.write_blocks(media_id, offset, buf)
+            .map(|_| UefiStatus::Success as u64)
+            .unwrap_or_else(|err| UefiStatus::from(err) as u64)
+    }
+
     /// Flush 处理函数
     extern "efiapi" fn flush_handler(this: *mut BlockIoProtocol) -> u64 {
         let Some(wrapper) = Self::from_protocol(this) else {
@@ -539,6 +634,16 @@ impl VirtualBlockIoProtocol {
         // `protocol` is the first field and the type is repr(C), so both
         // pointers have the same address.
         Some(unsafe { &mut *(this.cast::<Self>()) })
+    }
+
+    fn from_disk_protocol(this: *mut DiskIoProtocol) -> Option<&'static mut Self> {
+        if this.is_null() {
+            return None;
+        }
+
+        let offset = core::mem::offset_of!(Self, disk_io);
+        let ptr = unsafe { this.cast::<u8>().sub(offset).cast::<Self>() };
+        Some(unsafe { &mut *ptr })
     }
 }
 
@@ -565,6 +670,10 @@ impl RegisteredVirtualBlockIo {
 
     pub fn protocol_ptr(&mut self) -> *mut BlockIoProtocol {
         self.protocol.as_ptr()
+    }
+
+    pub fn disk_io_ptr(&mut self) -> *mut DiskIoProtocol {
+        self.protocol.disk_io_ptr()
     }
 
     pub fn device_path_ptr(&mut self) -> *mut u8 {
@@ -730,6 +839,33 @@ mod tests {
                 buf.as_ptr().cast(),
             )
         };
+
+        assert_eq!(status, UefiStatus::WriteProtected as u64);
+    }
+
+    #[test]
+    fn read_disk_handler_supports_unaligned_byte_reads() {
+        let mut protocol = make_protocol();
+        let ptr = protocol.disk_io_ptr();
+        let media_id = protocol.media.media_id;
+        let mut buf = [0u8; 2];
+
+        let status =
+            unsafe { ((*ptr).read_disk)(ptr, media_id, 511, buf.len(), buf.as_mut_ptr().cast()) };
+
+        assert_eq!(status, UefiStatus::Success as u64);
+        assert_eq!(buf, [10, 11]);
+    }
+
+    #[test]
+    fn write_disk_handler_stays_write_protected() {
+        let mut protocol = make_protocol();
+        let ptr = protocol.disk_io_ptr();
+        let media_id = protocol.media.media_id;
+        let buf = [0u8; 3];
+
+        let status =
+            unsafe { ((*ptr).write_disk)(ptr, media_id, 7, buf.len(), buf.as_ptr().cast()) };
 
         assert_eq!(status, UefiStatus::WriteProtected as u64);
     }

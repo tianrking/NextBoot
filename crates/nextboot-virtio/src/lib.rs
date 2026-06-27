@@ -299,6 +299,38 @@ impl VirtualBlockIo {
         self.read_virtual_bytes(reader.as_ref(), virtual_offset, buf)
     }
 
+    /// 读取虚拟介质上的任意字节范围。
+    ///
+    /// Disk IO 协议和部分文件系统驱动会发起非块对齐读取，因此这里直接
+    /// 复用字节级映射表，而不是要求调用方按 Block IO 粒度对齐。
+    pub fn read_bytes(
+        &self,
+        media_id: u32,
+        virtual_offset: u64,
+        buf: &mut [u8],
+    ) -> Result<(), VirtIoError> {
+        if media_id != self.media_id {
+            return Err(VirtIoError::MediaChanged);
+        }
+
+        if buf.is_empty() {
+            return Ok(());
+        }
+
+        let end = virtual_offset
+            .checked_add(buf.len() as u64)
+            .ok_or(VirtIoError::OutOfBounds)?;
+        if end > self.config.iso_size {
+            return Err(VirtIoError::OutOfBounds);
+        }
+
+        let reader = self
+            .physical_read
+            .as_ref()
+            .ok_or(VirtIoError::NoPhysicalRead)?;
+        self.read_virtual_bytes(reader.as_ref(), virtual_offset, buf)
+    }
+
     fn read_virtual_bytes(
         &self,
         reader: &dyn PhysicalReader,
@@ -738,5 +770,33 @@ mod tests {
         assert!(buf[..512].iter().all(|b| *b == 7));
         assert!(buf[512..600].iter().all(|b| *b == 8));
         assert!(buf[600..].iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn test_virtual_block_io_reads_unaligned_bytes() {
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::DvdRom, 0, 4096, 2048)
+            .with_physical_block_size(4096);
+        let extents = [(0, 2, 1)];
+        let mut vbio = VirtualBlockIo::from_file_extents(config, &extents);
+        vbio.set_physical_read(patterned_4k_read);
+
+        let mut buf = [0u8; 3];
+        vbio.read_bytes(vbio.media_id(), 1023, &mut buf)
+            .expect("unaligned byte read");
+
+        assert_eq!(buf, [32, 33, 33]);
+    }
+
+    #[test]
+    fn test_virtual_block_io_rejects_out_of_range_byte_read() {
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::HardDisk, 0, 600, 512);
+        let mut vbio = VirtualBlockIo::new(config);
+        vbio.set_physical_read(fill_lba_read);
+
+        let mut buf = [0u8; 2];
+        assert!(matches!(
+            vbio.read_bytes(vbio.media_id(), 599, &mut buf),
+            Err(VirtIoError::OutOfBounds)
+        ));
     }
 }
