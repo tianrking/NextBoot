@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # NextBoot QEMU Test Script
 #
-# Creates a GPT-partitioned FAT32 disk image with NextBoot installed as the
-# removable/fallback UEFI bootloader.  The image can be attached through several
-# QEMU storage buses so fixed-disk, NVMe, SATA, USB, and virtio paths can be
-# tested without rewriting real media.
+# Creates GPT test disk images with NextBoot installed as the removable/fallback
+# UEFI bootloader.  Split layouts use a FAT32 ESP plus an exFAT or FAT32 Data
+# partition so fixed-disk, NVMe, SATA, USB, and virtio paths can be tested
+# without rewriting real media.
 #
 # Usage:
 #   ./scripts/run-qemu.sh
 #   ./scripts/run-qemu.sh release
 #   ./scripts/run-qemu.sh --bus nvme --image ~/Downloads/ubuntu.iso
 #   ./scripts/run-qemu.sh --bus nvme --sector-size 4096 --no-run
-#   ./scripts/run-qemu.sh --bus nvme --layout split --image ~/Downloads/ubuntu.iso
+#   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --image ~/Downloads/ubuntu.iso
 #   ./scripts/run-qemu.sh --bus usb --mode release --no-run
 
 set -eo pipefail
@@ -31,6 +31,7 @@ DISK_SIZE_MB=256
 DISK_SIZE_SET=0
 SECTOR_SIZE=512
 LAYOUT="single"
+DATA_FS="exfat"
 DISK_IMG=""
 NO_RUN=0
 MEMORY="1024M"
@@ -51,6 +52,7 @@ Options:
   --sector-size BYTES
                      Logical and physical disk sector size: 512 or 4096
   --layout LAYOUT    Disk layout: single or split (default: single)
+  --data-fs FS       Data filesystem for split layout: exfat or fat32 (default: exfat)
   --disk-image PATH  Output disk image path
   --memory SIZE      QEMU guest memory (default: 1024M)
   --no-run           Create the disk image and print the QEMU command only
@@ -60,7 +62,7 @@ Examples:
   $0 --bus nvme --image ~/Downloads/Win11.iso
   $0 release --bus sata --disk-size 4096
   $0 --bus nvme --sector-size 4096 --no-run
-  $0 --bus nvme --layout split --image ~/Downloads/Win11.iso
+  $0 --bus nvme --layout split --data-fs exfat --image ~/Downloads/Win11.iso
   $0 --bus usb --no-run
 USAGE
 }
@@ -119,6 +121,11 @@ while [ $# -gt 0 ]; do
             LAYOUT="$2"
             shift 2
             ;;
+        --data-fs)
+            [ $# -ge 2 ] || die "--data-fs requires a value"
+            DATA_FS="$2"
+            shift 2
+            ;;
         --disk-image)
             [ $# -ge 2 ] || die "--disk-image requires a path"
             DISK_IMG="$2"
@@ -167,6 +174,15 @@ case "$LAYOUT" in
     *) die "--layout must be single or split" ;;
 esac
 
+case "$DATA_FS" in
+    exfat|fat32) ;;
+    *) die "--data-fs must be exfat or fat32" ;;
+esac
+
+if [ "$LAYOUT" = "single" ] && [ "$DATA_FS" != "exfat" ]; then
+    warn "--data-fs is ignored for single layout"
+fi
+
 if [ "$DISK_SIZE_SET" -eq 0 ]; then
     if [ "$SECTOR_SIZE" -eq 4096 ]; then
         if [ "$LAYOUT" = "split" ]; then
@@ -212,12 +228,15 @@ info "EFI file: ${EFI_FILE}"
 info "Storage bus: ${BUS}"
 info "Sector size: ${SECTOR_SIZE}"
 info "Disk layout: ${LAYOUT}"
+if [ "$LAYOUT" = "split" ]; then
+    info "Data filesystem: ${DATA_FS}"
+fi
 info "Disk image: ${DISK_IMG}"
 
 require_command python3 "python3 is required to create the GPT disk image"
 
-warn "Creating ${LAYOUT} GPT/FAT32 test disk image..."
-PY_ARGS=("$DISK_IMG" "$DISK_SIZE_MB" "$SECTOR_SIZE" "$LAYOUT" "$EFI_FILE")
+warn "Creating ${LAYOUT} GPT test disk image..."
+PY_ARGS=("$DISK_IMG" "$DISK_SIZE_MB" "$SECTOR_SIZE" "$LAYOUT" "$DATA_FS" "$EFI_FILE")
 if [ "${#IMAGES[@]}" -gt 0 ]; then
     PY_ARGS+=("${IMAGES[@]}")
 fi
@@ -234,12 +253,15 @@ path = sys.argv[1]
 size_mb = int(sys.argv[2])
 sector_size = int(sys.argv[3])
 layout = sys.argv[4]
-efi_file = sys.argv[5]
-image_files = sys.argv[6:]
+data_fs = sys.argv[5]
+efi_file = sys.argv[6]
+image_files = sys.argv[7:]
 if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
     raise SystemExit("layout must be single or split")
+if data_fs not in ("exfat", "fat32"):
+    raise SystemExit("data filesystem must be exfat or fat32")
 total_bytes = size_mb * 1024 * 1024
 if total_bytes % sector_size != 0:
     raise SystemExit("disk size must be aligned to the sector size")
@@ -384,14 +406,43 @@ def fat32_geometry(part_sectors):
 
     return reserved_sectors, num_fats, sectors_per_cluster, fat_size, cluster_count
 
-def make_partition(name, label, type_guid, start_lba, end_lba, include_efi, include_images):
+def log2_power_of_two(value):
+    if value <= 0 or value & (value - 1):
+        raise SystemExit(f"{value} is not a power of two")
+    return value.bit_length() - 1
+
+def exfat_geometry(part_sectors):
+    boot_region_sectors = 24
+    sectors_per_cluster = max(1, 4096 // sector_size)
+    fat_offset = boot_region_sectors
+    fat_length = 1
+    while True:
+        cluster_heap_offset = fat_offset + fat_length
+        if part_sectors <= cluster_heap_offset:
+            raise SystemExit("partition is too small for exFAT")
+        cluster_count = (part_sectors - cluster_heap_offset) // sectors_per_cluster
+        required = math.ceil((cluster_count + 2) * 4 / sector_size)
+        if required <= fat_length:
+            break
+        fat_length = required
+    if cluster_count < 16:
+        raise SystemExit("partition is too small for exFAT")
+    return fat_offset, fat_length, cluster_heap_offset, cluster_count, sectors_per_cluster
+
+def make_partition(name, label, fs_type, type_guid, start_lba, end_lba, include_efi, include_images):
     if start_lba < first_usable_lba or end_lba > last_usable_lba or end_lba < start_lba:
         raise SystemExit(f"invalid partition range for {name}")
     part_sectors = end_lba - start_lba + 1
-    fat32_geometry(part_sectors)
+    if fs_type == "fat32":
+        fat32_geometry(part_sectors)
+    elif fs_type == "exfat":
+        exfat_geometry(part_sectors)
+    else:
+        raise SystemExit(f"unsupported test partition filesystem: {fs_type}")
     return {
         "name": name,
         "label": label,
+        "fs_type": fs_type,
         "type_guid": type_guid,
         "guid": uuid.uuid5(
             uuid.NAMESPACE_URL,
@@ -410,6 +461,7 @@ if layout == "single":
         make_partition(
             "NEXBOOT",
             "NEXBOOT",
+            "fat32",
             esp_type,
             single_start_lba,
             last_usable_lba,
@@ -427,6 +479,7 @@ else:
         make_partition(
             "NEXBOOT_EFI",
             "NEXBOOT",
+            "fat32",
             esp_type,
             esp_start_lba,
             esp_end_lba,
@@ -438,6 +491,7 @@ else:
         make_partition(
             "NEXBOOT_DATA",
             "NEXTDATA",
+            data_fs,
             ms_basic_type,
             data_start_lba,
             data_end_lba,
@@ -599,6 +653,155 @@ def write_fat32_volume(f, part):
         f.seek(fat_offset + index * fat_size * sector_size)
         f.write(fat)
 
+def exfat_entry_set(name, attr, first_cluster, size, contiguous):
+    encoded_name = name.encode("utf-16le")
+    code_units = [encoded_name[i] | (encoded_name[i + 1] << 8) for i in range(0, len(encoded_name), 2)]
+    name_entries = max(1, math.ceil(len(code_units) / 15))
+    secondary_count = 1 + name_entries
+
+    file_entry = bytearray(32)
+    file_entry[0] = 0x85
+    file_entry[1] = secondary_count
+    struct.pack_into("<H", file_entry, 4, attr)
+
+    stream_entry = bytearray(32)
+    stream_entry[0] = 0xC0
+    stream_entry[1] = 0x02 if contiguous else 0
+    stream_entry[3] = len(code_units)
+    struct.pack_into("<Q", stream_entry, 8, size)
+    struct.pack_into("<I", stream_entry, 20, first_cluster)
+    struct.pack_into("<Q", stream_entry, 24, size)
+
+    entries = [bytes(file_entry), bytes(stream_entry)]
+    for index in range(name_entries):
+        name_entry = bytearray(32)
+        name_entry[0] = 0xC1
+        chunk = code_units[index * 15 : (index + 1) * 15]
+        for char_index, value in enumerate(chunk):
+            struct.pack_into("<H", name_entry, 2 + char_index * 2, value)
+        entries.append(bytes(name_entry))
+
+    return b"".join(entries)
+
+def write_exfat_volume(f, part):
+    part_start_lba = part["start_lba"]
+    part_sectors = part["end_lba"] - part["start_lba"] + 1
+    partition_offset = part_start_lba * sector_size
+    fat_offset, fat_length, cluster_heap_offset, cluster_count, sectors_per_cluster = (
+        exfat_geometry(part_sectors)
+    )
+    cluster_size = sectors_per_cluster * sector_size
+    fat = bytearray(fat_length * sector_size)
+    next_cluster = 2
+
+    def set_fat(cluster, value):
+        struct.pack_into("<I", fat, cluster * 4, value & 0xFFFFFFFF)
+
+    def cluster_offset(cluster):
+        return partition_offset + (
+            cluster_heap_offset + (cluster - 2) * sectors_per_cluster
+        ) * sector_size
+
+    def allocate_chain(count):
+        nonlocal next_cluster
+        if count == 0:
+            return []
+        if next_cluster + count > cluster_count + 2:
+            raise SystemExit(f"{part['name']} is too small for requested files")
+        chain = list(range(next_cluster, next_cluster + count))
+        next_cluster += count
+        for current, nxt in zip(chain, chain[1:]):
+            set_fat(current, nxt)
+        set_fat(chain[-1], 0xFFFFFFFF)
+        return chain
+
+    def write_cluster(cluster, data):
+        f.seek(cluster_offset(cluster))
+        if len(data) > cluster_size:
+            raise SystemExit("internal error: exFAT cluster write too large")
+        f.write(data)
+        if len(data) < cluster_size:
+            f.write(bytes(cluster_size - len(data)))
+
+    def write_chain(chain, data):
+        content = data + bytes(len(chain) * cluster_size - len(data))
+        for index, cluster in enumerate(chain):
+            write_cluster(cluster, content[index * cluster_size : (index + 1) * cluster_size])
+
+    def copy_file(source):
+        size = os.path.getsize(source)
+        clusters_needed = math.ceil(size / cluster_size) if size else 0
+        chain = allocate_chain(clusters_needed)
+        with open(source, "rb") as src:
+            for cluster in chain:
+                write_cluster(cluster, src.read(cluster_size))
+        return (chain[0] if chain else 0, size)
+
+    def write_directory(entry_sets):
+        content = b"".join(entry_sets)
+        clusters_needed = max(1, math.ceil((len(content) + 32) / cluster_size))
+        chain = allocate_chain(clusters_needed)
+        write_chain(chain, content)
+        return chain[0], len(chain) * cluster_size
+
+    set_fat(0, 0xFFFFFFF8)
+    set_fat(1, 0xFFFFFFFF)
+
+    root_entries = []
+
+    if part["include_efi"]:
+        efi_file_cluster, efi_file_size = copy_file(efi_file)
+        boot_entries = [
+            exfat_entry_set("BOOTX64.EFI", 0x0020, efi_file_cluster, efi_file_size, True)
+        ]
+        boot_cluster, boot_size = write_directory(boot_entries)
+        efi_entries = [exfat_entry_set("BOOT", 0x0010, boot_cluster, boot_size, False)]
+        efi_cluster, efi_size = write_directory(efi_entries)
+        root_entries.append(exfat_entry_set("EFI", 0x0010, efi_cluster, efi_size, False))
+
+    if part["include_images"]:
+        iso_entries = []
+        for image in image_files:
+            file_cluster, file_size = copy_file(image)
+            iso_entries.append(
+                exfat_entry_set(os.path.basename(image), 0x0020, file_cluster, file_size, True)
+            )
+        iso_cluster, iso_size = write_directory(iso_entries)
+        root_entries.append(exfat_entry_set("ISO", 0x0010, iso_cluster, iso_size, False))
+
+    root_cluster, _root_size = write_directory(root_entries)
+
+    bytes_per_sector_shift = log2_power_of_two(sector_size)
+    sectors_per_cluster_shift = log2_power_of_two(sectors_per_cluster)
+    volume_id = int(time.time()) & 0xFFFFFFFF
+
+    boot_sector = bytearray(sector_size)
+    boot_sector[0:3] = b"\xeb\x76\x90"
+    boot_sector[3:11] = b"EXFAT   "
+    struct.pack_into("<Q", boot_sector, 64, part_start_lba)
+    struct.pack_into("<Q", boot_sector, 72, part_sectors)
+    struct.pack_into("<I", boot_sector, 80, fat_offset)
+    struct.pack_into("<I", boot_sector, 84, fat_length)
+    struct.pack_into("<I", boot_sector, 88, cluster_heap_offset)
+    struct.pack_into("<I", boot_sector, 92, cluster_count)
+    struct.pack_into("<I", boot_sector, 96, root_cluster)
+    struct.pack_into("<I", boot_sector, 100, volume_id)
+    struct.pack_into("<H", boot_sector, 104, 0x0100)
+    struct.pack_into("<H", boot_sector, 106, 0)
+    boot_sector[108] = bytes_per_sector_shift
+    boot_sector[109] = sectors_per_cluster_shift
+    boot_sector[110] = 1
+    boot_sector[111] = 0x80
+    boot_sector[112] = min(100, int((next_cluster - 2) * 100 / max(1, cluster_count)))
+    boot_sector[510:512] = b"\x55\xaa"
+
+    f.seek(partition_offset)
+    f.write(boot_sector)
+    f.seek(partition_offset + 12 * sector_size)
+    f.write(boot_sector)
+    f.seek(partition_offset + fat_offset * sector_size)
+    f.write(fat)
+
 with open(path, "wb") as f:
     f.truncate(total_sectors * sector_size)
 
@@ -652,7 +855,10 @@ with open(path, "wb") as f:
     f.write(make_header(last_lba, 1, backup_entries_lba))
 
     for part in partitions:
-        write_fat32_volume(f, part)
+        if part["fs_type"] == "exfat":
+            write_exfat_volume(f, part)
+        else:
+            write_fat32_volume(f, part)
 PY
 
 info "Disk image created: ${DISK_IMG}"
