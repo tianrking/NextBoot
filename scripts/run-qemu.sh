@@ -16,6 +16,7 @@
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vlnk-iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
+#   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-static-vdi
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
 #   TARGET=i686-unknown-uefi ./scripts/run-qemu.sh --bus virtio --smoke-efi-iso
 #   TARGET=aarch64-unknown-uefi ./scripts/run-qemu.sh --bus virtio --smoke-efi-iso
@@ -52,7 +53,9 @@ SMOKE_VHDX=0
 SMOKE_SPARSE_VHDX=0
 SMOKE_PARTIAL_VHDX=0
 SMOKE_VDI=0
+SMOKE_STATIC_VDI=0
 SMOKE_SPARSE_VDI=0
+SMOKE_DISCARDED_VDI=0
 SMOKE_AUTO_MEMDISK=0
 SMOKE_MENU_MEMDISK=0
 SMOKE_WINDOWS_ISO=0
@@ -258,11 +261,25 @@ while [ $# -gt 0 ]; do
             SMOKE_VDI=1
             shift
             ;;
+        --smoke-static-vdi)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_VDI=1
+            SMOKE_STATIC_VDI=1
+            shift
+            ;;
         --smoke-sparse-vdi)
             SMOKE=1
             SMOKE_BOOT=1
             SMOKE_VDI=1
             SMOKE_SPARSE_VDI=1
+            shift
+            ;;
+        --smoke-discarded-vdi)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_VDI=1
+            SMOKE_DISCARDED_VDI=1
             shift
             ;;
         --smoke-auto-memdisk)

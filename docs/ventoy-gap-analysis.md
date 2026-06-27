@@ -24,11 +24,11 @@ workflows and which gaps are still worth pursuing.
   auto-install smoke coverage.
 - Windows ISO chain loading plus WIMBOOT fallback asset integration.
 - Auto memdisk and menu memdisk smoke paths.
-- Raw `.img`, fixed VHD, dynamic VHD, VHDX, and dynamic VDI virtual hard-disk
-  boot smoke coverage with an inner GPT/FAT32 ESP.
+- Raw `.img`, fixed VHD, dynamic VHD, VHDX, and dynamic/static VDI virtual
+  hard-disk boot smoke coverage with an inner GPT/FAT32 ESP.
 - Sparse VHDX `ZERO` BAT entries, self-contained VHDX `PARTIALLY_PRESENT`
-  entries with full sector bitmaps, and sparse VDI unallocated block-map
-  entries in virtual hard-disk boot smoke coverage.
+  entries with full sector bitmaps, and sparse VDI unallocated or discarded
+  block-map entries in virtual hard-disk boot smoke coverage.
 - Local Secure Boot signing workflow: `scripts/secure-boot.sh` can generate a
   local test certificate, sign the UEFI binary with sbsigntools, verify the
   signed binary where `sbverify` is available, and document firmware db or shim
@@ -51,10 +51,10 @@ workflows and which gaps are still worth pursuing.
   SBAT/revocation policy, and release key management before public Secure Boot
   distribution is user-friendly.
 - Broader image types: raw IMG, fixed/dynamic VHD, VHDX, sparse VHDX,
-  self-contained partially-present VHDX, dynamic VDI, and sparse VDI have
-  virtual hard-disk boot smoke coverage now; differencing VHDX/VDI parent
-  chains where missing blocks must be read from a parent image still need a
-  compatibility story.
+  self-contained partially-present VHDX, dynamic/static VDI, and sparse VDI
+  unallocated/discarded blocks have virtual hard-disk boot smoke coverage now;
+  differencing VHDX/VDI parent chains where missing blocks must be read from a
+  parent image still need a compatibility story.
 - More filesystems: Ventoy covers a broader set of user storage formats. UDF,
   ext2/3/4, and XFS extent/local-directory/dir2-directory reads are now covered
   in the QEMU data partition and flash paths, including 512B and 4K-sector XFS

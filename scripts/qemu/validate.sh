@@ -61,6 +61,11 @@ validate_qemu_smoke_args() {
         die "--smoke-sparse-vhdx and --smoke-partial-vhdx cannot be combined"
     fi
 
+    VDI_VARIANT_COUNT=$((SMOKE_STATIC_VDI + SMOKE_SPARSE_VDI + SMOKE_DISCARDED_VDI))
+    if [ "$VDI_VARIANT_COUNT" -gt 1 ]; then
+        die "--smoke-static-vdi, --smoke-sparse-vdi, and --smoke-discarded-vdi are mutually exclusive"
+    fi
+
     SMOKE_DISK_IMAGE_COUNT=$((SMOKE_RAW_IMG + SMOKE_FIXED_VHD + SMOKE_DYNAMIC_VHD + SMOKE_VHDX + SMOKE_VDI))
     if [ "$SMOKE_DISK_IMAGE_COUNT" -gt 1 ]; then
         die "--smoke-raw-img, --smoke-vhd, --smoke-dynamic-vhd, --smoke-vhdx, and --smoke-vdi are mutually exclusive"

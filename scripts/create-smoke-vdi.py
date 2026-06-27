@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wrap a raw disk image as a dynamic VDI for NextBoot smoke tests."""
+"""Wrap a raw disk image as a VDI for NextBoot smoke tests."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ HEADER_STRUCT_SIZE = 0x180
 SIGNATURE = 0xBEDA107F
 VERSION_1_1 = 0x00010001
 IMAGE_TYPE_DYNAMIC = 1
+IMAGE_TYPE_STATIC = 2
+DISCARDED_BLOCK = 0xFFFFFFFE
 UNALLOCATED_BLOCK = 0xFFFFFFFF
 BLOCK_SIZE = 1024 * 1024
 SECTOR_SIZE = 512
@@ -43,25 +45,28 @@ def is_zero_block(chunk: bytes) -> bool:
     return not any(chunk)
 
 
-def dynamic_vdi(raw: bytes, source: Path, sparse: bool) -> bytes:
+def vdi_image(raw: bytes, source: Path, image_format: str, sparse_mode: str) -> bytes:
     if not raw or len(raw) % SECTOR_SIZE:
         raise ValueError("VDI payload size must be a non-zero multiple of 512 bytes")
+    if image_format == "static" and sparse_mode != "allocated":
+        raise ValueError("static VDI cannot use sparse block-map entries")
 
     block_count = ceil_div(len(raw), BLOCK_SIZE)
     chunks = [raw[index * BLOCK_SIZE : (index + 1) * BLOCK_SIZE] for index in range(block_count)]
-    allocated = [not sparse or not is_zero_block(chunk) for chunk in chunks]
+    allocated = [sparse_mode == "allocated" or not is_zero_block(chunk) for chunk in chunks]
     allocated_count = sum(1 for value in allocated if value)
     blocks_offset = HEADER_SIZE
     map_size = align_up(block_count * 4, SECTOR_SIZE)
     data_offset = blocks_offset + map_size
+    image_type = IMAGE_TYPE_STATIC if image_format == "static" else IMAGE_TYPE_DYNAMIC
 
     header = bytearray(HEADER_SIZE)
-    file_info = b"<<< NextBoot Smoke Dynamic VDI >>>\n"
+    file_info = f"<<< NextBoot Smoke {image_format.title()} VDI >>>\n".encode()
     header[: len(file_info)] = file_info
     put_u32(header, 0x40, SIGNATURE)
     put_u32(header, 0x44, VERSION_1_1)
     put_u32(header, 0x48, HEADER_STRUCT_SIZE)
-    put_u32(header, 0x4C, IMAGE_TYPE_DYNAMIC)
+    put_u32(header, 0x4C, image_type)
     put_u32(header, 0x154, blocks_offset)
     put_u32(header, 0x158, data_offset)
     put_u32(header, 0x168, SECTOR_SIZE)
@@ -83,6 +88,8 @@ def dynamic_vdi(raw: bytes, source: Path, sparse: bool) -> bytes:
         if is_allocated:
             map_entry = physical_index
             physical_index += 1
+        elif sparse_mode == "discarded":
+            map_entry = DISCARDED_BLOCK
         else:
             map_entry = UNALLOCATED_BLOCK
         struct.pack_into("<I", block_map, index * 4, map_entry)
@@ -100,14 +107,27 @@ def dynamic_vdi(raw: bytes, source: Path, sparse: bool) -> bytes:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sparse", action="store_true", help="leave zero blocks unallocated")
+    parser.add_argument("--format", choices=("dynamic", "static"), default="dynamic")
+    parser.add_argument(
+        "--sparse-mode",
+        choices=("allocated", "unallocated", "discarded"),
+        default="allocated",
+        help="how dynamic VDI encodes all-zero payload blocks",
+    )
+    parser.add_argument(
+        "--sparse",
+        action="store_const",
+        const="unallocated",
+        dest="sparse_mode",
+        help="alias for --sparse-mode unallocated",
+    )
     parser.add_argument("raw_image", type=Path)
     parser.add_argument("vdi_image", type=Path)
     args = parser.parse_args()
 
     raw = args.raw_image.read_bytes()
     args.vdi_image.parent.mkdir(parents=True, exist_ok=True)
-    args.vdi_image.write_bytes(dynamic_vdi(raw, args.raw_image, args.sparse))
+    args.vdi_image.write_bytes(vdi_image(raw, args.raw_image, args.format, args.sparse_mode))
     print(f"created {args.vdi_image} ({args.vdi_image.stat().st_size} bytes)")
 
 

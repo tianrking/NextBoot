@@ -66,8 +66,14 @@ if [ "${NEXTBOOT_FULL_QEMU_MATRIX:-0}" = "1" ]; then
     run_case "nvme 4K split exFAT dynamic VDI smoke" \
         --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vdi
 
+    run_case "nvme 4K split exFAT static VDI smoke" \
+        --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-static-vdi
+
     run_case "nvme 4K split exFAT sparse VDI smoke" \
         --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-sparse-vdi
+
+    run_case "nvme 4K split exFAT discarded VDI smoke" \
+        --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-discarded-vdi
 
     run_case "nvme 4K split ext4 Linux plugins" \
         --bus nvme --layout split --data-fs ext4 --sector-size 4096 --smoke-linux-plugins
