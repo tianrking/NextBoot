@@ -12,6 +12,7 @@ mod metadata;
 mod model;
 mod partitions;
 mod paths;
+mod source_extents;
 mod uefi_paths;
 mod vlnk_filesystems;
 mod vlnk_links;
@@ -25,14 +26,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ptr;
 use model::{PartitionCandidate, VolumeBlockInfo};
-use nextboot_fs::exfat::ExFat;
-use nextboot_fs::ext4::Ext4;
-use nextboot_fs::fat32::Fat32;
-use nextboot_fs::iso9660::Iso9660;
-use nextboot_fs::ntfs::Ntfs;
-use nextboot_fs::udf::Udf;
-use nextboot_fs::xfs::Xfs;
-use nextboot_fs::{FileExtent, FileSystem, FileSystemType};
 use paths::{is_ventoy_plugin_tree_path, normalize_scan_path, open_directory};
 use uefi::data_types::CString16;
 use uefi::proto::device_path::DevicePath;
@@ -279,57 +272,6 @@ fn block_io_info(block_io: &BlockIO) -> Option<VolumeBlockInfo> {
         block_size,
         total_size,
     })
-}
-
-fn source_file_extents_from_detected_fs(
-    shared: nextboot_fs::SharedBlockIo,
-    fs_type: FileSystemType,
-    path: &str,
-) -> Option<(u32, Vec<FileExtent>)> {
-    match fs_type {
-        FileSystemType::Fat32 => Fat32::open(shared)
-            .and_then(|fs| {
-                let block_size = fs.block_size();
-                fs.file_extents(path).map(|extents| (block_size, extents))
-            })
-            .ok(),
-        FileSystemType::ExFat => ExFat::open(shared)
-            .and_then(|fs| {
-                let block_size = fs.block_size();
-                fs.file_extents(path).map(|extents| (block_size, extents))
-            })
-            .ok(),
-        FileSystemType::Ntfs => Ntfs::open(shared)
-            .and_then(|fs| {
-                let block_size = fs.block_size();
-                fs.file_extents(path).map(|extents| (block_size, extents))
-            })
-            .ok(),
-        FileSystemType::Xfs => Xfs::open(shared)
-            .and_then(|fs| {
-                let block_size = fs.block_size();
-                fs.file_extents(path).map(|extents| (block_size, extents))
-            })
-            .ok(),
-        _ => Udf::open(shared.clone())
-            .and_then(|fs| {
-                let block_size = fs.block_size();
-                fs.file_extents(path).map(|extents| (block_size, extents))
-            })
-            .or_else(|_| {
-                Ext4::open(shared.clone()).and_then(|fs| {
-                    let block_size = fs.block_size();
-                    fs.file_extents(path).map(|extents| (block_size, extents))
-                })
-            })
-            .or_else(|_| {
-                Iso9660::open(shared).and_then(|fs| {
-                    let block_size = fs.block_size();
-                    fs.file_extents(path).map(|extents| (block_size, extents))
-                })
-            })
-            .ok(),
-    }
 }
 
 fn partition_source_disk_identity(

@@ -5,7 +5,8 @@ use super::helpers::{
 use super::model::{
     ImageFormat, IsoBootInfo, IsoExtent, ResolvedImageMetadata, VolumeBlockInfo, WimBootInfo,
 };
-use super::{block_io_info, device_path_to_vec, source_file_extents_from_detected_fs, IsoScanner};
+use super::source_extents::source_file_extents_from_detected_fs;
+use super::{block_io_info, device_path_to_vec, IsoScanner};
 use crate::source_disk::{
     build_source_disk_identity, parent_device_path_bytes, parse_last_hard_drive_device_path,
     SourceDiskIdentity,
