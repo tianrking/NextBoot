@@ -24,6 +24,7 @@ mod vdi;
 mod vhdx;
 mod virtual_fs;
 mod wim;
+mod wimboot;
 
 use boot::BootManager;
 use init::StorageDevice;

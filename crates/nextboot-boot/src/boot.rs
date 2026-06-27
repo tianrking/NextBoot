@@ -7,6 +7,7 @@ use crate::scanner::{ImageFormat, IsoFile, OsType};
 use crate::vdi;
 use crate::vhdx;
 use crate::virtual_fs::{IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem};
+use crate::wimboot::{self, WimbootVirtualFile};
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -203,6 +204,9 @@ impl<'a> BootManager<'a> {
         if self.iso.image_format.is_efi_executable() {
             return self.boot_efi_executable();
         }
+        if self.iso.image_format.is_wim_container() {
+            return self.prepare_wimboot();
+        }
 
         if !self.iso.image_format.supports_virtual_disk_boot() {
             warn!(
@@ -259,6 +263,38 @@ impl<'a> BootManager<'a> {
             &self.iso.path,
             "selected EFI file",
         )
+    }
+
+    fn prepare_wimboot(&self) -> uefi::Result<()> {
+        let Some(wim_info) = self.iso.wim_info else {
+            warn!("WIM/ESD file has no parsed WIM metadata: {}", self.iso.path);
+            return Err(Status::LOAD_ERROR.into());
+        };
+
+        if !wim_info.wimboot_supported {
+            warn!(
+                "WIMBOOT does not support {}: boot_index={} in_range={} compression={:?}",
+                self.iso.path,
+                wim_info.boot_index,
+                wim_info.boot_index_in_range,
+                wim_info.compression
+            );
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let boot_wim = WimbootVirtualFile::new("boot.wim", &self.iso.path)
+            .map_err(|_| Status::INVALID_PARAMETER)?;
+        let load_options =
+            wimboot::build_wimboot_command_line(&[boot_wim], None, Some(wim_info.boot_index))
+                .map_err(|_| Status::INVALID_PARAMETER)?;
+
+        info!(
+            "Prepared WIMBOOT load options for {}: {}",
+            self.iso.path, load_options
+        );
+        warn!("WIMBOOT runtime file callbacks and helper file injection are not implemented yet");
+
+        Err(Status::UNSUPPORTED.into())
     }
 
     /// 引导 Linux ISO
@@ -378,11 +414,17 @@ impl<'a> BootManager<'a> {
             return Err(Status::LOAD_ERROR.into());
         }
 
-        self.chain_load(device, path, &data)
+        self.chain_load_with_options(device, path, &data, None)
     }
 
     /// 链式加载 EFI 文件
-    fn chain_load(&self, device: &VirtualBootDevice, path: &str, data: &[u8]) -> uefi::Result<()> {
+    fn chain_load_with_options(
+        &self,
+        device: &VirtualBootDevice,
+        path: &str,
+        data: &[u8],
+        load_options: Option<&str>,
+    ) -> uefi::Result<()> {
         info!("Chain loading: {} ({} bytes)", path, data.len());
 
         if data.is_empty() {
@@ -402,13 +444,18 @@ impl<'a> BootManager<'a> {
             },
         )?;
 
-        if let Err(err) = self.patch_loaded_image_source(
+        let load_options = match load_options {
+            Some(options) => Some(LoadOptionsBuffer::new(options)?),
+            None => None,
+        };
+        if let Err(err) = self.patch_loaded_image(
             image,
             device.handle,
             full_path.as_ptr().cast::<FfiDevicePath>(),
+            load_options.as_ref(),
         ) {
             warn!(
-                "Failed to rebind LoadedImage source for {}: {:?}",
+                "Failed to rebind LoadedImage source/options for {}: {:?}",
                 path,
                 err.status()
             );
@@ -436,6 +483,17 @@ impl<'a> BootManager<'a> {
         path: &str,
         label: &str,
     ) -> uefi::Result<()> {
+        self.load_image_from_device_path_with_options(device_handle, device_path, path, label, None)
+    }
+
+    fn load_image_from_device_path_with_options(
+        &self,
+        device_handle: Handle,
+        device_path: &[u8],
+        path: &str,
+        label: &str,
+        load_options: Option<&str>,
+    ) -> uefi::Result<()> {
         let full_path =
             append_file_path_device_path(device_path, path).ok_or(Status::INVALID_PARAMETER)?;
         let full_device_path =
@@ -450,13 +508,18 @@ impl<'a> BootManager<'a> {
             },
         )?;
 
-        if let Err(err) = self.patch_loaded_image_source(
+        let load_options = match load_options {
+            Some(options) => Some(LoadOptionsBuffer::new(options)?),
+            None => None,
+        };
+        if let Err(err) = self.patch_loaded_image(
             image,
             device_handle,
             full_path.as_ptr().cast::<FfiDevicePath>(),
+            load_options.as_ref(),
         ) {
             warn!(
-                "Failed to rebind LoadedImage source for {} on {}: {:?}",
+                "Failed to rebind LoadedImage source/options for {} on {}: {:?}",
                 path,
                 label,
                 err.status()
@@ -479,15 +542,23 @@ impl<'a> BootManager<'a> {
         }
     }
 
-    fn patch_loaded_image_source(
+    fn patch_loaded_image(
         &self,
         image: Handle,
         source_device: Handle,
         file_path: *const FfiDevicePath,
+        load_options: Option<&LoadOptionsBuffer>,
     ) -> uefi::Result<()> {
         let mut loaded_image = self.bt.open_protocol_exclusive::<RawLoadedImage>(image)?;
         loaded_image.0.device_handle = source_device.as_ptr();
         loaded_image.0.file_path = file_path;
+        if let Some(load_options) = load_options {
+            loaded_image.0.load_options_size = load_options.size_bytes();
+            loaded_image.0.load_options = load_options.as_ptr();
+        } else {
+            loaded_image.0.load_options_size = 0;
+            loaded_image.0.load_options = ptr::null();
+        }
         Ok(())
     }
 
@@ -1413,6 +1484,41 @@ impl<'a> BootManager<'a> {
 struct VirtualBootDevice {
     handle: Handle,
     device_path: Vec<u8>,
+}
+
+struct LoadOptionsBuffer {
+    data: Vec<u16>,
+}
+
+impl LoadOptionsBuffer {
+    fn new(options: &str) -> uefi::Result<Self> {
+        if options.bytes().any(|byte| byte == 0) {
+            return Err(Status::INVALID_PARAMETER.into());
+        }
+
+        let mut data = Vec::new();
+        data.try_reserve_exact(options.len().saturating_add(1))
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        data.extend(options.encode_utf16());
+        data.push(0);
+
+        let _ = u32::try_from(
+            data.len()
+                .checked_mul(core::mem::size_of::<u16>())
+                .ok_or(uefi::Status::OUT_OF_RESOURCES)?,
+        )
+        .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+
+        Ok(Self { data })
+    }
+
+    fn size_bytes(&self) -> u32 {
+        u32::try_from(self.data.len() * core::mem::size_of::<u16>()).unwrap_or(u32::MAX)
+    }
+
+    fn as_ptr(&self) -> *const c_void {
+        self.data.as_ptr().cast::<c_void>()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
