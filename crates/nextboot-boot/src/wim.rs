@@ -11,6 +11,9 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+#[path = "lzx.rs"]
+mod lzx;
+
 pub const WIM_HEADER_SIZE: usize = 208;
 pub const WIM_SIGNATURE: &[u8; 8] = b"MSWIM\0\0\0";
 pub const WIM_RESHDR_ZLEN_MASK: u64 = 0x00ff_ffff_ffff_ffff;
@@ -138,6 +141,7 @@ pub enum WimReadError {
     ResourceOutOfBounds,
     OutputReserveFailed,
     XpressDecodeFailed(XpressDecodeError),
+    LzxDecodeFailed(lzx::LzxDecodeError),
     UnsupportedCompressedChunk {
         chunk_index: u64,
         compressed_size: u64,
@@ -358,6 +362,14 @@ pub fn read_resource_range(
                 .ok_or(WimReadError::ResourceOutOfBounds)?;
             out[output_offset..output_offset + copy_len_usize]
                 .copy_from_slice(&decompressed[skip..end]);
+        } else if metadata.compression == WimCompression::Lzx {
+            let decompressed = decompress_lzx_chunk(wim_file, &chunk)?;
+            let skip = usize::try_from(skip).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+            let end = skip
+                .checked_add(copy_len_usize)
+                .ok_or(WimReadError::ResourceOutOfBounds)?;
+            out[output_offset..output_offset + copy_len_usize]
+                .copy_from_slice(&decompressed[skip..end]);
         } else {
             return Err(WimReadError::UnsupportedCompressedChunk {
                 chunk_index: chunk.index,
@@ -534,6 +546,33 @@ fn decompress_xpress_chunk(wim_file: &[u8], chunk: &WimChunkSpan) -> Result<Vec<
     if produced != expected {
         return Err(WimReadError::XpressDecodeFailed(
             XpressDecodeError::OutputOverflow,
+        ));
+    }
+    Ok(out)
+}
+
+fn decompress_lzx_chunk(wim_file: &[u8], chunk: &WimChunkSpan) -> Result<Vec<u8>, WimReadError> {
+    let start =
+        usize::try_from(chunk.compressed_offset).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+    let compressed_size =
+        usize::try_from(chunk.compressed_size).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+    let end = start
+        .checked_add(compressed_size)
+        .ok_or(WimReadError::ResourceOutOfBounds)?;
+    let compressed = wim_file
+        .get(start..end)
+        .ok_or(WimReadError::ResourceOutOfBounds)?;
+    let mut out = Vec::new();
+    let expected =
+        usize::try_from(chunk.uncompressed_size).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+    out.try_reserve_exact(expected)
+        .map_err(|_| WimReadError::OutputReserveFailed)?;
+    out.resize(expected, 0);
+    let produced =
+        lzx::decompress_lzx(compressed, &mut out).map_err(WimReadError::LzxDecodeFailed)?;
+    if produced != expected {
+        return Err(WimReadError::LzxDecodeFailed(
+            lzx::LzxDecodeError::OutputOverflow,
         ));
     }
     Ok(out)
@@ -1303,31 +1342,22 @@ mod tests {
     }
 
     #[test]
-    fn reports_lzx_chunks_until_lzx_decoder_is_available() {
-        let metadata = make_wim_metadata_with_flags(WIM_HDR_LZX, 4);
-        let mut wim_file = [0u8; 64];
+    fn reads_lzx_chunks_from_compressed_resource() {
+        let metadata = make_wim_metadata_with_flags(WIM_HDR_LZX, 32);
+        let compressed = make_lzx_uncompressed_block(b"lzx-data");
+        let mut wim_file = alloc::vec![0u8; 16 + compressed.len()];
+        wim_file[16..].copy_from_slice(&compressed);
         let resource = WimResourceHeader {
-            compressed_size: 17,
+            compressed_size: compressed.len() as u64,
             flags: WIM_RESHDR_COMPRESSED,
             offset: 16,
-            uncompressed_size: 10,
+            uncompressed_size: 8,
         };
+        let mut out = [0u8; 4];
 
-        write_le_u32(&mut wim_file, 16, 4);
-        write_le_u32(&mut wim_file, 20, 7);
-        wim_file[24..28].copy_from_slice(b"abcd");
-        wim_file[28..31].copy_from_slice(b"xyz");
-        wim_file[31..33].copy_from_slice(b"ij");
-        let mut out = [0u8; 1];
+        read_resource_range(&metadata, &wim_file, &resource, 4, &mut out).expect("lzx chunk");
 
-        assert_eq!(
-            read_resource_range(&metadata, &wim_file, &resource, 4, &mut out),
-            Err(WimReadError::UnsupportedCompressedChunk {
-                chunk_index: 1,
-                compressed_size: 3,
-                uncompressed_size: 4,
-            })
-        );
+        assert_eq!(&out, b"data");
     }
 
     #[test]
@@ -1434,10 +1464,44 @@ mod tests {
         }
     }
 
+    fn make_lzx_uncompressed_block(bytes: &[u8]) -> Vec<u8> {
+        let mut bits = Vec::new();
+        push_bits(&mut bits, 3, 3);
+        push_bits(&mut bits, 0, 1);
+        push_bits(&mut bits, ((bytes.len() >> 8) & 0xff) as u16, 8);
+        push_bits(&mut bits, (bytes.len() & 0xff) as u16, 8);
+        push_bits(&mut bits, 0, 1);
+        while bits.len() % 16 != 0 {
+            bits.push(0);
+        }
+
+        let mut out = bits_to_le_words(&bits);
+        for _ in 0..3 {
+            out.extend_from_slice(&1u32.to_le_bytes());
+        }
+        out.extend_from_slice(bytes);
+        if bytes.len() % 2 != 0 {
+            out.push(0);
+        }
+        out
+    }
+
     fn push_bits(bits: &mut Vec<u8>, value: u16, count: usize) {
         for index in (0..count).rev() {
             bits.push(((value >> index) & 1) as u8);
         }
+    }
+
+    fn bits_to_le_words(bits: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for chunk in bits.chunks_exact(16) {
+            let mut word = 0u16;
+            for bit in chunk {
+                word = (word << 1) | u16::from(*bit);
+            }
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        out
     }
 
     #[allow(clippy::too_many_arguments)]
