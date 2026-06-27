@@ -30,6 +30,8 @@ Options:
   --smoke-vhdx       Generate a bootable VHDX and verify it starts
   --smoke-sparse-vhdx
                      Generate a sparse bootable VHDX and verify it starts
+  --smoke-partial-vhdx
+                     Generate a partially-present VHDX with a full sector bitmap
   --smoke-vdi        Generate a bootable dynamic VDI and verify it starts
   --smoke-sparse-vdi Generate a sparse bootable dynamic VDI and verify it starts
   --smoke-auto-memdisk
@@ -59,6 +61,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-dynamic-vhd
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-sparse-vhdx
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-partial-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-sparse-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso

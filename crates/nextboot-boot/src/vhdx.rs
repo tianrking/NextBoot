@@ -2,7 +2,8 @@
 //!
 //! This module parses only the read-only metadata needed to expose a clean
 //! fixed or dynamic VHDX as a UEFI Block IO device. Differencing images still
-//! need parent-chain support and are rejected by the boot path.
+//! need full parent-chain support, but self-contained partially-present blocks
+//! can be validated through their sector bitmaps.
 
 pub const VHDX_HEADER_SECTION_SIZE: usize = 1024 * 1024;
 pub const VHDX_REGION_TABLE_SIZE: usize = 64 * 1024;
@@ -175,7 +176,7 @@ pub fn bat_entry_count(payload_blocks: u64, chunk_ratio: u64) -> Option<u64> {
         return None;
     }
 
-    payload_blocks.checked_add((payload_blocks - 1) / chunk_ratio)
+    div_round_up(payload_blocks, chunk_ratio)?.checked_mul(chunk_ratio.checked_add(1)?)
 }
 
 pub fn payload_bat_index(payload_block_index: u64, chunk_ratio: u64) -> Option<u64> {
@@ -184,6 +185,17 @@ pub fn payload_bat_index(payload_block_index: u64, chunk_ratio: u64) -> Option<u
     }
 
     payload_block_index.checked_add(payload_block_index / chunk_ratio)
+}
+
+pub fn sector_bitmap_bat_index(payload_block_index: u64, chunk_ratio: u64) -> Option<u64> {
+    if chunk_ratio == 0 {
+        return None;
+    }
+
+    let chunk_index = payload_block_index / chunk_ratio;
+    chunk_index
+        .checked_mul(chunk_ratio.checked_add(1)?)?
+        .checked_add(chunk_ratio)
 }
 
 pub fn parse_bat_entry(raw: u64) -> VhdxBatEntry {
@@ -308,11 +320,14 @@ mod tests {
 
     #[test]
     fn calculates_interleaved_bat_entry_count() {
-        assert_eq!(bat_entry_count(4, 4), Some(4));
-        assert_eq!(bat_entry_count(5, 4), Some(6));
+        assert_eq!(bat_entry_count(4, 4), Some(5));
+        assert_eq!(bat_entry_count(5, 4), Some(10));
         assert_eq!(payload_bat_index(0, 4), Some(0));
         assert_eq!(payload_bat_index(3, 4), Some(3));
         assert_eq!(payload_bat_index(4, 4), Some(5));
+        assert_eq!(sector_bitmap_bat_index(0, 4), Some(4));
+        assert_eq!(sector_bitmap_bat_index(3, 4), Some(4));
+        assert_eq!(sector_bitmap_bat_index(4, 4), Some(9));
     }
 
     #[test]

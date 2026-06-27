@@ -25,6 +25,7 @@ mod os_param;
 mod source_volume;
 mod util;
 mod vhd;
+mod vhdx_backing;
 mod virtual_boot;
 mod virtual_device;
 mod wimboot_flow;

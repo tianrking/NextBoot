@@ -1,7 +1,7 @@
 use super::source_volume::SourceVolumeReader;
 use super::util::{align_up_u64, div_round_up};
 use super::{vhd, BootManager};
-use crate::{vdi, vhdx};
+use crate::vdi;
 use alloc::vec::Vec;
 use log::{info, warn};
 use nextboot_virtio::mapping::ByteMappingTable;
@@ -122,116 +122,6 @@ impl BootManager<'_> {
         Ok(VirtualBlockIo::with_byte_mapping(config, byte_mapping))
     }
 
-    pub(super) fn build_vhdx_block_io(
-        &self,
-        mut config: VirtualDeviceConfig,
-        source_block_io: &BlockIO,
-    ) -> uefi::Result<VirtualBlockIo> {
-        let file_vbio = self.build_image_file_block_io(source_block_io)?;
-        let (regions, metadata) = self.read_vhdx_layout(&file_vbio)?;
-        if metadata.has_parent {
-            warn!(
-                "VHDX parent chains are not supported yet: {}",
-                self.iso.path
-            );
-            return Err(uefi::Status::UNSUPPORTED.into());
-        }
-
-        config.iso_size = metadata.virtual_disk_size;
-        config.block_size = metadata.logical_sector_size;
-
-        let block_size = u64::from(metadata.block_size);
-        let payload_blocks =
-            vhdx::payload_block_count(metadata.virtual_disk_size, metadata.block_size)
-                .ok_or(uefi::Status::LOAD_ERROR)?;
-        let chunk_ratio = metadata.chunk_ratio().ok_or(uefi::Status::LOAD_ERROR)?;
-        let bat_entries =
-            vhdx::bat_entry_count(payload_blocks, chunk_ratio).ok_or(uefi::Status::LOAD_ERROR)?;
-        let bat_bytes = bat_entries
-            .checked_mul(8)
-            .and_then(|bytes| align_up_u64(bytes, vhd::SECTOR_SIZE))
-            .ok_or(uefi::Status::LOAD_ERROR)?;
-
-        if bat_bytes > regions.bat_length {
-            return Err(uefi::Status::LOAD_ERROR.into());
-        }
-
-        let bat_len = usize::try_from(bat_bytes).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        let mut bat = Vec::new();
-        bat.try_reserve_exact(bat_len)
-            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        bat.resize(bat_len, 0);
-        vhd::read_file_bytes(&file_vbio, regions.bat_offset, &mut bat)?;
-
-        let mut byte_mapping = ByteMappingTable::empty();
-        let mut allocated_blocks = 0u64;
-        let mut zero_blocks = 0u64;
-
-        for payload_index in 0..payload_blocks {
-            let bat_index = vhdx::payload_bat_index(payload_index, chunk_ratio)
-                .ok_or(uefi::Status::LOAD_ERROR)?;
-            let bat_offset =
-                usize::try_from(bat_index.checked_mul(8).ok_or(uefi::Status::LOAD_ERROR)?)
-                    .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-            let raw_entry = vhdx::read_le_u64(&bat, bat_offset).ok_or(uefi::Status::LOAD_ERROR)?;
-            let entry = vhdx::parse_bat_entry(raw_entry);
-            let virtual_start = payload_index
-                .checked_mul(block_size)
-                .ok_or(uefi::Status::LOAD_ERROR)?;
-            let byte_count = block_size.min(metadata.virtual_disk_size - virtual_start);
-
-            match entry.state {
-                vhdx::VHDX_BAT_STATE_FULLY_PRESENT => {
-                    if entry
-                        .file_offset
-                        .checked_add(byte_count)
-                        .is_none_or(|end| end > self.iso.size)
-                    {
-                        return Err(uefi::Status::DEVICE_ERROR.into());
-                    }
-
-                    self.map_image_file_range_to_physical(
-                        &mut byte_mapping,
-                        virtual_start,
-                        entry.file_offset,
-                        byte_count,
-                    )?;
-                    allocated_blocks += 1;
-                }
-                vhdx::VHDX_BAT_STATE_NOT_PRESENT
-                | vhdx::VHDX_BAT_STATE_ZERO
-                | vhdx::VHDX_BAT_STATE_UNMAPPED => {
-                    zero_blocks += 1;
-                }
-                vhdx::VHDX_BAT_STATE_UNDEFINED | vhdx::VHDX_BAT_STATE_PARTIALLY_PRESENT => {
-                    warn!(
-                        "Unsupported VHDX BAT state {} at payload block {} in {}",
-                        entry.state, payload_index, self.iso.path
-                    );
-                    return Err(uefi::Status::UNSUPPORTED.into());
-                }
-                _ => {
-                    return Err(uefi::Status::LOAD_ERROR.into());
-                }
-            }
-        }
-
-        byte_mapping.truncate(metadata.virtual_disk_size);
-        byte_mapping.optimize();
-        info!(
-            "Mapped VHDX {}: virtual={} bytes, block={} bytes, logical_sector={} bytes, allocated_blocks={}, zero_blocks={}, physical_segments={}",
-            self.iso.path,
-            metadata.virtual_disk_size,
-            block_size,
-            metadata.logical_sector_size,
-            allocated_blocks,
-            zero_blocks,
-            byte_mapping.segment_count()
-        );
-
-        Ok(VirtualBlockIo::with_byte_mapping(config, byte_mapping))
-    }
-
     pub(super) fn build_vdi_block_io(
         &self,
         mut config: VirtualDeviceConfig,
@@ -330,38 +220,16 @@ impl BootManager<'_> {
         Ok(VirtualBlockIo::with_byte_mapping(config, byte_mapping))
     }
 
-    fn read_vhdx_layout(
-        &self,
-        file_vbio: &VirtualBlockIo,
-    ) -> uefi::Result<(vhdx::VhdxRegions, vhdx::VhdxMetadata)> {
-        let mut header = Vec::new();
-        header
-            .try_reserve_exact(vhdx::VHDX_HEADER_SECTION_SIZE)
-            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        header.resize(vhdx::VHDX_HEADER_SECTION_SIZE, 0);
-        vhd::read_file_bytes(file_vbio, 0, &mut header)?;
-        let regions = vhdx::parse_vhdx_regions(&header).ok_or(uefi::Status::LOAD_ERROR)?;
-
-        let metadata_len =
-            usize::try_from(regions.metadata_length).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        let mut metadata = Vec::new();
-        metadata
-            .try_reserve_exact(metadata_len)
-            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        metadata.resize(metadata_len, 0);
-        vhd::read_file_bytes(file_vbio, regions.metadata_offset, &mut metadata)?;
-        let metadata = vhdx::parse_vhdx_metadata(&metadata).ok_or(uefi::Status::LOAD_ERROR)?;
-
-        Ok((regions, metadata))
-    }
-
     fn read_vdi_metadata(&self, file_vbio: &VirtualBlockIo) -> uefi::Result<vdi::VdiMetadata> {
         let mut header = [0u8; vdi::VDI_HEADER_SIZE];
         vhd::read_file_bytes(file_vbio, 0, &mut header)?;
         vdi::parse_vdi_metadata(&header).ok_or(uefi::Status::LOAD_ERROR.into())
     }
 
-    fn build_image_file_block_io(&self, source_block_io: &BlockIO) -> uefi::Result<VirtualBlockIo> {
+    pub(super) fn build_image_file_block_io(
+        &self,
+        source_block_io: &BlockIO,
+    ) -> uefi::Result<VirtualBlockIo> {
         let config = VirtualDeviceConfig::new(
             VirtualDeviceType::HardDisk,
             self.iso.start_lba,
@@ -399,7 +267,7 @@ impl BootManager<'_> {
         Ok(vbio)
     }
 
-    fn map_image_file_range_to_physical(
+    pub(super) fn map_image_file_range_to_physical(
         &self,
         table: &mut ByteMappingTable,
         virtual_start: u64,

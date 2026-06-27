@@ -49,6 +49,7 @@ SMOKE_FIXED_VHD=0
 SMOKE_DYNAMIC_VHD=0
 SMOKE_VHDX=0
 SMOKE_SPARSE_VHDX=0
+SMOKE_PARTIAL_VHDX=0
 SMOKE_VDI=0
 SMOKE_SPARSE_VDI=0
 SMOKE_AUTO_MEMDISK=0
@@ -192,6 +193,13 @@ while [ $# -gt 0 ]; do
             SMOKE_BOOT=1
             SMOKE_VHDX=1
             SMOKE_SPARSE_VHDX=1
+            shift
+            ;;
+        --smoke-partial-vhdx)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_VHDX=1
+            SMOKE_PARTIAL_VHDX=1
             shift
             ;;
         --smoke-vdi)
