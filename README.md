@@ -77,12 +77,16 @@ sudo dnf install edk2-ovmf
 # Debug 模式
 ./scripts/build.sh
 
+# 同时构建 x86_64 和 AArch64 UEFI 产物
+TARGET=all ./scripts/build.sh
+
 # Release 模式
 ./scripts/build.sh release
 
 # 可选：覆盖目标平台
 TARGET=x86_64-unknown-uefi ./scripts/build.sh check
 TARGET=aarch64-unknown-uefi ./scripts/build.sh check
+TARGET=all ./scripts/build.sh check
 ```
 
 `scripts/build.sh` 会优先验证当前 toolchain 是否已经包含 UEFI target，并在需要时安装
@@ -251,6 +255,10 @@ SATA SSD、SD 读卡器、512B/4K 扇区和 exFAT/NTFS/ext/UDF/XFS Data 分区�
 # 写入 AArch64 UEFI 介质，ESP 使用 EFI/BOOT/BOOTAA64.EFI
 TARGET=aarch64-unknown-uefi ./scripts/flash.sh --layout split --data-fs exfat /dev/sdX
 
+# 写入跨架构介质，ESP 同时包含 BOOTX64.EFI 和 BOOTAA64.EFI
+TARGET=all ./scripts/build.sh release
+TARGET=all ./scripts/flash.sh --layout split --data-fs exfat /dev/sdX
+
 # 写入 NTFS Data 分区布局，适合 Windows/大文件盘工作流
 ./scripts/flash.sh --layout split --data-fs ntfs /dev/sdX
 
@@ -276,6 +284,8 @@ TARGET=aarch64-unknown-uefi ./scripts/flash.sh --layout split --data-fs exfat /d
 `flash.sh` 默认使用 split GPT 布局：第 1 分区是 FAT32 ESP，只保存 NextBoot
 启动文件；第 2 分区是 Data 分区，默认 exFAT，也可选择 FAT32、ext2/ext3/ext4、NTFS、UDF 或 XFS，用来存放
 `/ISO` 下的 ISO/WIM/VHD 文件。旧式单分区 FAT32 仍可通过 `--layout single` 生成。
+设置 `TARGET=all` 或 `--target all` 时，ESP 会同时安装 `EFI/BOOT/BOOTX64.EFI` 和
+`EFI/BOOT/BOOTAA64.EFI`，适合一块 SSD/U 盘/SD 卡跨 x86_64 与 AArch64 UEFI 固件启动。
 在 Linux 上写入 ext/UDF/XFS Data 分区需要 `mkfs.ext2`/`mkfs.ext3`/`mkfs.ext4`/`mkudffs`/`mkfs.xfs`。在 macOS 上写入 NTFS
 Data 分区需要额外安装 `mkfs.ntfs`/`mkntfs`；若要脚本自动创建 `/ISO` 目录，还需要可写
 NTFS 驱动，例如 `ntfs-3g`。macOS 没有可靠内置 ext 写挂载，因此 `--data-fs ext2/ext3/ext4`

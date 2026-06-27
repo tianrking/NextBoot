@@ -37,6 +37,10 @@ workflows and which gaps are still worth pursuing.
   bootloader and smoke EFI, writes `EFI/BOOT/BOOTAA64.EFI` into generated QEMU
   disks and flash media, verifies that fallback path, and runs under
   `qemu-system-aarch64` with AAVMF/edk2-aarch64 firmware.
+- Cross-architecture release media: `TARGET=all` builds both x86_64 and
+  AArch64 UEFI artifacts, and `flash.sh --target all` installs both
+  `EFI/BOOT/BOOTX64.EFI` and `EFI/BOOT/BOOTAA64.EFI` on one ESP for portable
+  SSD, USB, or SD media.
 
 ## Useful Ventoy Ideas Still Open
 
@@ -54,9 +58,9 @@ workflows and which gaps are still worth pursuing.
   in the QEMU data partition and flash paths, including 512B and 4K-sector XFS
   smoke coverage; real `mkfs.xfs` btree-scale directories still need broader
   compatibility work.
-- Cross-architecture boot: x86_64 and AArch64 build/QEMU smoke paths exist now.
-  Broader production packaging could still add IA32/ARM artifacts and a
-  release layout that ships multiple fallback EFI binaries on the same ESP.
+- Cross-architecture boot: x86_64 and AArch64 build/QEMU smoke paths and shared
+  ESP release layout exist now. Broader production packaging could still add
+  IA32/ARM artifacts.
 - Compatibility database: Ventoy has years of device reports. NextBoot now has
   `scripts/hardware-report.sh` and `docs/hardware-compatibility-matrix.md` to
   collect structured rows for real SSD, NVMe enclosure, USB stick, SD reader,
