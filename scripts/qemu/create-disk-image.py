@@ -9,6 +9,7 @@ import uuid
 import zlib
 
 from disk_image.exfat import write_exfat_volume
+from disk_image.ext4 import write_ext4_volume
 from disk_image.fat32 import write_fat32_volume
 from disk_image.ntfs import write_ntfs_volume
 from disk_image.udf import write_udf_volume
@@ -35,8 +36,8 @@ if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
     raise SystemExit("layout must be single or split")
-if data_fs not in ("exfat", "fat32", "ntfs", "udf"):
-    raise SystemExit("data filesystem must be exfat, fat32, ntfs, or udf")
+if data_fs not in ("exfat", "ext4", "fat32", "ntfs", "udf"):
+    raise SystemExit("data filesystem must be exfat, ext4, fat32, ntfs, or udf")
 total_bytes = size_mb * 1024 * 1024
 if total_bytes % sector_size != 0:
     raise SystemExit("disk size must be aligned to the sector size")
@@ -237,6 +238,11 @@ def make_partition(name, label, fs_type, type_guid, start_lba, end_lba, include_
         fat32_geometry(part_sectors)
     elif fs_type == "exfat":
         exfat_geometry(part_sectors)
+    elif fs_type == "ext4":
+        if sector_size != 4096:
+            raise SystemExit("test ext4 volumes require 4096 byte sectors")
+        if part_sectors <= 256:
+            raise SystemExit("partition is too small for ext4")
     elif fs_type == "ntfs":
         ntfs_geometry(part_sectors)
     elif fs_type == "udf":
@@ -433,6 +439,8 @@ with open(path, "wb") as f:
     for part in partitions:
         if part["fs_type"] == "exfat":
             write_exfat_volume(f, part, volume_deps)
+        elif part["fs_type"] == "ext4":
+            write_ext4_volume(f, part, volume_deps)
         elif part["fs_type"] == "ntfs":
             write_ntfs_volume(f, part, volume_deps)
         elif part["fs_type"] == "udf":

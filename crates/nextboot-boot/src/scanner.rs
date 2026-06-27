@@ -24,6 +24,7 @@ use alloc::vec::Vec;
 use core::ptr;
 use model::{PartitionCandidate, VolumeBlockInfo};
 use nextboot_fs::exfat::ExFat;
+use nextboot_fs::ext4::Ext4;
 use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::ntfs::Ntfs;
@@ -305,6 +306,12 @@ fn source_file_extents_from_detected_fs(
             .and_then(|fs| {
                 let block_size = fs.block_size();
                 fs.file_extents(path).map(|extents| (block_size, extents))
+            })
+            .or_else(|_| {
+                Ext4::open(shared.clone()).and_then(|fs| {
+                    let block_size = fs.block_size();
+                    fs.file_extents(path).map(|extents| (block_size, extents))
+                })
             })
             .or_else(|_| {
                 Iso9660::open(shared).and_then(|fs| {

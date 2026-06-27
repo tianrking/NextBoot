@@ -7,7 +7,7 @@ workflows and which gaps are still worth pursuing.
 
 - Standard GPT split layout: a FAT32 ESP plus a data partition, avoiding a
   USB-only assumption and matching fixed SSD/NVMe deployments.
-- Data filesystems: FAT32, exFAT, NTFS, and UDF in both image generation and
+- Data filesystems: FAT32, exFAT, ext4, NTFS, and UDF in both image generation and
   boot-time scanning paths.
 - Storage buses in QEMU: virtio, NVMe, SATA, USB mass storage, and SDHCI SD.
   SD currently has disk generation and filesystem verification coverage; boot
@@ -28,9 +28,9 @@ workflows and which gaps are still worth pursuing.
   NextBoot still needs a signing/enrollment story before this is user-friendly.
 - Broader image types: VHD/VHDX/IMG scanning exists in the product direction,
   but boot coverage is still much thinner than ISO/WIM flows.
-- More filesystems: Ventoy covers a broader set of user storage formats. UDF is
-  now covered in the QEMU data partition path; XFS/ext-family data partitions
-  remain open.
+- More filesystems: Ventoy covers a broader set of user storage formats. UDF
+  and ext4 are now covered in the QEMU data partition path; XFS and other ext
+  variants remain open.
 - Cross-architecture boot: current build and QEMU scripts target x86_64 UEFI.
   AArch64 UEFI support would need its own build artifact, smoke EFI, and QEMU
   firmware path.

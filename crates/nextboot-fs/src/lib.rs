@@ -16,6 +16,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 pub mod exfat;
+pub mod ext4;
 pub mod fat32;
 pub mod gpt;
 pub mod iso9660;
@@ -80,6 +81,7 @@ pub enum FileSystemType {
     ExFat,
     Iso9660,
     Udf,
+    Ext4,
     Ntfs, // P2 阶段支持
     Unknown,
 }
@@ -91,6 +93,7 @@ impl core::fmt::Display for FileSystemType {
             FileSystemType::ExFat => write!(f, "exFAT"),
             FileSystemType::Iso9660 => write!(f, "ISO9660"),
             FileSystemType::Udf => write!(f, "UDF"),
+            FileSystemType::Ext4 => write!(f, "ext4"),
             FileSystemType::Ntfs => write!(f, "NTFS"),
             FileSystemType::Unknown => write!(f, "Unknown"),
         }

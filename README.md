@@ -8,7 +8,7 @@ NextBoot 是一个基于 Rust 的 UEFI 启动加载器，核心功能是无需�
 
 ## 功能特性
 
-- ✅ 支持 FAT32/exFAT/NTFS/UDF/ISO9660 文件系统
+- ✅ 支持 FAT32/exFAT/ext4/NTFS/UDF/ISO9660 文件系统
 - ✅ GPT 分区表解析
 - ✅ 虚拟 Block IO 设备模拟
 - ✅ 图形化菜单界面 (GOP)
@@ -114,6 +114,9 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 # 用 UDF Data 分区覆盖 Ventoy 风格的额外数据盘格式
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs udf --sector-size 4096 --smoke-efi-iso
 
+# 用 ext4 Data 分区覆盖 Linux/SSD 常见数据盘格式
+./scripts/run-qemu.sh --bus nvme --layout split --data-fs ext4 --sector-size 4096 --smoke-efi-iso
+
 # 启动 QEMU 并自动断言 NextBoot 扫描到镜像、进入菜单
 ./scripts/run-qemu.sh --bus nvme --layout split --sector-size 4096 --image ~/Downloads/ubuntu.iso --smoke
 
@@ -145,14 +148,14 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 ./scripts/qemu-smoke-matrix.sh
 ```
 
-`run-qemu.sh` 会直接创建 GPT/FAT32/exFAT/NTFS/UDF 磁盘镜像，并支持 `virtio`、`nvme`、`sata`、
+`run-qemu.sh` 会直接创建 GPT/FAT32/exFAT/ext4/NTFS/UDF 磁盘镜像，并支持 `virtio`、`nvme`、`sata`、
 `usb`、`sd` 五种 QEMU 存储路径，用来覆盖固定盘、可移动盘和 SD 控制器路径的启动差异。`--sector-size
 4096` 会生成 4K Native 测试盘，并让 QEMU 设备暴露 4096B logical/physical block
 size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异。`--layout split` 会
 生成独立 ESP 和 Data 分区：ESP 只放 `BOOTX64.EFI`，Data 分区放 `/ISO`，用于验证
-固定盘上“引导分区与镜像分区分离”的真实部署路径；`--data-fs exfat|fat32|ntfs|udf` 可覆盖
-默认写盘布局、FAT32 兼容布局、NTFS 大文件布局和 UDF 数据盘布局。生成后脚本会调用
-`verify-qemu-image.py` 校验 GPT CRC、分区布局、FAT32/exFAT/NTFS/UDF 目录、`BOOTX64.EFI`、
+固定盘上“引导分区与镜像分区分离”的真实部署路径；`--data-fs exfat|ext4|fat32|ntfs|udf` 可覆盖
+默认写盘布局、Linux ext4 数据盘、FAT32 兼容布局、NTFS 大文件布局和 UDF 数据盘布局。生成后脚本会调用
+`verify-qemu-image.py` 校验 GPT CRC、分区布局、FAT32/exFAT/ext4/NTFS/UDF 目录、`BOOTX64.EFI`、
 `/ISO` 文件和物理 extent；`--smoke`
 会继续启动 QEMU 并检查 NextBoot 日志里是否进入扫描/菜单阶段；`--smoke-boot` 会
 自动按 Enter 并检查是否安装虚拟 Block IO；`--smoke-efi-iso` 会生成一个带 EFI
@@ -174,7 +177,7 @@ WIMBOOT fallback 入口；
 `qemu-smoke-matrix.sh` 默认执行最关键的固定盘与可移动盘组合：NVMe 4K split/exFAT
 真实启动、USB 512 split/FAT32 真实启动，以及 SD 512 split/FAT32 带小 ISO 的镜像
 生成与校验。`NEXTBOOT_FULL_QEMU_MATRIX=1 ./scripts/qemu-smoke-matrix.sh` 会继续覆盖
-virtio、SATA/NTFS 和 NVMe/UDF。SD 目前限制为 512B 扇区，因为 QEMU `sd-card` 设备没有提供和
+virtio、SATA/NTFS、NVMe/UDF 和 NVMe/ext4。SD 目前限制为 512B 扇区，因为 QEMU `sd-card` 设备没有提供和
 NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B，因为 QEMU
 `ide-hd` 要求 512B discard granularity。当前 macOS Homebrew OVMF 也不会直接从
 `sdhci-pci` 启动，所以 SD 启动 smoke 需要显式设置 `NEXTBOOT_QEMU_SD_BOOT_SMOKE=1`

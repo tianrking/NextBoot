@@ -17,6 +17,7 @@ from .common import (
     require,
 )
 from .exfat import ExFatVolume
+from .ext4 import Ext4Volume
 from .fat32 import Fat32Volume
 from .ntfs import NtfsVolume
 from .udf import UdfVolume
@@ -26,6 +27,8 @@ def make_volume(image: DiskImage, partition: Partition, expected_fs: str):
         return Fat32Volume(image, partition)
     if expected_fs == "exfat":
         return ExFatVolume(image, partition)
+    if expected_fs == "ext4":
+        return Ext4Volume(image, partition)
     if expected_fs == "ntfs":
         return NtfsVolume(image, partition)
     if expected_fs == "udf":
