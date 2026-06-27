@@ -2,7 +2,6 @@
 //!
 //! 负责准备和执行 ISO 引导
 
-use crate::init::StorageDevice;
 use crate::scanner::{ImageFormat, IsoExtent, IsoFile, OsType};
 use crate::vdi;
 use crate::ventoy_linux::{VentoyDudFile, VentoyLinuxInitrdInput};
@@ -398,7 +397,6 @@ pub struct BootManager<'a> {
     bt: &'a BootServices,
     rt: &'a RuntimeServices,
     parent_image: Handle,
-    device: &'a StorageDevice,
     iso: &'a IsoFile,
 }
 
@@ -408,14 +406,12 @@ impl<'a> BootManager<'a> {
         bt: &'a BootServices,
         rt: &'a RuntimeServices,
         parent_image: Handle,
-        device: &'a StorageDevice,
         iso: &'a IsoFile,
     ) -> Self {
         Self {
             bt,
             rt,
             parent_image,
-            device,
             iso,
         }
     }
@@ -2353,7 +2349,7 @@ impl<'a> BootManager<'a> {
         let reserved = self.ventoy_reserved_flags(disk_signature);
         let input = crate::ventoy::VentoyOsParamInput {
             disk_guid: source_disk.map_or([0; 16], |disk| disk.disk_guid),
-            disk_size: source_disk.map_or(self.device.total_size, |disk| disk.disk_size),
+            disk_size: source_disk.map_or(self.iso.source_disk_size, |disk| disk.disk_size),
             disk_part_id,
             disk_part_type,
             image_path: &self.iso.path,

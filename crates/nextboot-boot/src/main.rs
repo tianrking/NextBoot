@@ -14,7 +14,6 @@ use core::fmt::Write;
 use log::{error, info, warn};
 use uefi::prelude::*;
 use uefi::proto::console::text::Output;
-use uefi::table::boot::BootServices;
 use uefi::ResultExt;
 
 mod boot;
@@ -32,7 +31,6 @@ mod wimboot;
 mod xz;
 
 use boot::BootManager;
-use init::StorageDevice;
 use nextboot_menu::{MenuConfig, MenuState};
 use scanner::IsoScanner;
 
@@ -71,14 +69,20 @@ fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
 fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
     // Phase 1: 检测存储设备
     info!("Phase 1: Detecting storage devices...");
-    let devices = init::detect_storage_devices(st.boot_services())?;
+    let devices = match init::detect_storage_devices(st.boot_services()) {
+        Ok(devices) => devices,
+        Err(err) if err.status() == Status::NOT_FOUND => {
+            warn!("No BlockIO handles found; continuing with SimpleFileSystem scan");
+            Vec::new()
+        }
+        Err(err) => return Err(err),
+    };
     info!("Found {} storage device(s)", devices.len());
 
-    if devices.is_empty() {
-        return Err(uefi::Status::NO_MEDIA.into());
-    }
-
     // 显示设备信息
+    if devices.is_empty() {
+        warn!("No physical BlockIO devices found; scanning firmware file-system volumes anyway");
+    }
     for (i, device) in devices.iter().enumerate() {
         info!(
             "  [{}] {} - {} blocks, {} bytes/block, {}",
@@ -98,14 +102,9 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
         );
     }
 
-    // Phase 2: 查找包含 ISO 文件的设备
-    info!("Phase 2: Locating data partition...");
-    let data_device = find_data_partition(st.boot_services(), &devices)?;
-    info!("Data partition found on device {}", data_device);
-
-    // Phase 3: 扫描 ISO 文件
-    info!("Phase 3: Scanning for ISO files...");
-    let scanner = IsoScanner::new(st.boot_services(), &devices[data_device]);
+    // Phase 2: 扫描 ISO 文件
+    info!("Phase 2: Scanning for ISO files across all visible data volumes...");
+    let scanner = IsoScanner::new(st.boot_services());
     let iso_files = scanner.scan("/")?;
 
     if iso_files.is_empty() {
@@ -138,23 +137,18 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
         );
     }
 
-    // Phase 4: 显示菜单
-    info!("Phase 4: Displaying boot menu...");
+    // Phase 3: 显示菜单
+    info!("Phase 3: Displaying boot menu...");
     let selected_iso = show_menu(st, &iso_files)?;
 
     match selected_iso {
         Some(iso) => {
             info!("Selected: {}", iso.path);
 
-            // Phase 5: 启动选中的 ISO
-            info!("Phase 5: Booting selected ISO...");
-            let boot_manager = BootManager::new(
-                st.boot_services(),
-                st.runtime_services(),
-                image,
-                &devices[data_device],
-                &iso,
-            );
+            // Phase 4: 启动选中的 ISO
+            info!("Phase 4: Booting selected ISO...");
+            let boot_manager =
+                BootManager::new(st.boot_services(), st.runtime_services(), image, &iso);
             boot_manager.prepare_and_boot()?;
         }
         None => {
@@ -163,23 +157,6 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
     }
 
     Ok(())
-}
-
-/// 查找数据分区
-fn find_data_partition(bt: &BootServices, devices: &[StorageDevice]) -> uefi::Result<usize> {
-    // 优先选择可移动设备 (U盘)
-    for (i, device) in devices.iter().enumerate() {
-        if device.removable {
-            return Ok(i);
-        }
-    }
-
-    // 如果没有可移动设备，选择第一个设备
-    if !devices.is_empty() {
-        return Ok(0);
-    }
-
-    Err(uefi::Status::NOT_FOUND.into())
 }
 
 /// 显示菜单

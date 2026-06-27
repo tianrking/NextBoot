@@ -2,7 +2,6 @@
 //!
 //! 负责扫描存储设备上的 ISO 文件
 
-use crate::init::StorageDevice;
 use crate::source_disk::{
     build_source_disk_identity, parent_device_path_bytes, parse_last_hard_drive_device_path,
     SourceDiskIdentity,
@@ -87,6 +86,8 @@ pub struct IsoFile {
     pub wim_info: Option<WimBootInfo>,
     /// 文件所在源盘/分区身份，用于 Ventoy 兼容 OS 参数。
     pub source_disk: Option<SourceDiskIdentity>,
+    /// 源盘身份不可用时用于 Ventoy OS 参数的源卷/源盘容量兜底。
+    pub source_disk_size: u64,
 }
 
 /// ISO 文件在所在卷上的物理区段。
@@ -201,6 +202,12 @@ struct ResolvedImageMetadata {
     image_format: ImageFormat,
     virtual_size: u64,
     virtual_block_size: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VolumeBlockInfo {
+    block_size: u32,
+    total_size: u64,
 }
 
 /// 可启动镜像格式。
@@ -347,13 +354,12 @@ impl OsType {
 /// ISO 扫描器
 pub struct IsoScanner<'a> {
     bt: &'a BootServices,
-    device: &'a StorageDevice,
 }
 
 impl<'a> IsoScanner<'a> {
     /// 创建新的扫描器
-    pub fn new(bt: &'a BootServices, device: &'a StorageDevice) -> Self {
-        Self { bt, device }
+    pub fn new(bt: &'a BootServices) -> Self {
+        Self { bt }
     }
 
     /// 扫描指定目录下的 ISO 文件
@@ -508,10 +514,18 @@ impl<'a> IsoScanner<'a> {
 
         let mut files = Vec::new();
         let source_disk = self.resolve_source_disk_identity(volume_handle);
+        let volume_info = self.volume_block_info(volume_handle);
+        let source_disk_size = source_disk
+            .map(|disk| disk.disk_size)
+            .or_else(|| volume_info.map(|info| info.total_size))
+            .unwrap_or(0);
+        let fallback_block_size = volume_info.map_or(512, |info| info.block_size);
         self.scan_directory_entries(
             volume_handle,
             volume_index,
             source_disk,
+            source_disk_size,
+            fallback_block_size,
             &mut dir,
             &normalized,
             extensions,
@@ -580,12 +594,17 @@ impl<'a> IsoScanner<'a> {
             let config = self.load_ntfs_ventoy_config(&fs);
             let search_paths = config.search_roots(default_search_paths);
             let source_disk = self.resolve_source_disk_identity(handle);
+            let source_disk_size = source_disk
+                .map(|disk| disk.disk_size)
+                .or_else(|| block_io_info(&block_io).map(|info| info.total_size))
+                .unwrap_or(0);
 
             for search_path in &search_paths {
                 let _ = self.scan_ntfs_path(
                     handle,
                     volume_index,
                     source_disk,
+                    source_disk_size,
                     &block_io,
                     &fs,
                     search_path,
@@ -605,6 +624,7 @@ impl<'a> IsoScanner<'a> {
         volume_handle: Handle,
         volume_index: usize,
         source_disk: Option<SourceDiskIdentity>,
+        source_disk_size: u64,
         block_io: &BlockIO,
         fs: &Ntfs,
         display_path: &str,
@@ -630,6 +650,7 @@ impl<'a> IsoScanner<'a> {
                     volume_handle,
                     volume_index,
                     source_disk,
+                    source_disk_size,
                     block_io,
                     fs,
                     &full_path,
@@ -699,6 +720,7 @@ impl<'a> IsoScanner<'a> {
                     is_udf: metadata.is_udf,
                     wim_info: metadata.wim_info,
                     source_disk,
+                    source_disk_size,
                 });
             }
         }
@@ -711,6 +733,8 @@ impl<'a> IsoScanner<'a> {
         volume_handle: Handle,
         volume_index: usize,
         source_disk: Option<SourceDiskIdentity>,
+        source_disk_size: u64,
+        fallback_block_size: u32,
         dir: &mut Directory,
         display_path: &str,
         extensions: &[&str],
@@ -737,6 +761,8 @@ impl<'a> IsoScanner<'a> {
                         volume_handle,
                         volume_index,
                         source_disk,
+                        source_disk_size,
+                        fallback_block_size,
                         &mut child,
                         &full_path,
                         extensions,
@@ -774,7 +800,7 @@ impl<'a> IsoScanner<'a> {
                         image_format,
                     )
                     .unwrap_or_else(|| ResolvedImageMetadata {
-                        block_size: self.device.block_size,
+                        block_size: fallback_block_size,
                         extents: Vec::new(),
                         boot_info: None,
                         is_udf: false,
@@ -812,6 +838,7 @@ impl<'a> IsoScanner<'a> {
                     is_udf,
                     wim_info,
                     source_disk,
+                    source_disk_size,
                 });
             }
         }
@@ -909,6 +936,14 @@ impl<'a> IsoScanner<'a> {
         data.truncate(read);
 
         VentoyConfig::parse(&data)
+    }
+
+    fn volume_block_info(&self, volume_handle: Handle) -> Option<VolumeBlockInfo> {
+        let block_io = self
+            .bt
+            .open_protocol_exclusive::<BlockIO>(volume_handle)
+            .ok()?;
+        block_io_info(&block_io)
     }
 
     fn resolve_image_metadata(
@@ -1314,6 +1349,25 @@ impl<'a> IsoScanner<'a> {
 
         (boot_info, is_udf)
     }
+}
+
+fn block_io_info(block_io: &BlockIO) -> Option<VolumeBlockInfo> {
+    let media = block_io.media();
+    if !media.is_media_present() {
+        return None;
+    }
+
+    let block_size = media.block_size();
+    if block_size == 0 {
+        return None;
+    }
+    let total_blocks = media.last_block().checked_add(1)?;
+    let total_size = total_blocks.checked_mul(u64::from(block_size))?;
+
+    Some(VolumeBlockInfo {
+        block_size,
+        total_size,
+    })
 }
 
 fn alloc_buffer_for_block(block_size: u32) -> Result<Vec<u8>, FsError> {
