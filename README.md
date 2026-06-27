@@ -121,9 +121,16 @@ size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异�
 # 列出可用设备
 ./scripts/flash.sh list
 
-# 写入指定设备
-./scripts/flash.sh /dev/sdX
+# 写入标准 ESP + Data 双分区布局
+./scripts/flash.sh --layout split --data-fs exfat /dev/sdX
+
+# 先预览将要执行的分区/格式化命令
+./scripts/flash.sh --dry-run --layout split /dev/sdX
 ```
+
+`flash.sh` 默认使用 split GPT 布局：第 1 分区是 FAT32 ESP，只保存 NextBoot
+启动文件；第 2 分区是 Data 分区，默认 exFAT，用来存放 `/ISO` 下的 ISO/WIM/VHD
+文件。旧式单分区 FAT32 仍可通过 `--layout single` 生成。
 
 ## 使用方法
 
