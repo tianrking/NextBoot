@@ -1,0 +1,94 @@
+# Argument validation and default sizing for scripts/run-qemu.sh.
+
+validate_qemu_args() {
+    case "$BUILD_MODE" in
+        debug|release) ;;
+        *) die "Invalid build mode: ${BUILD_MODE}" ;;
+    esac
+
+    validate_qemu_storage_bus "$BUS"
+
+    case "$DISK_SIZE_MB" in
+        ''|*[!0-9]*) die "--disk-size must be an integer MiB value" ;;
+    esac
+
+    case "$SECTOR_SIZE" in
+        512|4096) ;;
+        *) die "--sector-size must be 512 or 4096" ;;
+    esac
+    validate_qemu_bus_sector_size "$BUS" "$SECTOR_SIZE"
+
+    case "$SMOKE_TIMEOUT" in
+        ''|*[!0-9]*) die "--smoke-timeout must be an integer second value" ;;
+    esac
+
+    case "$LAYOUT" in
+        single|split) ;;
+        *) die "--layout must be single or split" ;;
+    esac
+
+    case "$DATA_FS" in
+        exfat|ext2|ext3|ext4|fat32|ntfs|udf|xfs) ;;
+        *) die "--data-fs must be exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs" ;;
+    esac
+
+    if { [[ "$DATA_FS" == ext* ]] || [ "$DATA_FS" = "xfs" ]; } && [ "$SECTOR_SIZE" -ne 4096 ]; then
+        die "--data-fs ext2/ext3/ext4/xfs currently requires --sector-size 4096 in the QEMU generator"
+    fi
+
+    if [ "$LAYOUT" = "single" ] && [ "$DATA_FS" != "exfat" ]; then
+        warn "--data-fs is ignored for single layout"
+    fi
+
+    validate_qemu_smoke_args
+    apply_qemu_disk_size_defaults
+}
+
+validate_qemu_smoke_args() {
+    if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "$SMOKE_RAW_IMG" -eq 0 ] && [ "$SMOKE_FIXED_VHD" -eq 0 ] && [ "$SMOKE_DYNAMIC_VHD" -eq 0 ] && [ "$SMOKE_VHDX" -eq 0 ] && [ "$SMOKE_VDI" -eq 0 ]; then
+        die "--smoke without a generated smoke image cannot be combined with --no-run"
+    fi
+
+    if [ "$SMOKE_WINDOWS_ISO" -eq 1 ] && [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
+        die "--smoke-windows-iso and --smoke-linux-iso cannot be combined"
+    fi
+
+    if { [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ] || [ "$SMOKE_DYNAMIC_VHD" -eq 1 ] || [ "$SMOKE_VHDX" -eq 1 ] || [ "$SMOKE_VDI" -eq 1 ]; } && [ "$SMOKE_EFI_ISO" -eq 1 ]; then
+        die "--smoke-raw-img/--smoke-vhd/--smoke-dynamic-vhd/--smoke-vhdx/--smoke-vdi cannot be combined with ISO smoke generators"
+    fi
+
+    SMOKE_DISK_IMAGE_COUNT=$((SMOKE_RAW_IMG + SMOKE_FIXED_VHD + SMOKE_DYNAMIC_VHD + SMOKE_VHDX + SMOKE_VDI))
+    if [ "$SMOKE_DISK_IMAGE_COUNT" -gt 1 ]; then
+        die "--smoke-raw-img, --smoke-vhd, --smoke-dynamic-vhd, --smoke-vhdx, and --smoke-vdi are mutually exclusive"
+    fi
+
+    if [ "$SMOKE_BOOT" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "$SMOKE_RAW_IMG" -eq 0 ] && [ "$SMOKE_FIXED_VHD" -eq 0 ] && [ "$SMOKE_DYNAMIC_VHD" -eq 0 ] && [ "$SMOKE_VHDX" -eq 0 ] && [ "$SMOKE_VDI" -eq 0 ] && [ "${#IMAGES[@]}" -eq 0 ]; then
+        die "--smoke-boot requires at least one --image"
+    fi
+}
+
+apply_qemu_disk_size_defaults() {
+    if [ "$DISK_SIZE_SET" -eq 0 ]; then
+        if [ "$SECTOR_SIZE" -eq 4096 ]; then
+            if [ "$LAYOUT" = "split" ]; then
+                DISK_SIZE_MB=1024
+            else
+                DISK_SIZE_MB=512
+            fi
+        fi
+    fi
+
+    MIN_DISK_SIZE_MB=64
+    if [ "$LAYOUT" = "split" ]; then
+        MIN_DISK_SIZE_MB=128
+    fi
+    if [ "$SECTOR_SIZE" -eq 4096 ]; then
+        MIN_DISK_SIZE_MB=260
+        if [ "$LAYOUT" = "split" ]; then
+            MIN_DISK_SIZE_MB=544
+        fi
+    fi
+    if [ "$DISK_SIZE_MB" -lt "$MIN_DISK_SIZE_MB" ]; then
+        die "--disk-size must be at least ${MIN_DISK_SIZE_MB} MiB for ${LAYOUT} layout with ${SECTOR_SIZE}B sectors"
+    fi
+}

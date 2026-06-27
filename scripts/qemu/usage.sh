@@ -28,7 +28,10 @@ Options:
   --smoke-dynamic-vhd
                      Generate a bootable dynamic VHD and verify it starts
   --smoke-vhdx       Generate a bootable VHDX and verify it starts
+  --smoke-sparse-vhdx
+                     Generate a sparse bootable VHDX and verify it starts
   --smoke-vdi        Generate a bootable dynamic VDI and verify it starts
+  --smoke-sparse-vdi Generate a sparse bootable dynamic VDI and verify it starts
   --smoke-auto-memdisk
                      Generate a minimal UEFI ISO and force Ventoy auto_memdisk
   --smoke-menu-memdisk
@@ -55,7 +58,9 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vhd
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-dynamic-vhd
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vhdx
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-sparse-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vdi
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-sparse-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
   $0 --bus nvme --layout split --data-fs ext3 --sector-size 4096 --smoke-efi-iso

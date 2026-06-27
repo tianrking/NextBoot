@@ -70,17 +70,27 @@ create_generated_smoke_images() {
 
     if [ "$SMOKE_VHDX" -eq 1 ]; then
         SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke.vhdx"
+        VHDX_ARGS=()
+        if [ "$SMOKE_SPARSE_VHDX" -eq 1 ]; then
+            SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-sparse.vhdx"
+            VHDX_ARGS+=(--sparse)
+        fi
         require_command python3 "python3 is required to create the smoke VHDX"
         warn "Wrapping smoke disk image as VHDX..."
-        python3 "${SCRIPT_DIR}/create-smoke-vhdx.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHDX_FILE"
+        python3 "${SCRIPT_DIR}/create-smoke-vhdx.py" "${VHDX_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHDX_FILE"
         IMAGES=("$SMOKE_VHDX_FILE" "${IMAGES[@]}")
     fi
 
     if [ "$SMOKE_VDI" -eq 1 ]; then
         SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-dynamic.vdi"
+        VDI_ARGS=()
+        if [ "$SMOKE_SPARSE_VDI" -eq 1 ]; then
+            SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-sparse.vdi"
+            VDI_ARGS+=(--sparse)
+        fi
         require_command python3 "python3 is required to create the smoke dynamic VDI"
         warn "Wrapping smoke disk image as dynamic VDI..."
-        python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_FILE"
+        python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "${VDI_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_FILE"
         IMAGES=("$SMOKE_VDI_FILE" "${IMAGES[@]}")
     fi
 }

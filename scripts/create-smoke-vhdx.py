@@ -19,6 +19,7 @@ BLOCK_SIZE = 2 * MIB
 LOGICAL_SECTOR_SIZE = 512
 PHYSICAL_SECTOR_SIZE = 4096
 BAT_STATE_FULLY_PRESENT = 6
+BAT_STATE_ZERO = 2
 
 BAT_REGION_GUID = bytes.fromhex("6677c22d23f600429d64115e9bfd4a08")
 METADATA_REGION_GUID = bytes.fromhex("06a27c8b90479a4bb8fe575f050f886e")
@@ -75,6 +76,10 @@ def write_metadata_entry(
     put_u32(metadata, offset + 24, 0x6)
 
 
+def is_zero_block(chunk: bytes) -> bool:
+    return not any(chunk)
+
+
 def header_section() -> bytes:
     header = bytearray(HEADER_SECTION_SIZE)
     header[0:8] = b"vhdxfile"
@@ -112,29 +117,42 @@ def metadata_region(virtual_size: int) -> bytes:
     return bytes(metadata)
 
 
-def bat_region(block_count: int) -> bytes:
+def bat_region(block_offsets: list[int | None]) -> bytes:
     bat = bytearray(MIB)
-    for index in range(block_count):
-        block_offset_mib = (PAYLOAD_OFFSET + index * BLOCK_SIZE) // MIB
-        raw_entry = (block_offset_mib << 20) | BAT_STATE_FULLY_PRESENT
+    for index, file_offset in enumerate(block_offsets):
+        if file_offset is None:
+            raw_entry = BAT_STATE_ZERO
+        else:
+            raw_entry = ((file_offset // MIB) << 20) | BAT_STATE_FULLY_PRESENT
         put_u64(bat, index * 8, raw_entry)
     return bytes(bat)
 
 
-def vhdx(raw: bytes) -> bytes:
+def vhdx(raw: bytes, sparse: bool) -> bytes:
     if not raw or len(raw) % LOGICAL_SECTOR_SIZE:
         raise ValueError("VHDX payload size must be a non-zero multiple of 512 bytes")
 
     block_count = ceil_div(len(raw), BLOCK_SIZE)
+    chunks = [raw[index * BLOCK_SIZE : (index + 1) * BLOCK_SIZE] for index in range(block_count)]
+    allocated = [not sparse or not is_zero_block(chunk) for chunk in chunks]
+    block_offsets: list[int | None] = []
+    next_payload_offset = PAYLOAD_OFFSET
+    for is_allocated in allocated:
+        if is_allocated:
+            block_offsets.append(next_payload_offset)
+            next_payload_offset += BLOCK_SIZE
+        else:
+            block_offsets.append(None)
+
     image = bytearray()
     image.extend(header_section())
     image.extend(metadata_region(len(raw)))
-    image.extend(bat_region(block_count))
+    image.extend(bat_region(block_offsets))
     assert len(image) == PAYLOAD_OFFSET
 
-    for index in range(block_count):
-        start = index * BLOCK_SIZE
-        chunk = raw[start : start + BLOCK_SIZE]
+    for chunk, is_allocated in zip(chunks, allocated):
+        if not is_allocated:
+            continue
         image.extend(chunk)
         image.extend(bytes(BLOCK_SIZE - len(chunk)))
     return bytes(image)
@@ -142,13 +160,14 @@ def vhdx(raw: bytes) -> bytes:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sparse", action="store_true", help="encode zero blocks as sparse")
     parser.add_argument("raw_image", type=Path)
     parser.add_argument("vhdx_image", type=Path)
     args = parser.parse_args()
 
     raw = args.raw_image.read_bytes()
     args.vhdx_image.parent.mkdir(parents=True, exist_ok=True)
-    args.vhdx_image.write_bytes(vhdx(raw))
+    args.vhdx_image.write_bytes(vhdx(raw, args.sparse))
     print(f"created {args.vhdx_image} ({args.vhdx_image.stat().st_size} bytes)")
 
 

@@ -26,14 +26,17 @@ workflows and which gaps are still worth pursuing.
 - Auto memdisk and menu memdisk smoke paths.
 - Raw `.img`, fixed VHD, dynamic VHD, VHDX, and dynamic VDI virtual hard-disk
   boot smoke coverage with an inner GPT/FAT32 ESP.
+- Sparse VHDX `ZERO` BAT entries and sparse VDI unallocated block-map entries
+  in virtual hard-disk boot smoke coverage.
 
 ## Useful Ventoy Ideas Still Open
 
 - Secure Boot distribution: Ventoy provides a documented Secure Boot workflow;
   NextBoot still needs a signing/enrollment story before this is user-friendly.
-- Broader image types: raw IMG, fixed/dynamic VHD, VHDX, and dynamic VDI have
-  virtual hard-disk boot smoke coverage now; differencing VHDX/VDI parent
-  chains and partially present sparse states still need a compatibility story.
+- Broader image types: raw IMG, fixed/dynamic VHD, VHDX, sparse VHDX, dynamic
+  VDI, and sparse VDI have virtual hard-disk boot smoke coverage now;
+  differencing VHDX/VDI parent chains and partially present sparse states still
+  need a compatibility story.
 - More filesystems: Ventoy covers a broader set of user storage formats. UDF,
   ext2/3/4, and a first XFS extent-reading framework are now covered in the
   QEMU data partition and flash paths; real `mkfs.xfs` directory formats still
