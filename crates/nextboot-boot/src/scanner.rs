@@ -8,7 +8,7 @@ use crate::source_disk::{
     SourceDiskIdentity,
 };
 use crate::vdi;
-use crate::ventoy_config::{VentoyConfig, VentoyConfigError, VentoyImagePlugin};
+use crate::ventoy_config::{VentoyConfig, VentoyConfigError, VentoyImagePlugin, VentoyPassword};
 use crate::vhdx;
 use crate::wim;
 use alloc::format;
@@ -47,6 +47,10 @@ pub struct IsoFile {
     pub ventoy_default_image: bool,
     /// Ventoy control.VTOY_MENU_TIMEOUT 为该卷菜单设置的自动启动超时。
     pub ventoy_menu_timeout: Option<u32>,
+    /// Ventoy password 插件为该镜像匹配出的密码。
+    pub ventoy_password: Option<VentoyPassword>,
+    /// Ventoy password.bootpwd 为该卷设置的全局启动菜单密码。
+    pub ventoy_boot_password: Option<VentoyPassword>,
     /// Ventoy 启动相关插件为该镜像匹配出的配置。
     pub ventoy_plugin: Option<VentoyImagePlugin>,
     /// 文件大小 (字节)
@@ -664,6 +668,8 @@ impl<'a> IsoScanner<'a> {
                     menu_alias: config.menu_alias_for(&full_path).map(ToString::to_string),
                     ventoy_default_image: config.default_image_matches(&full_path),
                     ventoy_menu_timeout: config.menu_timeout,
+                    ventoy_password: config.image_password_for(&full_path).cloned(),
+                    ventoy_boot_password: config.password.boot.clone(),
                     ventoy_plugin: config.image_plugin_for(&full_path),
                     size: entry.size,
                     virtual_size: metadata.virtual_size,
@@ -767,6 +773,8 @@ impl<'a> IsoScanner<'a> {
                     menu_alias: config.menu_alias_for(&full_path).map(ToString::to_string),
                     ventoy_default_image: config.default_image_matches(&full_path),
                     ventoy_menu_timeout: config.menu_timeout,
+                    ventoy_password: config.image_password_for(&full_path).cloned(),
+                    ventoy_boot_password: config.password.boot.clone(),
                     ventoy_plugin: config.image_plugin_for(&full_path),
                     size: entry.file_size(),
                     virtual_size,

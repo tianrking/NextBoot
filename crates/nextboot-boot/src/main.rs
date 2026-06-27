@@ -189,6 +189,10 @@ fn show_menu<'a>(
 ) -> uefi::Result<Option<&'a scanner::IsoFile>> {
     use nextboot_menu::{Input, IsoType, MenuConfig, MenuItem, MenuState};
 
+    if !authorize_boot_password(st, iso_files)? {
+        return Ok(None);
+    }
+
     // 转换为菜单项
     let items: Vec<MenuItem> = iso_files
         .iter()
@@ -238,7 +242,11 @@ fn show_menu<'a>(
         let input = match wait_for_key_or_timeout(st, active_timeout) {
             Some(input) => input,
             None => {
-                return Ok(state.selected_item().map(|_| &iso_files[state.selected]));
+                if authorize_selected_iso(st, &state, iso_files)? {
+                    return Ok(state.selected_item().map(|_| &iso_files[state.selected]));
+                }
+                active_timeout = None;
+                continue;
             }
         };
         active_timeout = None;
@@ -250,12 +258,80 @@ fn show_menu<'a>(
                 if state.selected_item().is_some() {
                     // 查找对应的 ISO 文件
                     let idx = state.selected;
-                    return Ok(Some(&iso_files[idx]));
+                    if authorize_iso(st, &iso_files[idx])? {
+                        return Ok(Some(&iso_files[idx]));
+                    }
                 }
             }
             Input::Escape => return Ok(None),
             _ => {}
         }
+    }
+}
+
+fn authorize_boot_password(
+    st: &mut SystemTable<Boot>,
+    iso_files: &[scanner::IsoFile],
+) -> uefi::Result<bool> {
+    let Some(password) = iso_files
+        .iter()
+        .find_map(|iso| iso.ventoy_boot_password.as_ref())
+    else {
+        return Ok(true);
+    };
+
+    for attempt in 0..3 {
+        output_text(st.stdout(), "\r\n  Boot menu password required\r\n")?;
+        let input = read_password(st, "  Enter password: ")?;
+        if password.verify(&input) {
+            output_text(st.stdout(), "\r\n")?;
+            return Ok(true);
+        }
+
+        if attempt < 2 {
+            output_text(st.stdout(), "\r\n  Invalid password.\r\n")?;
+        }
+    }
+
+    output_text(
+        st.stdout(),
+        "\r\n  Invalid password. Press any key to exit.",
+    )?;
+    let _ = wait_for_key(st);
+    Ok(false)
+}
+
+fn authorize_selected_iso(
+    st: &mut SystemTable<Boot>,
+    state: &MenuState,
+    iso_files: &[scanner::IsoFile],
+) -> uefi::Result<bool> {
+    state
+        .selected_item()
+        .map(|_| authorize_iso(st, &iso_files[state.selected]))
+        .unwrap_or(Ok(false))
+}
+
+fn authorize_iso(st: &mut SystemTable<Boot>, iso: &scanner::IsoFile) -> uefi::Result<bool> {
+    let Some(password) = iso.ventoy_password.as_ref() else {
+        return Ok(true);
+    };
+
+    output_text(
+        st.stdout(),
+        &format!("\r\n  Password required for {}\r\n", iso.path),
+    )?;
+    let input = read_password(st, "  Enter password: ")?;
+    if password.verify(&input) {
+        output_text(st.stdout(), "\r\n")?;
+        Ok(true)
+    } else {
+        output_text(
+            st.stdout(),
+            "\r\n  Invalid password. Press any key to return to menu.",
+        )?;
+        let _ = wait_for_key(st);
+        Ok(false)
     }
 }
 
@@ -374,6 +450,51 @@ fn wait_for_key(st: &mut SystemTable<Boot>) -> nextboot_menu::Input {
             }
             if let Some(input) = read_input_key(st) {
                 return input;
+            }
+        }
+    }
+}
+
+fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> uefi::Result<String> {
+    output_text(st.stdout(), prompt)?;
+
+    let mut password = String::new();
+    loop {
+        if let Some(event) = st.stdin().wait_for_key_event() {
+            let mut events = [event];
+            if st
+                .boot_services()
+                .wait_for_event(&mut events)
+                .discard_errdata()
+                .is_err()
+            {
+                continue;
+            }
+
+            if let Ok(Some(key)) = st.stdin().read_key() {
+                match key {
+                    uefi::proto::console::text::Key::Printable(c) => {
+                        let ch = char::from(c);
+                        match ch {
+                            '\r' | '\n' => {
+                                output_text(st.stdout(), "\r\n")?;
+                                return Ok(password);
+                            }
+                            '\x08' | '\x7f' => {
+                                if !password.is_empty() {
+                                    password.pop();
+                                    output_text(st.stdout(), "\x08 \x08")?;
+                                }
+                            }
+                            ch if ch >= ' ' => {
+                                password.push(ch);
+                                output_text(st.stdout(), "*")?;
+                            }
+                            _ => {}
+                        }
+                    }
+                    uefi::proto::console::text::Key::Special(_) => {}
+                }
             }
         }
     }

@@ -88,6 +88,71 @@ pub struct VentoyPersistence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VentoyPassword {
+    Text(String),
+    Md5([u8; 16]),
+    SaltedMd5 { salt: String, digest: [u8; 16] },
+}
+
+impl VentoyPassword {
+    fn parse(value: &str) -> Option<Self> {
+        if value.len() > 64 {
+            return None;
+        }
+
+        if let Some(text) = value.strip_prefix("txt#") {
+            return Some(Self::Text(text.to_string()));
+        }
+
+        let md5 = value.strip_prefix("md5#")?;
+        if md5.len() == 32 {
+            return parse_md5_hex(md5).map(Self::Md5);
+        }
+
+        let (salt, digest) = md5.split_once('#')?;
+        if digest.len() != 32 {
+            return None;
+        }
+
+        Some(Self::SaltedMd5 {
+            salt: salt.to_string(),
+            digest: parse_md5_hex(digest)?,
+        })
+    }
+
+    pub fn verify(&self, input: &str) -> bool {
+        match self {
+            Self::Text(expected) => expected == input,
+            Self::Md5(expected) => md5_digest(input.as_bytes()) == *expected,
+            Self::SaltedMd5 { salt, digest } => {
+                let mut data = Vec::new();
+                if data
+                    .try_reserve_exact(salt.len().saturating_add(input.len()))
+                    .is_err()
+                {
+                    return false;
+                }
+                data.extend_from_slice(salt.as_bytes());
+                data.extend_from_slice(input.as_bytes());
+                md5_digest(&data) == *digest
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VentoyPasswordConfig {
+    pub boot: Option<VentoyPassword>,
+    pub iso: Option<VentoyPassword>,
+    pub wim: Option<VentoyPassword>,
+    pub efi: Option<VentoyPassword>,
+    pub img: Option<VentoyPassword>,
+    pub vhd: Option<VentoyPassword>,
+    pub vtoy: Option<VentoyPassword>,
+    pub menu: Vec<VentoyPathRule<VentoyPassword>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VentoyDud {
     pub files: Vec<String>,
 }
@@ -128,6 +193,7 @@ pub struct VentoyConfig {
     pub image_list_mode: VentoyImageListMode,
     pub image_list: Vec<String>,
     pub menu_aliases: Vec<VentoyMenuAlias>,
+    pub password: VentoyPasswordConfig,
     pub auto_install: Vec<VentoyPathRule<VentoyAutoInstall>>,
     pub persistence: Vec<VentoyPathRule<VentoyPersistence>>,
     pub injection: Vec<VentoyPathRule<String>>,
@@ -226,6 +292,10 @@ impl VentoyConfig {
             .is_some_and(|default| path_pattern_eq(default.as_str(), path))
     }
 
+    pub fn image_password_for(&self, path: &str) -> Option<&VentoyPassword> {
+        find_matching_rule(&self.password.menu, path).or_else(|| self.password_for_image_type(path))
+    }
+
     pub fn image_plugin_for(&self, path: &str) -> Option<VentoyImagePlugin> {
         let mut plugin = VentoyImagePlugin::default();
         plugin.auto_install = find_matching_rule(&self.auto_install, path).cloned();
@@ -249,9 +319,198 @@ impl VentoyConfig {
             Some(plugin)
         }
     }
+
+    fn password_for_image_type(&self, path: &str) -> Option<&VentoyPassword> {
+        let lower = path.to_ascii_lowercase();
+        if lower.ends_with(".iso") {
+            self.password.iso.as_ref()
+        } else if lower.ends_with(".wim") || lower.ends_with(".esd") {
+            self.password.wim.as_ref()
+        } else if lower.ends_with(".efi") {
+            self.password.efi.as_ref()
+        } else if lower.ends_with(".img") {
+            self.password.img.as_ref()
+        } else if lower.ends_with(".vhd") || lower.ends_with(".vhdx") || lower.ends_with(".vdi") {
+            self.password.vhd.as_ref()
+        } else if lower.ends_with(".vtoy") {
+            self.password.vtoy.as_ref()
+        } else {
+            None
+        }
+    }
 }
 
 const VENTOY_MAX_CONF_REPLACE: usize = 2;
+
+fn parse_md5_hex(text: &str) -> Option<[u8; 16]> {
+    if text.len() != 32 {
+        return None;
+    }
+
+    let mut out = [0u8; 16];
+    for (index, chunk) in text.as_bytes().chunks_exact(2).enumerate() {
+        out[index] = hex_byte(chunk[0])?
+            .checked_mul(16)?
+            .checked_add(hex_byte(chunk[1])?)?;
+    }
+    Some(out)
+}
+
+fn hex_byte(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn md5_digest(input: &[u8]) -> [u8; 16] {
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    const K: [u32; 64] = [
+        0xd76a_a478,
+        0xe8c7_b756,
+        0x2420_70db,
+        0xc1bd_ceee,
+        0xf57c_0faf,
+        0x4787_c62a,
+        0xa830_4613,
+        0xfd46_9501,
+        0x6980_98d8,
+        0x8b44_f7af,
+        0xffff_5bb1,
+        0x895c_d7be,
+        0x6b90_1122,
+        0xfd98_7193,
+        0xa679_438e,
+        0x49b4_0821,
+        0xf61e_2562,
+        0xc040_b340,
+        0x265e_5a51,
+        0xe9b6_c7aa,
+        0xd62f_105d,
+        0x0244_1453,
+        0xd8a1_e681,
+        0xe7d3_fbc8,
+        0x21e1_cde6,
+        0xc337_07d6,
+        0xf4d5_0d87,
+        0x455a_14ed,
+        0xa9e3_e905,
+        0xfcef_a3f8,
+        0x676f_02d9,
+        0x8d2a_4c8a,
+        0xfffa_3942,
+        0x8771_f681,
+        0x6d9d_6122,
+        0xfde5_380c,
+        0xa4be_ea44,
+        0x4bde_cfa9,
+        0xf6bb_4b60,
+        0xbebf_bc70,
+        0x289b_7ec6,
+        0xeaa1_27fa,
+        0xd4ef_3085,
+        0x0488_1d05,
+        0xd9d4_d039,
+        0xe6db_99e5,
+        0x1fa2_7cf8,
+        0xc4ac_5665,
+        0xf429_2244,
+        0x432a_ff97,
+        0xab94_23a7,
+        0xfc93_a039,
+        0x655b_59c3,
+        0x8f0c_cc92,
+        0xffef_f47d,
+        0x8584_5dd1,
+        0x6fa8_7e4f,
+        0xfe2c_e6e0,
+        0xa301_4314,
+        0x4e08_11a1,
+        0xf753_7e82,
+        0xbd3a_f235,
+        0x2ad7_d2bb,
+        0xeb86_d391,
+    ];
+
+    let bit_len = (input.len() as u64).wrapping_mul(8);
+    let mut message = Vec::new();
+    let padding_len = if input.len() % 64 < 56 {
+        56 - input.len() % 64
+    } else {
+        120 - input.len() % 64
+    };
+    if message
+        .try_reserve_exact(input.len().saturating_add(padding_len).saturating_add(8))
+        .is_err()
+    {
+        return [0; 16];
+    }
+    message.extend_from_slice(input);
+    message.push(0x80);
+    while message.len() % 64 != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&bit_len.to_le_bytes());
+
+    let mut a0 = 0x6745_2301u32;
+    let mut b0 = 0xefcd_ab89u32;
+    let mut c0 = 0x98ba_dcfeu32;
+    let mut d0 = 0x1032_5476u32;
+
+    for chunk in message.chunks_exact(64) {
+        let mut words = [0u32; 16];
+        for (index, word) in words.iter_mut().enumerate() {
+            let start = index * 4;
+            *word = u32::from_le_bytes([
+                chunk[start],
+                chunk[start + 1],
+                chunk[start + 2],
+                chunk[start + 3],
+            ]);
+        }
+
+        let mut a = a0;
+        let mut b = b0;
+        let mut c = c0;
+        let mut d = d0;
+
+        for i in 0..64 {
+            let (f, g) = if i < 16 {
+                ((b & c) | ((!b) & d), i)
+            } else if i < 32 {
+                ((d & b) | ((!d) & c), (5 * i + 1) % 16)
+            } else if i < 48 {
+                (b ^ c ^ d, (3 * i + 5) % 16)
+            } else {
+                (c ^ (b | (!d)), (7 * i) % 16)
+            };
+
+            let next = a.wrapping_add(f).wrapping_add(K[i]).wrapping_add(words[g]);
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(next.rotate_left(S[i]));
+        }
+
+        a0 = a0.wrapping_add(a);
+        b0 = b0.wrapping_add(b);
+        c0 = c0.wrapping_add(c);
+        d0 = d0.wrapping_add(d);
+    }
+
+    let mut digest = [0u8; 16];
+    digest[0..4].copy_from_slice(&a0.to_le_bytes());
+    digest[4..8].copy_from_slice(&b0.to_le_bytes());
+    digest[8..12].copy_from_slice(&c0.to_le_bytes());
+    digest[12..16].copy_from_slice(&d0.to_le_bytes());
+    digest
+}
 
 fn normalize_config_path(path: &str) -> String {
     let mut out = String::new();
@@ -409,6 +668,7 @@ impl<'a> JsonParser<'a> {
 
     fn parse_config(&mut self) -> Result<VentoyConfig, VentoyConfigError> {
         let mut config = VentoyConfig::default();
+        let mut parsed_platform_password = false;
         self.skip_ws();
         self.expect(b'{')?;
 
@@ -424,6 +684,11 @@ impl<'a> JsonParser<'a> {
             match key.as_str() {
                 "control" => self.parse_control(&mut config)?,
                 "menu_alias" => self.parse_menu_alias(&mut config)?,
+                "password_uefi" | "password_aa64" => {
+                    self.parse_password(&mut config)?;
+                    parsed_platform_password = true;
+                }
+                "password" if !parsed_platform_password => self.parse_password(&mut config)?,
                 "auto_install" => self.parse_auto_install(&mut config)?,
                 "persistence" => self.parse_persistence(&mut config)?,
                 "injection" => self.parse_injection(&mut config)?,
@@ -437,6 +702,7 @@ impl<'a> JsonParser<'a> {
                     config.image_list_mode = VentoyImageListMode::Deny;
                     config.image_list = self.parse_string_array()?;
                 }
+                "password" => self.skip_value()?,
                 _ => self.skip_value()?,
             }
 
@@ -513,6 +779,100 @@ impl<'a> JsonParser<'a> {
         }
 
         Ok(())
+    }
+
+    fn parse_password(&mut self, config: &mut VentoyConfig) -> Result<(), VentoyConfigError> {
+        let mut password = VentoyPasswordConfig::default();
+
+        self.parse_object_fields(|parser, key| {
+            match key {
+                "bootpwd" => {
+                    password.boot = parser.parse_optional_password()?;
+                }
+                "isopwd" => {
+                    password.iso = parser.parse_optional_password()?;
+                }
+                "wimpwd" => {
+                    password.wim = parser.parse_optional_password()?;
+                }
+                "efipwd" => {
+                    password.efi = parser.parse_optional_password()?;
+                }
+                "imgpwd" => {
+                    password.img = parser.parse_optional_password()?;
+                }
+                "vhdpwd" => {
+                    password.vhd = parser.parse_optional_password()?;
+                }
+                "vtoypwd" => {
+                    password.vtoy = parser.parse_optional_password()?;
+                }
+                "menupwd" => {
+                    password.menu = parser.parse_password_rules()?;
+                }
+                _ => parser.skip_value()?,
+            }
+            Ok(())
+        })?;
+
+        config.password = password;
+        Ok(())
+    }
+
+    fn parse_password_rules(
+        &mut self,
+    ) -> Result<Vec<VentoyPathRule<VentoyPassword>>, VentoyConfigError> {
+        let mut rules = Vec::new();
+        self.skip_ws();
+        self.expect(b'[')?;
+        loop {
+            self.skip_ws();
+            if self.consume(b']') {
+                break;
+            }
+
+            let mut target = None;
+            let mut password = None;
+            self.parse_object_fields(|parser, key| {
+                match key {
+                    "file" => {
+                        if let Some(value) = parser.parse_target(VentoyTargetKind::Image)? {
+                            target = Some(value);
+                        }
+                    }
+                    "parent" => {
+                        let value = parser.parse_target(VentoyTargetKind::Parent)?;
+                        if target.is_none() {
+                            target = value;
+                        }
+                    }
+                    "pwd" => {
+                        password = parser.parse_optional_password()?;
+                    }
+                    _ => parser.skip_value()?,
+                }
+                Ok(())
+            })?;
+
+            if let (Some(target), Some(password)) = (target, password) {
+                rules
+                    .try_reserve_exact(1)
+                    .map_err(|_| VentoyConfigError::OutOfMemory)?;
+                rules.push(VentoyPathRule {
+                    target,
+                    value: password,
+                });
+            }
+
+            self.skip_ws();
+            if self.consume(b',') {
+                continue;
+            }
+            self.expect(b']')?;
+            break;
+        }
+
+        Ok(rules)
     }
 
     fn parse_menu_alias(&mut self, config: &mut VentoyConfig) -> Result<(), VentoyConfigError> {
@@ -915,6 +1275,16 @@ impl<'a> JsonParser<'a> {
         }
     }
 
+    fn parse_optional_password(&mut self) -> Result<Option<VentoyPassword>, VentoyConfigError> {
+        match self.parse_optional_string()? {
+            Some(value) => Ok(VentoyPassword::parse(value.as_str())),
+            None => {
+                self.skip_value()?;
+                Ok(None)
+            }
+        }
+    }
+
     fn parse_optional_i32(&mut self) -> Result<Option<i32>, VentoyConfigError> {
         self.skip_ws();
         let start = self.pos;
@@ -1169,6 +1539,48 @@ mod tests {
         assert_eq!(config.default_menu_mode, Some(1));
         assert!(config.default_image_matches("/iso/win11.iso"));
         assert!(!config.default_image_matches("/iso/ubuntu.iso"));
+    }
+
+    #[test]
+    fn parses_and_matches_password_plugin() {
+        let json = br#"{
+            "password": {
+                "isopwd": "txt#fallback",
+                "wimpwd": "md5#5ebe2294ecd0e0f08eab7690d2a6ee69",
+                "menupwd": [
+                    { "parent": "/ISO", "pwd": "txt#parent" },
+                    { "file": "/ISO/special.iso", "pwd": "txt#special" }
+                ]
+            }
+        }"#;
+
+        let config = VentoyConfig::parse(json).expect("config");
+
+        assert!(config
+            .image_password_for("/iso/special.iso")
+            .expect("file password")
+            .verify("special"));
+        assert!(config
+            .image_password_for("/iso/ubuntu.iso")
+            .expect("parent password")
+            .verify("parent"));
+        assert!(config
+            .image_password_for("/tools/other.iso")
+            .expect("type password")
+            .verify("fallback"));
+        assert!(config
+            .image_password_for("/boot/install.wim")
+            .expect("md5 password")
+            .verify("secret"));
+    }
+
+    #[test]
+    fn verifies_salted_md5_password() {
+        let password =
+            VentoyPassword::parse("md5#pepper#afcd70a1438b9b8ce9be72e89ca602a8").expect("password");
+
+        assert!(password.verify("secret"));
+        assert!(!password.verify("other"));
     }
 
     #[test]
