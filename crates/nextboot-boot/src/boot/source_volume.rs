@@ -8,6 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ptr::NonNull;
 use nextboot_fs::exfat::ExFat;
+use nextboot_fs::ext4::Ext4;
 use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::ntfs::Ntfs;
@@ -171,6 +172,7 @@ pub(super) struct SourceVolumeFileMetadata {
 pub(super) enum SourceVolumeFileSystem {
     Fat32(Fat32),
     ExFat(ExFat),
+    Ext4(Ext4),
     Ntfs(Ntfs),
     Udf(Udf),
     Iso9660(Iso9660),
@@ -211,6 +213,7 @@ impl SourceVolumeFileSystem {
                 .map_err(fs_error_to_uefi_status)?),
             _ => Ok(Udf::open(shared.clone())
                 .map(Self::Udf)
+                .or_else(|_| Ext4::open(shared.clone()).map(Self::Ext4))
                 .or_else(|_| Iso9660::open(shared).map(Self::Iso9660))
                 .map_err(fs_error_to_uefi_status)?),
         }
@@ -259,6 +262,7 @@ impl SourceVolumeFileSystem {
         Ok(match self {
             Self::Fat32(fs) => fs.stat(path),
             Self::ExFat(fs) => fs.stat(path),
+            Self::Ext4(fs) => fs.stat(path),
             Self::Ntfs(fs) => fs.stat(path),
             Self::Udf(fs) => fs.stat(path),
             Self::Iso9660(fs) => fs.stat(path),
@@ -270,6 +274,7 @@ impl SourceVolumeFileSystem {
         Ok(match self {
             Self::Fat32(fs) => fs.read_file(path, offset, buf),
             Self::ExFat(fs) => fs.read_file(path, offset, buf),
+            Self::Ext4(fs) => fs.read_file(path, offset, buf),
             Self::Ntfs(fs) => fs.read_file(path, offset, buf),
             Self::Udf(fs) => fs.read_file(path, offset, buf),
             Self::Iso9660(fs) => fs.read_file(path, offset, buf),
@@ -281,6 +286,7 @@ impl SourceVolumeFileSystem {
         Ok(match self {
             Self::Fat32(fs) => fs.file_extents(path),
             Self::ExFat(fs) => fs.file_extents(path),
+            Self::Ext4(fs) => fs.file_extents(path),
             Self::Ntfs(fs) => fs.file_extents(path),
             Self::Udf(fs) => fs.file_extents(path),
             Self::Iso9660(fs) => fs.file_extents(path),
@@ -292,6 +298,7 @@ impl SourceVolumeFileSystem {
         match self {
             Self::Fat32(fs) => fs.block_size(),
             Self::ExFat(fs) => fs.block_size(),
+            Self::Ext4(fs) => fs.block_size(),
             Self::Ntfs(fs) => fs.block_size(),
             Self::Udf(fs) => fs.block_size(),
             Self::Iso9660(fs) => fs.block_size(),

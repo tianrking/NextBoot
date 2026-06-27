@@ -12,6 +12,7 @@ use alloc::rc::Rc;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use nextboot_fs::exfat::ExFat;
+use nextboot_fs::ext4::Ext4;
 use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::ntfs::Ntfs;
@@ -357,6 +358,25 @@ impl<'a> IsoScanner<'a> {
                         config,
                         extent_lba_offset,
                     )
+                })
+                .or_else(|| {
+                    Ext4::open(shared.clone()).ok().and_then(|fs| {
+                        self.build_vlnk_iso_file_from_fs(
+                            asset_volume_handle,
+                            asset_volume_index,
+                            asset_source_disk,
+                            asset_source_disk_size,
+                            target_volume_handle,
+                            target_source_disk,
+                            target_source_disk_size,
+                            target_block_io,
+                            &fs,
+                            target_path,
+                            link_path,
+                            config,
+                            extent_lba_offset,
+                        )
+                    })
                 })
                 .or_else(|| {
                     Iso9660::open(shared).ok().and_then(|fs| {
