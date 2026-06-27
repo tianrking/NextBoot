@@ -44,6 +44,7 @@ SMOKE=0
 SMOKE_BOOT=0
 SMOKE_EFI_ISO=0
 SMOKE_VLNK_ISO=0
+SMOKE_AUTO_MEMDISK=0
 SMOKE_WINDOWS_ISO=0
 SMOKE_WINDOWS_WIMBOOT=0
 SMOKE_LINUX_ISO=0
@@ -76,6 +77,8 @@ Options:
   --smoke-boot       With --smoke, press Enter and verify boot preparation starts
   --smoke-efi-iso    Generate a minimal UEFI ISO and verify its loader starts
   --smoke-vlnk-iso   Generate a minimal UEFI ISO behind a Ventoy .vlnk pointer
+  --smoke-auto-memdisk
+                     Generate a minimal UEFI ISO and force Ventoy auto_memdisk
   --smoke-windows-iso
                      Generate a Windows-style smoke ISO and verify bootmgfw starts
   --smoke-windows-wimboot
@@ -194,6 +197,13 @@ while [ $# -gt 0 ]; do
             SMOKE_BOOT=1
             SMOKE_EFI_ISO=1
             SMOKE_VLNK_ISO=1
+            shift
+            ;;
+        --smoke-auto-memdisk)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_EFI_ISO=1
+            SMOKE_AUTO_MEMDISK=1
             shift
             ;;
         --smoke-windows-iso)
@@ -393,6 +403,7 @@ PY_ARGS=(
     "$SMOKE_VLNK_ISO"
     "$SMOKE_VLNK_FILE"
     "$SMOKE_HELPER_FILE"
+    "$SMOKE_AUTO_MEMDISK"
 )
 if [ "${#IMAGES[@]}" -gt 0 ]; then
     PY_ARGS+=("${IMAGES[@]}")
@@ -418,7 +429,8 @@ smoke_windows_wimboot = sys.argv[8] == "1"
 smoke_vlnk_iso = sys.argv[9] == "1"
 smoke_vlnk_file = sys.argv[10]
 smoke_helper_file = sys.argv[11]
-image_files = sys.argv[12:]
+smoke_auto_memdisk = sys.argv[12] == "1"
+image_files = sys.argv[13:]
 if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
@@ -528,6 +540,23 @@ def make_smoke_linux_plugin_files(images):
         ),
     ]
 
+def make_smoke_auto_memdisk_files(images):
+    smoke_image = next(
+        (
+            os.path.basename(image)
+            for image in images
+            if os.path.basename(image).lower() == "nextboot-smoke-efi.iso"
+        ),
+        os.path.basename(images[0]) if images else "nextboot-smoke-efi.iso",
+    )
+    ventoy_json = f"""{{
+  "auto_memdisk": [
+    "/ISO/{smoke_image}"
+  ]
+}}
+""".encode("utf-8")
+    return [("/ventoy/ventoy.json", ventoy_json)]
+
 def make_smoke_windows_wimboot_files(helper):
     if not helper:
         raise SystemExit("windows wimboot smoke helper is missing")
@@ -542,6 +571,8 @@ def make_smoke_windows_wimboot_files(helper):
     return [("/ventoy/wimboot.x86_64.xz", compressed)]
 
 extra_files = []
+if smoke_auto_memdisk:
+    extra_files.extend(make_smoke_auto_memdisk_files(image_files))
 if smoke_linux_plugins:
     extra_files.extend(make_smoke_linux_plugin_files(image_files))
 if smoke_windows_wimboot:
@@ -1668,6 +1699,11 @@ if [ "$SMOKE" -eq 1 ]; then
                 EXPECT_ARGS+=(
                     --expect "Using EFI El Torito boot image"
                 )
+                if [ "$SMOKE_AUTO_MEMDISK" -eq 1 ]; then
+                    EXPECT_ARGS+=(
+                        --expect "Using Ventoy auto_memdisk for /ISO/nextboot-smoke-efi.iso"
+                    )
+                fi
                 if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
                     if [ "$SMOKE_WINDOWS_WIMBOOT" -eq 1 ]; then
                         EXPECT_ARGS+=(

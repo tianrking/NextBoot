@@ -2596,7 +2596,7 @@ impl<'a> BootManager<'a> {
 
     fn open_iso9660_filesystem(&self, source_block_io: &BlockIO) -> uefi::Result<Iso9660> {
         let config = self.iso9660_virtual_config();
-        let vbio = self.build_virtual_block_io(config, source_block_io)?;
+        let vbio = self.build_source_backed_virtual_block_io(config, source_block_io)?;
         Ok(
             Iso9660::open(Rc::new(VirtualIsoBlockIo::new(vbio)))
                 .map_err(fs_error_to_uefi_status)?,
@@ -2605,7 +2605,7 @@ impl<'a> BootManager<'a> {
 
     fn open_udf_filesystem(&self, source_block_io: &BlockIO) -> uefi::Result<Udf> {
         let config = self.iso9660_virtual_config();
-        let vbio = self.build_virtual_block_io(config, source_block_io)?;
+        let vbio = self.build_source_backed_virtual_block_io(config, source_block_io)?;
         Ok(Udf::open(Rc::new(VirtualIsoBlockIo::new(vbio))).map_err(fs_error_to_uefi_status)?)
     }
 
@@ -3019,6 +3019,23 @@ impl<'a> BootManager<'a> {
         config: VirtualDeviceConfig,
         source_block_io: &BlockIO,
     ) -> uefi::Result<VirtualBlockIo> {
+        if self
+            .iso
+            .ventoy_plugin
+            .as_ref()
+            .is_some_and(|plugin| plugin.auto_memdisk)
+        {
+            return self.build_auto_memdisk_block_io(config, source_block_io);
+        }
+
+        self.build_source_backed_virtual_block_io(config, source_block_io)
+    }
+
+    fn build_source_backed_virtual_block_io(
+        &self,
+        config: VirtualDeviceConfig,
+        source_block_io: &BlockIO,
+    ) -> uefi::Result<VirtualBlockIo> {
         let mut vbio = if self.iso.image_format == ImageFormat::DynamicVhd {
             self.build_dynamic_vhd_block_io(config, source_block_io)?
         } else if self.iso.image_format == ImageFormat::Vhdx {
@@ -3051,6 +3068,35 @@ impl<'a> BootManager<'a> {
             .ok_or(uefi::Status::DEVICE_ERROR)?;
         vbio.set_physical_reader(reader);
 
+        Ok(vbio)
+    }
+
+    fn build_auto_memdisk_block_io(
+        &self,
+        config: VirtualDeviceConfig,
+        source_block_io: &BlockIO,
+    ) -> uefi::Result<VirtualBlockIo> {
+        let image_size =
+            usize::try_from(config.iso_size).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        let mut image = Vec::new();
+        image
+            .try_reserve_exact(image_size)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        image.resize(image_size, 0);
+
+        let source_vbio =
+            self.build_source_backed_virtual_block_io(config.clone(), source_block_io)?;
+        read_vhd_file_bytes(&source_vbio, 0, &mut image)?;
+
+        info!(
+            "Using Ventoy auto_memdisk for {} ({} bytes loaded)",
+            self.iso.path, image_size
+        );
+
+        let mut vbio = VirtualBlockIo::new(config);
+        vbio.set_physical_reader(ZeroPhysicalReader);
+        vbio.add_memory_overlay(MemoryOverlay::new(0, image))
+            .map_err(virtio_error_to_uefi_status)?;
         Ok(vbio)
     }
 
@@ -3669,7 +3715,8 @@ impl<'a> BootManager<'a> {
     ) -> uefi::Result<VirtualIsoFilesystem> {
         let config = self.iso9660_virtual_config();
         if self.iso.is_udf {
-            let vbio = self.build_virtual_block_io(config.clone(), source_block_io)?;
+            let vbio =
+                self.build_source_backed_virtual_block_io(config.clone(), source_block_io)?;
             match Udf::open(Rc::new(VirtualIsoBlockIo::new(vbio))) {
                 Ok(udf) => {
                     info!("Using UDF SimpleFileSystem backend for {}", self.iso.path);
@@ -3684,7 +3731,7 @@ impl<'a> BootManager<'a> {
             }
         }
 
-        let vbio = self.build_virtual_block_io(config, source_block_io)?;
+        let vbio = self.build_source_backed_virtual_block_io(config, source_block_io)?;
         let iso = Iso9660::open(Rc::new(VirtualIsoBlockIo::new(vbio)))
             .map_err(fs_error_to_uefi_status)?;
         Ok(VirtualIsoFilesystem::Iso9660(iso))
@@ -4025,6 +4072,15 @@ impl BlockIoOps for UefiPhysicalReader {
 
     fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
         PhysicalReader::read_blocks(self, lba, buf).map_err(virtio_error_to_fs_error)
+    }
+}
+
+struct ZeroPhysicalReader;
+
+impl PhysicalReader for ZeroPhysicalReader {
+    fn read_blocks(&self, _lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
+        buf.fill(0);
+        Ok(())
     }
 }
 

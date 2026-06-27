@@ -208,6 +208,7 @@ pub struct VentoyImagePlugin {
     pub injection_archive: Option<String>,
     pub dud: Option<VentoyDud>,
     pub conf_replace: Vec<VentoyConfReplace>,
+    pub auto_memdisk: bool,
 }
 
 impl VentoyImagePlugin {
@@ -217,6 +218,7 @@ impl VentoyImagePlugin {
             && self.injection_archive.is_none()
             && self.dud.is_none()
             && self.conf_replace.is_empty()
+            && !self.auto_memdisk
     }
 }
 
@@ -245,6 +247,7 @@ pub struct VentoyConfig {
     pub injection: Vec<VentoyPathRule<String>>,
     pub dud: Vec<VentoyPathRule<VentoyDud>>,
     pub conf_replace: Vec<VentoyPathRule<VentoyConfReplace>>,
+    pub auto_memdisk: Vec<String>,
 }
 
 impl VentoyConfig {
@@ -381,6 +384,10 @@ impl VentoyConfig {
         plugin.persistence = find_matching_rule(&self.persistence, path).cloned();
         plugin.injection_archive = find_matching_rule(&self.injection, path).cloned();
         plugin.dud = find_matching_rule(&self.dud, path).cloned();
+        plugin.auto_memdisk = self
+            .auto_memdisk
+            .iter()
+            .any(|target| path_pattern_eq(target, path));
 
         for rule in &self.conf_replace {
             if target_matches_image(&rule.target, path) {
@@ -773,6 +780,7 @@ impl<'a> JsonParser<'a> {
         let mut parsed_platform_password = false;
         let mut parsed_platform_menu_tip = false;
         let mut parsed_platform_menu_class = false;
+        let mut parsed_platform_auto_memdisk = false;
         self.skip_ws();
         self.expect(b'{')?;
 
@@ -810,6 +818,13 @@ impl<'a> JsonParser<'a> {
                 "injection" => self.parse_injection(&mut config)?,
                 "dud" => self.parse_dud(&mut config)?,
                 "conf_replace" => self.parse_conf_replace(&mut config)?,
+                key if is_current_platform_plugin_key(key, "auto_memdisk") => {
+                    self.parse_auto_memdisk(&mut config)?;
+                    parsed_platform_auto_memdisk = true;
+                }
+                "auto_memdisk" if !parsed_platform_auto_memdisk => {
+                    self.parse_auto_memdisk(&mut config)?
+                }
                 "image_list" => {
                     config.image_list_mode = VentoyImageListMode::Allow;
                     config.image_list = self.parse_string_array()?;
@@ -818,7 +833,7 @@ impl<'a> JsonParser<'a> {
                     config.image_list_mode = VentoyImageListMode::Deny;
                     config.image_list = self.parse_string_array()?;
                 }
-                "menu_tip" | "menu_class" => self.skip_value()?,
+                "menu_tip" | "menu_class" | "auto_memdisk" => self.skip_value()?,
                 "password" => self.skip_value()?,
                 _ => self.skip_value()?,
             }
@@ -1293,6 +1308,16 @@ impl<'a> JsonParser<'a> {
             break;
         }
 
+        Ok(())
+    }
+
+    fn parse_auto_memdisk(&mut self, config: &mut VentoyConfig) -> Result<(), VentoyConfigError> {
+        let paths = clean_plugin_paths(self.parse_string_array()?);
+        config
+            .auto_memdisk
+            .try_reserve_exact(paths.len())
+            .map_err(|_| VentoyConfigError::OutOfMemory)?;
+        config.auto_memdisk.extend(paths);
         Ok(())
     }
 
@@ -2041,6 +2066,9 @@ mod tests {
             "dud": [
                 { "image": "/ISO/rhel*.iso", "dud": ["/dud/dd.iso", "relative.img"] }
             ],
+            "auto_memdisk": [
+                "/ISO/ubuntu.iso"
+            ],
             "conf_replace": [
                 { "iso": "/ISO/ubuntu.iso", "org": "/boot/grub/grub.cfg", "new": "/cfg/a.cfg", "img": 0 },
                 { "iso": "/ISO/ubuntu.iso", "org": "/isolinux/txt.cfg", "new": "/cfg/b.cfg", "img": 1 },
@@ -2064,6 +2092,7 @@ mod tests {
             Some("/inject/tools.tar.gz")
         );
         assert_eq!(plugin.conf_replace.len(), 2);
+        assert!(plugin.auto_memdisk);
 
         let dud = config
             .image_plugin_for("/ISO/rhel8.iso")
