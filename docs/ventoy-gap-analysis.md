@@ -18,7 +18,8 @@ workflows and which gaps are still worth pursuing.
 - 4K Native fixed-disk coverage for buses that can expose logical block size
   overrides in QEMU. NVMe is the primary 4K fixed-disk smoke path; QEMU's AHCI
   `ide-hd` model is kept at 512B because it requires 512B discard granularity.
-- Ventoy-compatible `.vlnk.iso` pointer files for images outside `/ISO`.
+- Ventoy-compatible `.vlnk.iso` pointer files for images outside `/ISO`,
+  including XFS QEMU data partition smoke coverage.
 - Ventoy-style Linux plugin payloads for persistence, injection, DUD, and
   auto-install smoke coverage.
 - Windows ISO chain loading plus WIMBOOT fallback asset integration.

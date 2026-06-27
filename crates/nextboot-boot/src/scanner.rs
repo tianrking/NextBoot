@@ -12,6 +12,7 @@ mod model;
 mod partitions;
 mod paths;
 mod uefi_paths;
+mod vlnk_filesystems;
 mod vlnk_links;
 
 use crate::source_disk::{

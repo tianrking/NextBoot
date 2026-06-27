@@ -11,13 +11,7 @@ use crate::vlnk::{self, VentoyVlnk};
 use alloc::rc::Rc;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use nextboot_fs::exfat::ExFat;
-use nextboot_fs::ext4::Ext4;
-use nextboot_fs::fat32::Fat32;
-use nextboot_fs::iso9660::Iso9660;
-use nextboot_fs::ntfs::Ntfs;
-use nextboot_fs::udf::Udf;
-use nextboot_fs::{detect_fs_type, FileSystem, FileSystemType};
+use nextboot_fs::{detect_fs_type, FileSystem};
 use uefi::proto::media::block::BlockIO;
 use uefi::proto::media::file::Directory;
 use uefi::table::boot::SearchType;
@@ -268,139 +262,7 @@ impl<'a> IsoScanner<'a> {
         None
     }
 
-    fn resolve_vlnk_on_detected_fs(
-        &self,
-        asset_volume_handle: Handle,
-        asset_volume_index: usize,
-        asset_source_disk: Option<SourceDiskIdentity>,
-        asset_source_disk_size: u64,
-        target_volume_handle: Handle,
-        target_source_disk: Option<SourceDiskIdentity>,
-        target_source_disk_size: u64,
-        target_block_io: &BlockIO,
-        shared: nextboot_fs::SharedBlockIo,
-        fs_type: FileSystemType,
-        target_path: &str,
-        link_path: &str,
-        config: &VentoyConfig,
-        extent_lba_offset: u64,
-    ) -> Option<IsoFile> {
-        match fs_type {
-            FileSystemType::Fat32 => {
-                let fs = Fat32::open(shared).ok()?;
-                self.build_vlnk_iso_file_from_fs(
-                    asset_volume_handle,
-                    asset_volume_index,
-                    asset_source_disk,
-                    asset_source_disk_size,
-                    target_volume_handle,
-                    target_source_disk,
-                    target_source_disk_size,
-                    target_block_io,
-                    &fs,
-                    target_path,
-                    link_path,
-                    config,
-                    extent_lba_offset,
-                )
-            }
-            FileSystemType::ExFat => {
-                let fs = ExFat::open(shared).ok()?;
-                self.build_vlnk_iso_file_from_fs(
-                    asset_volume_handle,
-                    asset_volume_index,
-                    asset_source_disk,
-                    asset_source_disk_size,
-                    target_volume_handle,
-                    target_source_disk,
-                    target_source_disk_size,
-                    target_block_io,
-                    &fs,
-                    target_path,
-                    link_path,
-                    config,
-                    extent_lba_offset,
-                )
-            }
-            FileSystemType::Ntfs => {
-                let fs = Ntfs::open(shared).ok()?;
-                self.build_vlnk_iso_file_from_fs(
-                    asset_volume_handle,
-                    asset_volume_index,
-                    asset_source_disk,
-                    asset_source_disk_size,
-                    target_volume_handle,
-                    target_source_disk,
-                    target_source_disk_size,
-                    target_block_io,
-                    &fs,
-                    target_path,
-                    link_path,
-                    config,
-                    extent_lba_offset,
-                )
-            }
-            _ => Udf::open(shared.clone())
-                .ok()
-                .and_then(|fs| {
-                    self.build_vlnk_iso_file_from_fs(
-                        asset_volume_handle,
-                        asset_volume_index,
-                        asset_source_disk,
-                        asset_source_disk_size,
-                        target_volume_handle,
-                        target_source_disk,
-                        target_source_disk_size,
-                        target_block_io,
-                        &fs,
-                        target_path,
-                        link_path,
-                        config,
-                        extent_lba_offset,
-                    )
-                })
-                .or_else(|| {
-                    Ext4::open(shared.clone()).ok().and_then(|fs| {
-                        self.build_vlnk_iso_file_from_fs(
-                            asset_volume_handle,
-                            asset_volume_index,
-                            asset_source_disk,
-                            asset_source_disk_size,
-                            target_volume_handle,
-                            target_source_disk,
-                            target_source_disk_size,
-                            target_block_io,
-                            &fs,
-                            target_path,
-                            link_path,
-                            config,
-                            extent_lba_offset,
-                        )
-                    })
-                })
-                .or_else(|| {
-                    Iso9660::open(shared).ok().and_then(|fs| {
-                        self.build_vlnk_iso_file_from_fs(
-                            asset_volume_handle,
-                            asset_volume_index,
-                            asset_source_disk,
-                            asset_source_disk_size,
-                            target_volume_handle,
-                            target_source_disk,
-                            target_source_disk_size,
-                            target_block_io,
-                            &fs,
-                            target_path,
-                            link_path,
-                            config,
-                            extent_lba_offset,
-                        )
-                    })
-                }),
-        }
-    }
-
-    fn build_vlnk_iso_file_from_fs<F: FileSystem>(
+    pub(super) fn build_vlnk_iso_file_from_fs<F: FileSystem>(
         &self,
         asset_volume_handle: Handle,
         asset_volume_index: usize,
