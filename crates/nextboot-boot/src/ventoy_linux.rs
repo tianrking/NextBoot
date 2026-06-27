@@ -475,6 +475,39 @@ mod tests {
     }
 
     #[test]
+    fn writes_persistent_map_entry_when_configured() {
+        let os_param = [0; VENTOY_OS_PARAM_SIZE];
+        let image_map = [VentoyImageMapChunk {
+            img_start_sector: 0,
+            img_end_sector: 0,
+            disk_start_sector: 1,
+            disk_end_sector: 1,
+        }];
+        let persistent_map = [VentoyImageMapChunk {
+            img_start_sector: 0,
+            img_end_sector: 2047,
+            disk_start_sector: 4096,
+            disk_end_sector: 6143,
+        }];
+        let input = VentoyLinuxInitrdInput {
+            base_archives: &[],
+            image_map: &image_map,
+            os_param: &os_param,
+            auto_install: None,
+            persistent_map: Some(&persistent_map),
+            injection_archive: None,
+            dud_files: &[],
+        };
+
+        let archive = build_ventoy_linux_initrd(&input).expect("archive");
+
+        assert_eq!(
+            entry_data(&archive, VENTOY_PERSISTENT_MAP_PATH).expect("persistent map"),
+            encode_image_map(&persistent_map).expect("encoded persistent map")
+        );
+    }
+
+    #[test]
     fn maps_extents_to_ventoy_chunks() {
         let extents = [
             VentoyExtent {

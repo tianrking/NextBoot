@@ -909,6 +909,7 @@ impl<'a> BootManager<'a> {
 
         let plugin = self.iso.ventoy_plugin.as_ref();
         let auto_install = self.load_selected_auto_install_template(plugin)?;
+        let persistent_map = self.load_selected_persistence_map(plugin)?;
         let injection = self.load_plugin_injection_archive(plugin)?;
         let dud_files = self.load_plugin_dud_files(plugin)?;
         let dud_refs: Vec<VentoyDudFile<'_>> = dud_files
@@ -924,7 +925,7 @@ impl<'a> BootManager<'a> {
             image_map: &image_map,
             os_param: &os_param,
             auto_install: auto_install.as_ref().map(|file| file.data.as_slice()),
-            persistent_map: None,
+            persistent_map: persistent_map.as_deref(),
             injection_archive: injection.as_ref().map(|file| file.data.as_slice()),
             dud_files: &dud_refs,
         };
@@ -937,11 +938,12 @@ impl<'a> BootManager<'a> {
         initrd_data.extend_from_slice(&overlay);
 
         info!(
-            "Appended Ventoy Linux initrd overlay: {} bytes, base_archives={}, image_chunks={}, auto_install={}, injection={}, dud_files={}",
+            "Appended Ventoy Linux initrd overlay: {} bytes, base_archives={}, image_chunks={}, auto_install={}, persistence={}, injection={}, dud_files={}",
             overlay.len(),
             base_archives.len(),
             image_map.len(),
             auto_install.is_some(),
+            persistent_map.as_ref().map_or(0, Vec::len),
             injection.is_some(),
             dud_refs.len()
         );
@@ -1031,6 +1033,108 @@ impl<'a> BootManager<'a> {
                 Ok(None)
             }
         }
+    }
+
+    fn load_selected_persistence_map(
+        &self,
+        plugin: Option<&crate::ventoy_config::VentoyImagePlugin>,
+    ) -> uefi::Result<Option<Vec<crate::ventoy_linux::VentoyImageMapChunk>>> {
+        let Some(persistence) = plugin.and_then(|plugin| plugin.persistence.as_ref()) else {
+            return Ok(None);
+        };
+        let Some(index) =
+            selected_persistence_backend_index(persistence.autosel, persistence.backends.len())
+        else {
+            info!(
+                "Ventoy persistence is configured for {}, but no backend is selected",
+                self.iso.path
+            );
+            return Ok(None);
+        };
+        let Some(path) = persistence.backends.get(index) else {
+            return Ok(None);
+        };
+
+        let metadata = match self.source_volume_file_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                warn!(
+                    "Ventoy persistence backend {} for {} was not mapped: {:?}",
+                    path,
+                    self.iso.path,
+                    err.status()
+                );
+                return Ok(None);
+            }
+        };
+
+        let disk_sector_size = self
+            .iso
+            .source_disk
+            .map_or(metadata.block_size, |disk| disk.block_size);
+        if disk_sector_size != metadata.block_size {
+            warn!(
+                "Ventoy persistence backend {} source disk sector size {} differs from volume sector size {}",
+                metadata.path, disk_sector_size, metadata.block_size
+            );
+            return Ok(None);
+        }
+
+        let extents = self.ventoy_source_volume_extents(&metadata.extents)?;
+        let chunks =
+            match crate::ventoy_linux::build_image_map_chunks(&extents, metadata.block_size, 512) {
+                Ok(chunks) if !chunks.is_empty() => chunks,
+                Ok(_) => {
+                    warn!(
+                        "Ventoy persistence backend {} for {} has no mapped extents",
+                        metadata.path, self.iso.path
+                    );
+                    return Ok(None);
+                }
+                Err(err) => {
+                    warn!(
+                        "Ventoy persistence backend {} for {} has unsupported extents: {:?}",
+                        metadata.path, self.iso.path, err
+                    );
+                    return Ok(None);
+                }
+            };
+
+        info!(
+            "Mapped Ventoy persistence backend {} for {}: {} chunks, block_size={}",
+            metadata.path,
+            self.iso.path,
+            chunks.len(),
+            metadata.block_size
+        );
+        Ok(Some(chunks))
+    }
+
+    fn ventoy_source_volume_extents(
+        &self,
+        source_extents: &[IsoExtent],
+    ) -> uefi::Result<Vec<crate::ventoy::VentoyExtent>> {
+        let mut extents = Vec::new();
+        extents
+            .try_reserve_exact(source_extents.len())
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+
+        let disk_lba_offset = self
+            .iso
+            .source_disk
+            .map_or(0, |disk| disk.partition_start_lba);
+        for extent in source_extents {
+            extents.push(crate::ventoy::VentoyExtent {
+                virtual_block_start: extent.virtual_block_start,
+                physical_lba: extent
+                    .physical_lba
+                    .checked_add(disk_lba_offset)
+                    .ok_or(uefi::Status::OUT_OF_RESOURCES)?,
+                block_count: extent.block_count,
+            });
+        }
+
+        Ok(extents)
     }
 
     fn load_plugin_injection_archive(
@@ -3653,6 +3757,15 @@ fn selected_ventoy_plugin_index(autosel: Option<usize>, count: usize) -> Option<
         Some(0) | None => None,
         Some(value) if value <= count => Some(value - 1),
         _ => None,
+    }
+}
+
+fn selected_persistence_backend_index(autosel: Option<usize>, count: usize) -> Option<usize> {
+    match autosel {
+        Some(0) => None,
+        Some(value) => selected_ventoy_plugin_index(Some(value), count),
+        None if count == 1 => Some(0),
+        None => None,
     }
 }
 
