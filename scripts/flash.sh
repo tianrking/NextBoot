@@ -34,7 +34,7 @@ Usage:
 
 Options:
   --layout LAYOUT   Disk layout: split or single (default: split)
-  --data-fs FS      Data partition filesystem for split layout: exfat or fat32 (default: exfat)
+  --data-fs FS      Data partition filesystem for split layout: exfat, fat32, or ntfs (default: exfat)
   --esp-size MB     ESP size for split layout in MiB (default: 260)
   --dry-run         Print the commands without writing to the device
   -y, --yes         Skip the confirmation prompt
@@ -43,6 +43,7 @@ Options:
 Examples:
   $0 list
   $0 --layout split --data-fs exfat /dev/diskX
+  $0 --layout split --data-fs ntfs /dev/diskX
   $0 --layout split --data-fs fat32 /dev/sdX
   $0 --layout single /dev/sdX
 USAGE
@@ -126,11 +127,42 @@ find_linux_exfat_mkfs() {
     fi
 }
 
+find_ntfs_mkfs() {
+    if command_exists mkfs.ntfs; then
+        printf 'mkfs.ntfs\n'
+    elif command_exists mkntfs; then
+        printf 'mkntfs\n'
+    else
+        return 1
+    fi
+}
+
+ntfs_mkfs_command() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf 'mkfs.ntfs\n'
+    else
+        find_ntfs_mkfs
+    fi
+}
+
 require_linux_tools() {
     command_exists parted || die "parted is required"
     command_exists mkfs.vfat || die "mkfs.vfat is required"
     if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "exfat" ]; then
         find_linux_exfat_mkfs >/dev/null || die "mkfs.exfat or mkexfatfs is required for --data-fs exfat"
+    fi
+    if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "ntfs" ]; then
+        find_ntfs_mkfs >/dev/null || die "mkfs.ntfs or mkntfs is required for --data-fs ntfs"
+    fi
+}
+
+require_macos_tools() {
+    if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "ntfs" ]; then
+        find_ntfs_mkfs >/dev/null || die "mkfs.ntfs or mkntfs is required for --data-fs ntfs on macOS"
+        if ! command_exists ntfs-3g; then
+            warn "ntfs-3g was not found; macOS may mount the NTFS Data partition read-only after formatting."
+            warn "If creating /ISO fails, install a writable NTFS driver or create /ISO from Windows/Linux."
+        fi
     fi
 }
 
@@ -229,13 +261,17 @@ case "$LAYOUT" in
 esac
 
 case "$DATA_FS" in
-    exfat|fat32) ;;
-    *) die "--data-fs must be exfat or fat32" ;;
+    exfat|fat32|ntfs) ;;
+    *) die "--data-fs must be exfat, fat32, or ntfs" ;;
 esac
 
 case "$ESP_SIZE_MB" in
     ''|*[!0-9]*) die "--esp-size must be an integer MiB value" ;;
 esac
+
+if [ "$LAYOUT" = "single" ] && [ "$DATA_FS" != "exfat" ]; then
+    warn "--data-fs is ignored for single layout"
+fi
 
 if [ "$ESP_SIZE_MB" -lt 64 ]; then
     die "--esp-size must be at least 64 MiB"
@@ -275,6 +311,9 @@ fi
 
 warn "Unmounting device..."
 if [[ "$HOST_OS" == "darwin"* ]]; then
+    if [ "$DRY_RUN" -eq 0 ]; then
+        require_macos_tools
+    fi
     DEVICE="$(normalize_macos_device "$DEVICE")"
     run_cmd diskutil unmountDisk "$DEVICE" || true
 else
@@ -289,10 +328,20 @@ if [[ "$HOST_OS" == "darwin"* ]]; then
     if [ "$LAYOUT" = "split" ]; then
         if [ "$DATA_FS" = "fat32" ]; then
             MAC_DATA_FS="FAT32"
+        elif [ "$DATA_FS" = "ntfs" ]; then
+            # diskutil on stock macOS cannot format NTFS.  Create a Microsoft
+            # Basic Data placeholder, then reformat it with mkfs.ntfs/mkntfs.
+            MAC_DATA_FS="ExFAT"
         else
             MAC_DATA_FS="ExFAT"
         fi
         run_sudo diskutil partitionDisk "$DEVICE" GPT FAT32 NEXBOOT "${ESP_SIZE_MB}MiB" "$MAC_DATA_FS" NEXTDATA R
+        if [ "$DATA_FS" = "ntfs" ]; then
+            DATA_PART="${DEVICE}s2"
+            run_cmd diskutil unmount "$DATA_PART" || true
+            NTFS_MKFS="$(ntfs_mkfs_command)"
+            run_sudo "$NTFS_MKFS" -Q -F -L NEXTDATA "$DATA_PART"
+        fi
     else
         run_sudo diskutil partitionDisk "$DEVICE" GPT FAT32 NEXBOOT 100%
     fi
@@ -300,9 +349,14 @@ else
     run_sudo parted -s "$DEVICE" mklabel gpt
     if [ "$LAYOUT" = "split" ]; then
         esp_end="${ESP_SIZE_MB}MiB"
+        if [ "$DATA_FS" = "ntfs" ]; then
+            parted_data_type="ntfs"
+        else
+            parted_data_type="fat32"
+        fi
         run_sudo parted -s "$DEVICE" mkpart NEXBOOT fat32 1MiB "$esp_end"
         run_sudo parted -s "$DEVICE" set 1 esp on
-        run_sudo parted -s "$DEVICE" mkpart NEXTDATA fat32 "$esp_end" 100%
+        run_sudo parted -s "$DEVICE" mkpart NEXTDATA "$parted_data_type" "$esp_end" 100%
     else
         run_sudo parted -s "$DEVICE" mkpart NEXBOOT fat32 1MiB 100%
         run_sudo parted -s "$DEVICE" set 1 esp on
@@ -323,6 +377,9 @@ else
                 EXFAT_MKFS="$(find_linux_exfat_mkfs)"
             fi
             run_sudo "$EXFAT_MKFS" -n NEXTDATA "$DATA_PART"
+        elif [ "$DATA_FS" = "ntfs" ]; then
+            NTFS_MKFS="$(ntfs_mkfs_command)"
+            run_sudo "$NTFS_MKFS" -Q -F -L NEXTDATA "$DATA_PART"
         else
             run_sudo mkfs.vfat -F 32 -n NEXTDATA "$DATA_PART"
         fi
@@ -343,10 +400,20 @@ if [[ "$HOST_OS" == "darwin"* ]]; then
 
     if [ "$LAYOUT" = "split" ]; then
         DATA_PART="${DEVICE}s2"
-        DATA_MOUNT="$(ensure_macos_mounted "$DATA_PART")"
+        if [ "$DATA_FS" = "ntfs" ] && command_exists ntfs-3g; then
+            DATA_MOUNT="/tmp/nextboot_flash_data"
+            run_sudo mkdir -p "$DATA_MOUNT"
+            run_sudo ntfs-3g "$DATA_PART" "$DATA_MOUNT"
+        else
+            DATA_MOUNT="$(ensure_macos_mounted "$DATA_PART")"
+        fi
         run_cmd mkdir -p "${DATA_MOUNT}/ISO"
         sync
-        run_cmd diskutil unmount "$DATA_PART"
+        if [ "$DATA_FS" = "ntfs" ] && command_exists ntfs-3g; then
+            run_sudo umount "$DATA_MOUNT"
+        else
+            run_cmd diskutil unmount "$DATA_PART"
+        fi
     else
         run_cmd mkdir -p "${ESP_MOUNT}/ISO"
         sync

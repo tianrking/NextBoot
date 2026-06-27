@@ -157,13 +157,18 @@ loader 被链式启动；`--smoke-windows-iso` 会生成 Windows 风格 ISO，�
 # 写入标准 ESP + Data 双分区布局
 ./scripts/flash.sh --layout split --data-fs exfat /dev/sdX
 
+# 写入 NTFS Data 分区布局，适合 Windows/大文件盘工作流
+./scripts/flash.sh --layout split --data-fs ntfs /dev/sdX
+
 # 先预览将要执行的分区/格式化命令
 ./scripts/flash.sh --dry-run --layout split /dev/sdX
 ```
 
 `flash.sh` 默认使用 split GPT 布局：第 1 分区是 FAT32 ESP，只保存 NextBoot
-启动文件；第 2 分区是 Data 分区，默认 exFAT，用来存放 `/ISO` 下的 ISO/WIM/VHD
-文件。旧式单分区 FAT32 仍可通过 `--layout single` 生成。
+启动文件；第 2 分区是 Data 分区，默认 exFAT，也可选择 FAT32 或 NTFS，用来存放
+`/ISO` 下的 ISO/WIM/VHD 文件。旧式单分区 FAT32 仍可通过 `--layout single` 生成。
+在 macOS 上写入 NTFS Data 分区需要额外安装 `mkfs.ntfs`/`mkntfs`；若要脚本自动创建
+`/ISO` 目录，还需要可写 NTFS 驱动，例如 `ntfs-3g`。
 
 ## 使用方法
 
