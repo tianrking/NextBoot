@@ -69,10 +69,30 @@ pub struct FileProtocol {
         buffer: *const c_void,
     ) -> Status,
     flush: unsafe extern "efiapi" fn(this: *mut FileProtocol) -> Status,
+    open_ex: unsafe extern "efiapi" fn(
+        this: *mut FileProtocol,
+        new_handle: *mut *mut FileProtocol,
+        file_name: *const u16,
+        open_mode: u64,
+        attributes: u64,
+        token: *mut FileIoToken,
+    ) -> Status,
+    read_ex: unsafe extern "efiapi" fn(this: *mut FileProtocol, token: *mut FileIoToken) -> Status,
+    write_ex: unsafe extern "efiapi" fn(this: *mut FileProtocol, token: *mut FileIoToken) -> Status,
+    flush_ex: unsafe extern "efiapi" fn(this: *mut FileProtocol, token: *mut FileIoToken) -> Status,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+struct FileIoToken {
+    event: *mut c_void,
+    status: Status,
+    buffer_size: usize,
+    buffer: *mut c_void,
 }
 
 const SIMPLE_FILE_SYSTEM_REVISION: u64 = 0x0001_0000;
-const FILE_PROTOCOL_REVISION: u64 = 0x0001_0000;
+const FILE_PROTOCOL_REVISION: u64 = 0x0002_0000;
 
 const EFI_FILE_MODE_READ: u64 = 0x0000_0000_0000_0001;
 const EFI_FILE_MODE_WRITE: u64 = 0x0000_0000_0000_0002;
@@ -214,6 +234,10 @@ impl IsoFileProtocol {
                 get_info: Self::get_info_handler,
                 set_info: Self::set_info_handler,
                 flush: Self::flush_handler,
+                open_ex: Self::open_ex_handler,
+                read_ex: Self::read_ex_handler,
+                write_ex: Self::write_ex_handler,
+                flush_ex: Self::flush_ex_handler,
             },
             iso,
             path,
@@ -277,6 +301,26 @@ impl IsoFileProtocol {
         Status::SUCCESS
     }
 
+    unsafe extern "efiapi" fn open_ex_handler(
+        this: *mut FileProtocol,
+        new_handle: *mut *mut FileProtocol,
+        file_name: *const u16,
+        open_mode: u64,
+        attributes: u64,
+        token: *mut FileIoToken,
+    ) -> Status {
+        if token.is_null() {
+            return Status::INVALID_PARAMETER;
+        }
+
+        let status =
+            unsafe { Self::open_handler(this, new_handle, file_name, open_mode, attributes) };
+        unsafe {
+            (*token).status = status;
+        }
+        status
+    }
+
     unsafe extern "efiapi" fn close_handler(this: *mut FileProtocol) -> Status {
         if this.is_null() {
             return Status::INVALID_PARAMETER;
@@ -317,6 +361,22 @@ impl IsoFileProtocol {
         }
     }
 
+    unsafe extern "efiapi" fn read_ex_handler(
+        this: *mut FileProtocol,
+        token: *mut FileIoToken,
+    ) -> Status {
+        if token.is_null() {
+            return Status::INVALID_PARAMETER;
+        }
+
+        let status =
+            unsafe { Self::read_handler(this, &mut (*token).buffer_size, (*token).buffer) };
+        unsafe {
+            (*token).status = status;
+        }
+        status
+    }
+
     unsafe extern "efiapi" fn write_handler(
         _this: *mut FileProtocol,
         buffer_size: *mut usize,
@@ -328,6 +388,27 @@ impl IsoFileProtocol {
             }
         }
         Status::WRITE_PROTECTED
+    }
+
+    unsafe extern "efiapi" fn write_ex_handler(
+        this: *mut FileProtocol,
+        token: *mut FileIoToken,
+    ) -> Status {
+        if token.is_null() {
+            return Status::INVALID_PARAMETER;
+        }
+
+        let status = unsafe {
+            Self::write_handler(
+                this,
+                &mut (*token).buffer_size,
+                (*token).buffer.cast_const(),
+            )
+        };
+        unsafe {
+            (*token).status = status;
+        }
+        status
     }
 
     unsafe extern "efiapi" fn get_position_handler(
@@ -419,6 +500,21 @@ impl IsoFileProtocol {
 
     unsafe extern "efiapi" fn flush_handler(_this: *mut FileProtocol) -> Status {
         Status::SUCCESS
+    }
+
+    unsafe extern "efiapi" fn flush_ex_handler(
+        this: *mut FileProtocol,
+        token: *mut FileIoToken,
+    ) -> Status {
+        if token.is_null() {
+            return Status::INVALID_PARAMETER;
+        }
+
+        let status = unsafe { Self::flush_handler(this) };
+        unsafe {
+            (*token).status = status;
+        }
+        status
     }
 
     fn from_protocol(this: *mut FileProtocol) -> Option<&'static mut Self> {
