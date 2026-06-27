@@ -16,6 +16,10 @@ pub const VENTOY_PART_TYPE_EXFAT: u16 = 0;
 pub const VENTOY_PART_TYPE_NTFS: u16 = 1;
 pub const VENTOY_PART_TYPE_FAT: u16 = 5;
 pub const VENTOY_PART_TYPE_OTHER: u16 = 6;
+pub const VENTOY_CHAIN_LINUX: u8 = 0;
+pub const VENTOY_CHAIN_WINDOWS: u8 = 1;
+pub const VENTOY_CHAIN_WIM: u8 = 2;
+pub const VENTOY_RESERVED_SIZE: usize = 32;
 
 pub const VENTOY_GUID_BYTES: [u8; 16] = [
     0x20, 0x20, 0x77, 0x77, 0x77, 0x2e, 0x76, 0x65, 0x6e, 0x74, 0x6f, 0x79, 0x2e, 0x6e, 0x65, 0x74,
@@ -32,6 +36,13 @@ const OS_PARAM_IMAGE_LOCATION_ADDR_OFFSET: usize = 437;
 const OS_PARAM_IMAGE_LOCATION_LEN_OFFSET: usize = 445;
 const OS_PARAM_RESERVED_OFFSET: usize = 449;
 const OS_PARAM_DISK_SIGNATURE_OFFSET: usize = 481;
+const VENTOY_RESERVED_CHAIN_TYPE_OFFSET: usize = 2;
+const VENTOY_RESERVED_ISO_FORMAT_OFFSET: usize = 3;
+const VENTOY_RESERVED_WINDOWS_CD_PROMPT_OFFSET: usize = 4;
+const VENTOY_RESERVED_LINUX_REMOUNT_OFFSET: usize = 5;
+const VENTOY_RESERVED_VLNK_OFFSET: usize = 6;
+const VENTOY_RESERVED_DISK_SIGNATURE_OFFSET: usize = 7;
+const VENTOY_RESERVED_WINDOWS_MAX_RES_OFFSET: usize = 11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VentoyParamError {
@@ -44,6 +55,67 @@ pub enum VentoyParamError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VentoyReserved {
+    bytes: [u8; VENTOY_RESERVED_SIZE],
+}
+
+impl VentoyReserved {
+    pub const fn new() -> Self {
+        Self {
+            bytes: [0; VENTOY_RESERVED_SIZE],
+        }
+    }
+
+    pub fn with_chain_type(mut self, chain_type: u8) -> Self {
+        self.bytes[VENTOY_RESERVED_CHAIN_TYPE_OFFSET] = chain_type;
+        self
+    }
+
+    pub fn with_iso_udf(mut self, is_udf: bool) -> Self {
+        self.bytes[VENTOY_RESERVED_ISO_FORMAT_OFFSET] = if is_udf { 1 } else { 0 };
+        self
+    }
+
+    pub fn with_windows_cd_prompt(mut self, preserve_prompt: bool) -> Self {
+        self.bytes[VENTOY_RESERVED_WINDOWS_CD_PROMPT_OFFSET] = if preserve_prompt { 1 } else { 0 };
+        self
+    }
+
+    pub fn with_linux_remount(mut self, remount: bool) -> Self {
+        self.bytes[VENTOY_RESERVED_LINUX_REMOUNT_OFFSET] = if remount { 1 } else { 0 };
+        self
+    }
+
+    pub fn with_vlnk(mut self, enabled: bool) -> Self {
+        self.bytes[VENTOY_RESERVED_VLNK_OFFSET] = if enabled { 1 } else { 0 };
+        self
+    }
+
+    pub fn with_disk_signature(mut self, signature: [u8; 4]) -> Self {
+        self.bytes[VENTOY_RESERVED_DISK_SIGNATURE_OFFSET] = signature[0];
+        self.bytes[VENTOY_RESERVED_DISK_SIGNATURE_OFFSET + 1] = signature[1];
+        self.bytes[VENTOY_RESERVED_DISK_SIGNATURE_OFFSET + 2] = signature[2];
+        self.bytes[VENTOY_RESERVED_DISK_SIGNATURE_OFFSET + 3] = signature[3];
+        self
+    }
+
+    pub fn with_windows_max_resolution(mut self, mode: u8) -> Self {
+        self.bytes[VENTOY_RESERVED_WINDOWS_MAX_RES_OFFSET] = mode;
+        self
+    }
+
+    pub fn as_bytes(&self) -> &[u8; VENTOY_RESERVED_SIZE] {
+        &self.bytes
+    }
+}
+
+impl Default for VentoyReserved {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VentoyOsParamInput<'a> {
     pub disk_guid: [u8; 16],
     pub disk_size: u64,
@@ -53,7 +125,7 @@ pub struct VentoyOsParamInput<'a> {
     pub image_size: u64,
     pub image_location_addr: u64,
     pub image_location_len: u32,
-    pub reserved: [u64; 4],
+    pub reserved: VentoyReserved,
     pub disk_signature: [u8; 4],
 }
 
@@ -98,9 +170,8 @@ pub fn build_ventoy_os_param(
         OS_PARAM_IMAGE_LOCATION_LEN_OFFSET,
         input.image_location_len,
     );
-    for (index, value) in input.reserved.iter().copied().enumerate() {
-        write_u64(&mut data, OS_PARAM_RESERVED_OFFSET + index * 8, value);
-    }
+    data[OS_PARAM_RESERVED_OFFSET..OS_PARAM_RESERVED_OFFSET + VENTOY_RESERVED_SIZE]
+        .copy_from_slice(input.reserved.as_bytes());
     data[OS_PARAM_DISK_SIGNATURE_OFFSET..OS_PARAM_DISK_SIGNATURE_OFFSET + 4]
         .copy_from_slice(&input.disk_signature);
 
@@ -221,6 +292,12 @@ mod tests {
 
     #[test]
     fn builds_os_param_with_checksum_and_expected_offsets() {
+        let reserved = VentoyReserved::new()
+            .with_chain_type(VENTOY_CHAIN_WINDOWS)
+            .with_iso_udf(false)
+            .with_windows_cd_prompt(false)
+            .with_disk_signature([0xaa, 0xbb, 0xcc, 0xdd])
+            .with_windows_max_resolution(2);
         let input = VentoyOsParamInput {
             disk_guid: [0x11; 16],
             disk_size: 0x1122_3344_5566_7788,
@@ -230,7 +307,7 @@ mod tests {
             image_size: 0x8877_6655_4433_2211,
             image_location_addr: 0x1234_5000,
             image_location_len: 44,
-            reserved: [1, 2, 3, 4],
+            reserved,
             disk_signature: [0xaa, 0xbb, 0xcc, 0xdd],
         };
 
@@ -264,6 +341,47 @@ mod tests {
             &data[OS_PARAM_DISK_SIGNATURE_OFFSET..OS_PARAM_DISK_SIGNATURE_OFFSET + 4],
             &[0xaa, 0xbb, 0xcc, 0xdd]
         );
+        assert_eq!(
+            data[OS_PARAM_RESERVED_OFFSET + VENTOY_RESERVED_CHAIN_TYPE_OFFSET],
+            VENTOY_CHAIN_WINDOWS
+        );
+        assert_eq!(
+            data[OS_PARAM_RESERVED_OFFSET + VENTOY_RESERVED_ISO_FORMAT_OFFSET],
+            0
+        );
+        assert_eq!(
+            data[OS_PARAM_RESERVED_OFFSET + VENTOY_RESERVED_WINDOWS_CD_PROMPT_OFFSET],
+            0
+        );
+        assert_eq!(
+            &data[OS_PARAM_RESERVED_OFFSET + VENTOY_RESERVED_DISK_SIGNATURE_OFFSET
+                ..OS_PARAM_RESERVED_OFFSET + VENTOY_RESERVED_DISK_SIGNATURE_OFFSET + 4],
+            &[0xaa, 0xbb, 0xcc, 0xdd]
+        );
+        assert_eq!(
+            data[OS_PARAM_RESERVED_OFFSET + VENTOY_RESERVED_WINDOWS_MAX_RES_OFFSET],
+            2
+        );
+    }
+
+    #[test]
+    fn reserved_flags_match_ventoy_byte_offsets() {
+        let reserved = VentoyReserved::new()
+            .with_chain_type(VENTOY_CHAIN_WIM)
+            .with_iso_udf(true)
+            .with_windows_cd_prompt(true)
+            .with_linux_remount(true)
+            .with_vlnk(true)
+            .with_disk_signature([1, 2, 3, 4])
+            .with_windows_max_resolution(3);
+
+        assert_eq!(reserved.as_bytes()[2], VENTOY_CHAIN_WIM);
+        assert_eq!(reserved.as_bytes()[3], 1);
+        assert_eq!(reserved.as_bytes()[4], 1);
+        assert_eq!(reserved.as_bytes()[5], 1);
+        assert_eq!(reserved.as_bytes()[6], 1);
+        assert_eq!(&reserved.as_bytes()[7..11], &[1, 2, 3, 4]);
+        assert_eq!(reserved.as_bytes()[11], 3);
     }
 
     #[test]

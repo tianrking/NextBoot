@@ -1108,6 +1108,8 @@ impl<'a> BootManager<'a> {
                 }
             })
             .unwrap_or(usize_to_u16(self.iso.volume_index.saturating_add(1))?);
+        let disk_signature = source_disk.map_or([0; 4], |disk| disk.disk_signature);
+        let reserved = self.ventoy_reserved_flags(disk_signature);
         let input = crate::ventoy::VentoyOsParamInput {
             disk_guid: source_disk.map_or([0; 16], |disk| disk.disk_guid),
             disk_size: source_disk.map_or(self.device.total_size, |disk| disk.disk_size),
@@ -1117,8 +1119,8 @@ impl<'a> BootManager<'a> {
             image_size: self.iso.size,
             image_location_addr: image_location_addr as u64,
             image_location_len: usize_to_u32(image_location.len())?,
-            reserved: [0; 4],
-            disk_signature: source_disk.map_or([0; 4], |disk| disk.disk_signature),
+            reserved,
+            disk_signature,
         };
         let data =
             crate::ventoy::build_ventoy_os_param(&input).map_err(ventoy_error_to_uefi_status)?;
@@ -1139,6 +1141,16 @@ impl<'a> BootManager<'a> {
         );
 
         Ok(())
+    }
+
+    fn ventoy_reserved_flags(&self, disk_signature: [u8; 4]) -> crate::ventoy::VentoyReserved {
+        crate::ventoy::VentoyReserved::new()
+            .with_chain_type(ventoy_chain_type(self.iso))
+            .with_iso_udf(false)
+            .with_windows_cd_prompt(false)
+            .with_linux_remount(false)
+            .with_vlnk(false)
+            .with_disk_signature(disk_signature)
     }
 
     fn build_ventoy_image_regions(
@@ -3057,6 +3069,17 @@ fn os_type_code(os_type: OsType) -> u32 {
         OsType::Debian => 12,
         OsType::Fedora => 13,
         OsType::Arch => 14,
+    }
+}
+
+fn ventoy_chain_type(iso: &IsoFile) -> u8 {
+    if iso.image_format.is_wim_container() {
+        return crate::ventoy::VENTOY_CHAIN_WIM;
+    }
+
+    match iso.os_type {
+        OsType::Windows | OsType::WinPE => crate::ventoy::VENTOY_CHAIN_WINDOWS,
+        _ => crate::ventoy::VENTOY_CHAIN_LINUX,
     }
 }
 
