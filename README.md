@@ -67,11 +67,26 @@ sudo dnf install edk2-ovmf
 ### 构建
 
 ```bash
+# 仅检查 UEFI 目标是否能通过类型检查
+./scripts/build.sh check
+
 # Debug 模式
 ./scripts/build.sh
 
 # Release 模式
 ./scripts/build.sh release
+
+# 可选：覆盖目标平台
+TARGET=x86_64-unknown-uefi ./scripts/build.sh check
+```
+
+`scripts/build.sh` 会优先验证当前 toolchain 是否已经包含 UEFI target，并在需要时安装
+`x86_64-unknown-uefi`。如果本机的 `rustup` shim 状态异常，也可以显式指定真实工具链：
+
+```bash
+RUSTC="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc" \
+CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
+./scripts/build.sh check
 ```
 
 ### 测试
