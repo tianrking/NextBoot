@@ -24,6 +24,7 @@ mod source_disk;
 mod vdi;
 mod ventoy;
 mod ventoy_config;
+mod ventoy_linux;
 mod vhdx;
 mod virtual_fs;
 mod wim;

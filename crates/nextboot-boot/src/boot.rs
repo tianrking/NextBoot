@@ -5,6 +5,7 @@
 use crate::init::StorageDevice;
 use crate::scanner::{ImageFormat, IsoExtent, IsoFile, OsType};
 use crate::vdi;
+use crate::ventoy_linux::{VentoyDudFile, VentoyLinuxInitrdInput};
 use crate::vhdx;
 use crate::virtual_fs::{
     IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem, VirtualIsoFilesystem,
@@ -124,6 +125,7 @@ const WIMBOOT_BCD_CALLBACK_PATH: &str = "nb-bcd";
 const WIMBOOT_BOOT_SDI_CALLBACK_PATH: &str = "nb-boot-sdi";
 const WIMBOOT_SELF_CALLBACK_PATH: &str = "nb-wimboot";
 const WIMBOOT_XZ_MAX_OUTPUT_SIZE: usize = 2 * 1024 * 1024;
+const VENTOY_COMMON_CPIO_CANDIDATES: &[&str] = &["/ventoy/ventoy.cpio"];
 const WIMBOOT_BCD_CANDIDATES: &[&str] = &[
     "/ventoy/common_bcd",
     "/ventoy/bcd",
@@ -248,6 +250,23 @@ fn compressed_wimboot_helper_candidates() -> &'static [&'static str] {
     #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
     {
         &[]
+    }
+}
+
+fn ventoy_arch_cpio_candidates() -> &'static [&'static str] {
+    #[cfg(target_arch = "aarch64")]
+    {
+        &["/ventoy/ventoy_arm64.cpio"]
+    }
+
+    #[cfg(target_arch = "x86")]
+    {
+        &["/ventoy/ventoy_x86.cpio"]
+    }
+
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86")))]
+    {
+        &["/ventoy/ventoy_x86.cpio"]
     }
 }
 
@@ -572,7 +591,14 @@ impl<'a> BootManager<'a> {
             .map_err(|_| Status::LOAD_ERROR)?;
 
         // 加载 Initrd
-        let initrd_data = self.load_file(&bootloader.config().initrd_path)?;
+        let mut initrd_data = self.load_file(&bootloader.config().initrd_path)?;
+        if let Err(err) = self.append_ventoy_linux_initrd_overlay(&mut initrd_data) {
+            warn!(
+                "Failed to append Ventoy Linux initrd overlay for {}: {:?}",
+                self.iso.path,
+                err.status()
+            );
+        }
         bootloader
             .load_initrd(initrd_data)
             .map_err(|_| Status::LOAD_ERROR)?;
@@ -583,6 +609,197 @@ impl<'a> BootManager<'a> {
             bootloader.initrd_size()
         );
         Err(Status::UNSUPPORTED.into())
+    }
+
+    fn append_ventoy_linux_initrd_overlay(&self, initrd_data: &mut Vec<u8>) -> uefi::Result<()> {
+        if !self.iso.image_format.is_iso() {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let boot_config = self.boot_virtual_config();
+        let (os_param, _, _) = self.build_ventoy_os_param_payload(&boot_config)?;
+        let image_map = self.build_ventoy_linux_image_map()?;
+
+        let mut base_archives = Vec::new();
+        self.try_load_ventoy_cpio_archives(&mut base_archives)?;
+        let base_refs: Vec<&[u8]> = base_archives
+            .iter()
+            .map(|file: &SourceVolumeFile| file.data.as_slice())
+            .collect();
+
+        let plugin = self.iso.ventoy_plugin.as_ref();
+        let auto_install = self.load_selected_auto_install_template(plugin)?;
+        let injection = self.load_plugin_injection_archive(plugin)?;
+        let dud_files = self.load_plugin_dud_files(plugin)?;
+        let dud_refs: Vec<VentoyDudFile<'_>> = dud_files
+            .iter()
+            .map(|file| VentoyDudFile {
+                source_path: file.path.as_str(),
+                data: file.data.as_slice(),
+            })
+            .collect();
+
+        let input = VentoyLinuxInitrdInput {
+            base_archives: &base_refs,
+            image_map: &image_map,
+            os_param: &os_param,
+            auto_install: auto_install.as_ref().map(|file| file.data.as_slice()),
+            persistent_map: None,
+            injection_archive: injection.as_ref().map(|file| file.data.as_slice()),
+            dud_files: &dud_refs,
+        };
+        let overlay = crate::ventoy_linux::build_ventoy_linux_initrd(&input)
+            .map_err(ventoy_linux_error_to_uefi_status)?;
+
+        initrd_data
+            .try_reserve_exact(overlay.len())
+            .map_err(|_| Status::OUT_OF_RESOURCES)?;
+        initrd_data.extend_from_slice(&overlay);
+
+        info!(
+            "Appended Ventoy Linux initrd overlay: {} bytes, base_archives={}, image_chunks={}, auto_install={}, injection={}, dud_files={}",
+            overlay.len(),
+            base_archives.len(),
+            image_map.len(),
+            auto_install.is_some(),
+            injection.is_some(),
+            dud_refs.len()
+        );
+
+        Ok(())
+    }
+
+    fn build_ventoy_linux_image_map(
+        &self,
+    ) -> uefi::Result<Vec<crate::ventoy_linux::VentoyImageMapChunk>> {
+        let disk_sector_size = self
+            .iso
+            .source_disk
+            .map_or(self.iso.block_size, |disk| disk.block_size);
+        if disk_sector_size != self.iso.block_size {
+            warn!(
+                "Ventoy Linux initrd map source disk sector size {} differs from volume sector size {} for {}",
+                disk_sector_size, self.iso.block_size, self.iso.path
+            );
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let extents = self.ventoy_source_extents()?;
+        crate::ventoy_linux::build_image_map_chunks(&extents, self.iso.block_size, 2048)
+            .map_err(ventoy_linux_error_to_uefi_status)
+            .map_err(Into::into)
+    }
+
+    fn try_load_ventoy_cpio_archives(
+        &self,
+        archives: &mut Vec<SourceVolumeFile>,
+    ) -> uefi::Result<()> {
+        for path in VENTOY_COMMON_CPIO_CANDIDATES
+            .iter()
+            .chain(ventoy_arch_cpio_candidates().iter())
+        {
+            match self.load_source_volume_file(path) {
+                Ok(file) => {
+                    info!(
+                        "Loaded Ventoy cpio archive {} ({} bytes)",
+                        path,
+                        file.data.len()
+                    );
+                    archives
+                        .try_reserve_exact(1)
+                        .map_err(|_| Status::OUT_OF_RESOURCES)?;
+                    archives.push(file);
+                }
+                Err(err) => {
+                    info!(
+                        "Ventoy cpio archive {} not loaded: {:?}",
+                        path,
+                        err.status()
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn load_selected_auto_install_template(
+        &self,
+        plugin: Option<&crate::ventoy_config::VentoyImagePlugin>,
+    ) -> uefi::Result<Option<SourceVolumeFile>> {
+        let Some(auto_install) = plugin.and_then(|plugin| plugin.auto_install.as_ref()) else {
+            return Ok(None);
+        };
+        let Some(index) =
+            selected_ventoy_plugin_index(auto_install.autosel, auto_install.templates.len())
+        else {
+            return Ok(None);
+        };
+        let Some(path) = auto_install.templates.get(index) else {
+            return Ok(None);
+        };
+
+        match self.load_source_volume_file(path) {
+            Ok(file) => Ok(Some(file)),
+            Err(err) => {
+                warn!(
+                    "Ventoy auto_install template {} for {} was not loaded: {:?}",
+                    path,
+                    self.iso.path,
+                    err.status()
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    fn load_plugin_injection_archive(
+        &self,
+        plugin: Option<&crate::ventoy_config::VentoyImagePlugin>,
+    ) -> uefi::Result<Option<SourceVolumeFile>> {
+        let Some(path) = plugin.and_then(|plugin| plugin.injection_archive.as_deref()) else {
+            return Ok(None);
+        };
+
+        match self.load_source_volume_file(path) {
+            Ok(file) => Ok(Some(file)),
+            Err(err) => {
+                warn!(
+                    "Ventoy injection archive {} for {} was not loaded: {:?}",
+                    path,
+                    self.iso.path,
+                    err.status()
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    fn load_plugin_dud_files(
+        &self,
+        plugin: Option<&crate::ventoy_config::VentoyImagePlugin>,
+    ) -> uefi::Result<Vec<SourceVolumeFile>> {
+        let mut files = Vec::new();
+        let Some(dud) = plugin.and_then(|plugin| plugin.dud.as_ref()) else {
+            return Ok(files);
+        };
+
+        files
+            .try_reserve_exact(dud.files.len())
+            .map_err(|_| Status::OUT_OF_RESOURCES)?;
+        for path in &dud.files {
+            match self.load_source_volume_file(path) {
+                Ok(file) => files.push(file),
+                Err(err) => warn!(
+                    "Ventoy DUD file {} for {} was not loaded: {:?}",
+                    path,
+                    self.iso.path,
+                    err.status()
+                ),
+            }
+        }
+
+        Ok(files)
     }
 
     /// 引导 Windows ISO
@@ -1088,6 +1305,31 @@ impl<'a> BootManager<'a> {
     }
 
     fn publish_ventoy_os_param(&self, config: &VirtualDeviceConfig) -> uefi::Result<()> {
+        let (data, image_region_count, image_location_addr) =
+            self.build_ventoy_os_param_payload(config)?;
+        let name = CString16::try_from(crate::ventoy::VENTOY_OS_PARAM_NAME)
+            .map_err(|_| uefi::Status::INVALID_PARAMETER)?;
+        let vendor = VariableVendor(VENTOY_OS_PARAM_VENDOR_GUID);
+        let attributes =
+            VariableAttributes::BOOTSERVICE_ACCESS | VariableAttributes::RUNTIME_ACCESS;
+
+        self.rt
+            .set_variable(name.as_ref(), &vendor, attributes, &data)?;
+        info!(
+            "Published {} ({} bytes, {} image location region(s), location=0x{:x})",
+            crate::ventoy::VENTOY_OS_PARAM_NAME,
+            data.len(),
+            image_region_count,
+            image_location_addr
+        );
+
+        Ok(())
+    }
+
+    fn build_ventoy_os_param_payload(
+        &self,
+        config: &VirtualDeviceConfig,
+    ) -> uefi::Result<([u8; crate::ventoy::VENTOY_OS_PARAM_SIZE], usize, usize)> {
         let (image_sector_size, disk_sector_size, image_regions) =
             self.build_ventoy_image_regions(config)?;
         let image_location = crate::ventoy::build_ventoy_image_location(
@@ -1127,23 +1369,7 @@ impl<'a> BootManager<'a> {
         };
         let data =
             crate::ventoy::build_ventoy_os_param(&input).map_err(ventoy_error_to_uefi_status)?;
-        let name = CString16::try_from(crate::ventoy::VENTOY_OS_PARAM_NAME)
-            .map_err(|_| uefi::Status::INVALID_PARAMETER)?;
-        let vendor = VariableVendor(VENTOY_OS_PARAM_VENDOR_GUID);
-        let attributes =
-            VariableAttributes::BOOTSERVICE_ACCESS | VariableAttributes::RUNTIME_ACCESS;
-
-        self.rt
-            .set_variable(name.as_ref(), &vendor, attributes, &data)?;
-        info!(
-            "Published {} ({} bytes, {} image location region(s), location=0x{:x})",
-            crate::ventoy::VENTOY_OS_PARAM_NAME,
-            data.len(),
-            image_regions.len(),
-            image_location_addr
-        );
-
-        Ok(())
+        Ok((data, image_regions.len(), image_location_addr))
     }
 
     fn ventoy_reserved_flags(&self, disk_signature: [u8; 4]) -> crate::ventoy::VentoyReserved {
@@ -2946,6 +3172,28 @@ fn ventoy_error_to_uefi_status(err: crate::ventoy::VentoyParamError) -> Status {
         crate::ventoy::VentoyParamError::ValueOutOfRange
         | crate::ventoy::VentoyParamError::OutputTooLarge
         | crate::ventoy::VentoyParamError::OutputReserveFailed => Status::OUT_OF_RESOURCES,
+    }
+}
+
+fn ventoy_linux_error_to_uefi_status(err: crate::ventoy_linux::VentoyLinuxInitrdError) -> Status {
+    match err {
+        crate::ventoy_linux::VentoyLinuxInitrdError::InvalidArchive => Status::LOAD_ERROR,
+        crate::ventoy_linux::VentoyLinuxInitrdError::InvalidSectorSize
+        | crate::ventoy_linux::VentoyLinuxInitrdError::NameTooLong => Status::INVALID_PARAMETER,
+        crate::ventoy_linux::VentoyLinuxInitrdError::UnalignedExtent => Status::UNSUPPORTED,
+        crate::ventoy_linux::VentoyLinuxInitrdError::ValueOutOfRange
+        | crate::ventoy_linux::VentoyLinuxInitrdError::FileTooLarge
+        | crate::ventoy_linux::VentoyLinuxInitrdError::OutputReserveFailed => {
+            Status::OUT_OF_RESOURCES
+        }
+    }
+}
+
+fn selected_ventoy_plugin_index(autosel: Option<usize>, count: usize) -> Option<usize> {
+    match autosel {
+        Some(0) | None => None,
+        Some(value) if value <= count => Some(value - 1),
+        _ => None,
     }
 }
 
