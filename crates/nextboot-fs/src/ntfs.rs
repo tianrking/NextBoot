@@ -11,6 +11,7 @@ use crate::{
 use alloc::string::String;
 use alloc::vec::Vec;
 
+mod indexes;
 mod methods;
 mod parser;
 
