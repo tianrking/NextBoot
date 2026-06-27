@@ -33,6 +33,8 @@ pub struct IsoFile {
     pub size: u64,
     /// 文件所在的 UEFI volume handle
     pub volume_handle: Handle,
+    /// 扫描时分配的卷索引，用于区分不同卷上的同名镜像
+    pub volume_index: usize,
     /// 文件所在卷的逻辑块大小
     pub block_size: u32,
     /// 起始 LBA
@@ -165,23 +167,29 @@ impl<'a> IsoScanner<'a> {
             .bt
             .locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))?;
 
-        for handle in fs_handles.iter().copied() {
+        for (volume_index, handle) in fs_handles.iter().copied().enumerate() {
             let mut fs = match self.bt.open_protocol_exclusive::<SimpleFileSystem>(handle) {
                 Ok(fs) => fs,
                 Err(_) => continue,
             };
 
             for search_path in &search_paths {
-                if let Ok(files) = self.scan_volume_path(handle, &mut fs, search_path, &extensions)
+                if let Ok(files) =
+                    self.scan_volume_path(volume_index, handle, &mut fs, search_path, &extensions)
                 {
                     iso_files.extend(files);
                 }
             }
         }
 
-        // 去重 (基于路径)
-        iso_files.sort_by(|a, b| a.path.cmp(&b.path));
-        iso_files.dedup_by(|a, b| a.path == b.path);
+        // 去重。相同卷上的相同路径可能会被多个 search path 扫到；不同卷
+        // 上的同名镜像必须保留，这是固定盘/多 SSD 场景的关键差异。
+        iso_files.sort_by(|a, b| {
+            a.volume_index
+                .cmp(&b.volume_index)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        iso_files.dedup_by(|a, b| a.volume_index == b.volume_index && a.path == b.path);
 
         // 按名称排序
         iso_files.sort_by(|a, b| {
@@ -190,6 +198,8 @@ impl<'a> IsoScanner<'a> {
                 .last()
                 .unwrap_or(&a.path)
                 .cmp(b.path.split('/').last().unwrap_or(&b.path))
+                .then_with(|| a.volume_index.cmp(&b.volume_index))
+                .then_with(|| a.path.cmp(&b.path))
         });
 
         Ok(iso_files)
@@ -202,13 +212,15 @@ impl<'a> IsoScanner<'a> {
             .locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))?;
         let mut files = Vec::new();
 
-        for handle in fs_handles.iter().copied() {
+        for (volume_index, handle) in fs_handles.iter().copied().enumerate() {
             let mut fs = match self.bt.open_protocol_exclusive::<SimpleFileSystem>(handle) {
                 Ok(fs) => fs,
                 Err(_) => continue,
             };
 
-            if let Ok(mut volume_files) = self.scan_volume_path(handle, &mut fs, path, extensions) {
+            if let Ok(mut volume_files) =
+                self.scan_volume_path(volume_index, handle, &mut fs, path, extensions)
+            {
                 files.append(&mut volume_files);
             }
         }
@@ -223,6 +235,7 @@ impl<'a> IsoScanner<'a> {
 
     fn scan_volume_path(
         &self,
+        volume_index: usize,
         volume_handle: Handle,
         fs: &mut SimpleFileSystem,
         path: &str,
@@ -242,6 +255,7 @@ impl<'a> IsoScanner<'a> {
         let mut files = Vec::new();
         self.scan_directory_entries(
             volume_handle,
+            volume_index,
             &mut dir,
             &normalized,
             extensions,
@@ -254,6 +268,7 @@ impl<'a> IsoScanner<'a> {
     fn scan_directory_entries(
         &self,
         volume_handle: Handle,
+        volume_index: usize,
         dir: &mut Directory,
         display_path: &str,
         extensions: &[&str],
@@ -277,6 +292,7 @@ impl<'a> IsoScanner<'a> {
                 if let Ok(mut child) = open_directory(dir, &name) {
                     let _ = self.scan_directory_entries(
                         volume_handle,
+                        volume_index,
                         &mut child,
                         &full_path,
                         extensions,
@@ -298,6 +314,7 @@ impl<'a> IsoScanner<'a> {
                     path: full_path.clone(),
                     size: entry.file_size(),
                     volume_handle,
+                    volume_index,
                     block_size,
                     start_lba,
                     extents,

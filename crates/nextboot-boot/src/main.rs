@@ -107,7 +107,13 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
 
     info!("Found {} ISO file(s)", iso_files.len());
     for (i, iso) in iso_files.iter().enumerate() {
-        info!("  [{}] {} ({})", i, iso.path, format_size(iso.size));
+        info!(
+            "  [{}] vol{}:{} ({})",
+            i,
+            iso.volume_index,
+            iso.path,
+            format_size(iso.size)
+        );
     }
 
     // Phase 4: 显示菜单
@@ -160,7 +166,12 @@ fn show_menu<'a>(
     let items: Vec<MenuItem> = iso_files
         .iter()
         .map(|iso| {
-            let label = iso.path.split('/').last().unwrap_or(&iso.path).to_string();
+            let filename = iso.path.split('/').last().unwrap_or(&iso.path);
+            let label = if has_duplicate_filename(iso_files, filename) {
+                format!("{} [vol {}]", filename, iso.volume_index)
+            } else {
+                filename.to_string()
+            };
 
             let iso_type = match iso.os_type {
                 scanner::OsType::Windows => IsoType::Windows,
@@ -205,6 +216,14 @@ fn show_menu<'a>(
             _ => {}
         }
     }
+}
+
+fn has_duplicate_filename(iso_files: &[scanner::IsoFile], filename: &str) -> bool {
+    iso_files
+        .iter()
+        .filter(|iso| iso.path.split('/').last().unwrap_or(&iso.path) == filename)
+        .nth(1)
+        .is_some()
 }
 
 /// 显示菜单
