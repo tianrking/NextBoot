@@ -3,6 +3,7 @@
 //! 负责准备和执行 ISO 引导
 
 use crate::scanner::{ImageFormat, IsoExtent, IsoFile, OsType};
+use crate::source_disk::SourceDiskIdentity;
 use crate::vdi;
 use crate::ventoy_linux::{VentoyDudFile, VentoyLinuxInitrdInput};
 use crate::vhdx;
@@ -712,7 +713,8 @@ impl<'a> BootManager<'a> {
     ) -> uefi::Result<WimbootRuntimeRegistration<'a>> {
         let bt: &'a BootServices = self.bt;
         let source_block_io = bt.open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let reader = UefiPhysicalReader::new(&source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+        let reader = SourceVolumeReader::new(&source_block_io, self.iso.source_disk)
+            .ok_or(uefi::Status::DEVICE_ERROR)?;
 
         Ok(WimbootRuntimeRegistration::install(
             WimbootRuntimeContext { reader, files },
@@ -1767,7 +1769,7 @@ impl<'a> BootManager<'a> {
         let source_block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let fs = SourceVolumeFileSystem::open(&source_block_io)?;
+        let fs = SourceVolumeFileSystem::open(&source_block_io, self.iso.source_disk)?;
         fs.load_file(path)
     }
 
@@ -1843,7 +1845,7 @@ impl<'a> BootManager<'a> {
         let source_block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let fs = SourceVolumeFileSystem::open(&source_block_io)?;
+        let fs = SourceVolumeFileSystem::open(&source_block_io, self.iso.source_disk)?;
         fs.file_metadata(path)
     }
 
@@ -2009,7 +2011,7 @@ impl<'a> BootManager<'a> {
         if !self.iso.image_format.is_iso() {
             return Ok(Vec::new());
         }
-        let source_fs = SourceVolumeFileSystem::open(source_block_io)?;
+        let source_fs = SourceVolumeFileSystem::open(source_block_io, self.iso.source_disk)?;
         let mut overlays = Vec::new();
         overlays
             .try_reserve_exact(plugin.conf_replace.len().saturating_mul(3))
@@ -2206,7 +2208,7 @@ impl<'a> BootManager<'a> {
             return Ok(Vec::new());
         }
 
-        let source_fs = SourceVolumeFileSystem::open(source_block_io)?;
+        let source_fs = SourceVolumeFileSystem::open(source_block_io, self.iso.source_disk)?;
         let mut replacements = Vec::new();
         replacements
             .try_reserve_exact(img_replace_count)
@@ -2493,7 +2495,8 @@ impl<'a> BootManager<'a> {
         let source_block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let reader = UefiPhysicalReader::new(&source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+        let reader = SourceVolumeReader::new(&source_block_io, self.iso.source_disk)
+            .ok_or(uefi::Status::DEVICE_ERROR)?;
         let block_size =
             usize::try_from(reader.block_size()).map_err(|_| uefi::Status::INVALID_PARAMETER)?;
         if block_size == 0 {
@@ -2688,7 +2691,8 @@ impl<'a> BootManager<'a> {
             VirtualBlockIo::from_file_extents(config, &extents)
         };
 
-        let reader = UefiPhysicalReader::new(source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+        let reader = SourceVolumeReader::new(source_block_io, self.iso.source_disk)
+            .ok_or(uefi::Status::DEVICE_ERROR)?;
         vbio.set_physical_reader(reader);
 
         Ok(vbio)
@@ -3080,7 +3084,8 @@ impl<'a> BootManager<'a> {
             VirtualBlockIo::from_file_extents(config, &extents)
         };
 
-        let reader = UefiPhysicalReader::new(source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+        let reader = SourceVolumeReader::new(source_block_io, self.iso.source_disk)
+            .ok_or(uefi::Status::DEVICE_ERROR)?;
         vbio.set_physical_reader(reader);
         Ok(vbio)
     }
@@ -3667,6 +3672,72 @@ impl BlockIoOps for UefiPhysicalReader {
     }
 }
 
+struct SourceVolumeReader {
+    base: UefiPhysicalReader,
+    lba_offset: u64,
+    total_blocks: u64,
+}
+
+impl SourceVolumeReader {
+    fn new(block_io: &BlockIO, source_disk: Option<SourceDiskIdentity>) -> Option<Self> {
+        let base = UefiPhysicalReader::new(block_io)?;
+        let (lba_offset, total_blocks) = source_disk
+            .filter(|disk| disk.partition_size_blocks > 0)
+            .map(|disk| (disk.partition_start_lba, disk.partition_size_blocks))
+            .unwrap_or((0, base.total_blocks));
+
+        if lba_offset
+            .checked_add(total_blocks)
+            .map_or(true, |end| end > base.total_blocks)
+        {
+            return None;
+        }
+
+        Some(Self {
+            base,
+            lba_offset,
+            total_blocks,
+        })
+    }
+}
+
+impl PhysicalReader for SourceVolumeReader {
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
+        let block_size = self.block_size() as usize;
+        if block_size == 0 || buf.is_empty() || buf.len() % block_size != 0 {
+            return Err(VirtIoError::InvalidBufferSize);
+        }
+
+        let block_count = (buf.len() / block_size) as u64;
+        if lba
+            .checked_add(block_count)
+            .map_or(true, |end| end > self.total_blocks)
+        {
+            return Err(VirtIoError::OutOfBounds);
+        }
+
+        let physical_lba = self
+            .lba_offset
+            .checked_add(lba)
+            .ok_or(VirtIoError::OutOfBounds)?;
+        PhysicalReader::read_blocks(&self.base, physical_lba, buf)
+    }
+}
+
+impl BlockIoOps for SourceVolumeReader {
+    fn block_size(&self) -> u32 {
+        self.base.block_size
+    }
+
+    fn total_blocks(&self) -> u64 {
+        self.total_blocks
+    }
+
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        PhysicalReader::read_blocks(self, lba, buf).map_err(virtio_error_to_fs_error)
+    }
+}
+
 struct SourceVolumeFile {
     path: String,
     data: Vec<u8>,
@@ -3692,8 +3763,9 @@ enum SourceVolumeFileSystem {
 }
 
 impl SourceVolumeFileSystem {
-    fn open(block_io: &BlockIO) -> uefi::Result<Self> {
-        let reader = UefiPhysicalReader::new(block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+    fn open(block_io: &BlockIO, source_disk: Option<SourceDiskIdentity>) -> uefi::Result<Self> {
+        let reader =
+            SourceVolumeReader::new(block_io, source_disk).ok_or(uefi::Status::DEVICE_ERROR)?;
         let shared: SharedBlockIo = Rc::new(reader);
         let block_size =
             usize::try_from(shared.block_size()).map_err(|_| uefi::Status::INVALID_PARAMETER)?;
@@ -3805,7 +3877,7 @@ struct WimbootRuntimeInputs {
 }
 
 struct WimbootRuntimeContext {
-    reader: UefiPhysicalReader,
+    reader: SourceVolumeReader,
     files: Vec<WimbootRuntimeFile>,
 }
 
@@ -3840,7 +3912,7 @@ enum WimbootRuntimeFileStorage {
 }
 
 impl WimbootRuntimeFileStorage {
-    fn read_range(&self, reader: &UefiPhysicalReader, offset: u64, buf: &mut [u8]) -> Option<()> {
+    fn read_range(&self, reader: &SourceVolumeReader, offset: u64, buf: &mut [u8]) -> Option<()> {
         match self {
             Self::Disk {
                 block_size,
@@ -3919,7 +3991,7 @@ impl WimbootRuntimeFile {
         i32::try_from(self.size).ok()
     }
 
-    fn read_range(&self, reader: &UefiPhysicalReader, offset: u64, buf: &mut [u8]) -> Option<()> {
+    fn read_range(&self, reader: &SourceVolumeReader, offset: u64, buf: &mut [u8]) -> Option<()> {
         let end = offset.checked_add(buf.len() as u64)?;
         if end > self.size {
             return None;
@@ -3930,7 +4002,7 @@ impl WimbootRuntimeFile {
 }
 
 fn read_extent_range(
-    reader: &UefiPhysicalReader,
+    reader: &SourceVolumeReader,
     block_size: u32,
     extents: &[IsoExtent],
     offset: u64,
@@ -3980,7 +4052,7 @@ fn read_extent_range(
 }
 
 fn read_mapped_byte_range(
-    reader: &UefiPhysicalReader,
+    reader: &SourceVolumeReader,
     segments: &[WimbootMappedSegment],
     offset: u64,
     buf: &mut [u8],
@@ -4132,7 +4204,7 @@ unsafe fn c_path_bytes(path: *const u8) -> Option<&'static [u8]> {
 }
 
 fn read_physical_bytes(
-    reader: &UefiPhysicalReader,
+    reader: &SourceVolumeReader,
     block_size: u32,
     physical_byte_start: u64,
     buf: &mut [u8],

@@ -4,7 +4,7 @@
 
 use crate::source_disk::{
     build_source_disk_identity, parent_device_path_bytes, parse_last_hard_drive_device_path,
-    SourceDiskIdentity,
+    HardDriveDevicePathInfo, PartitionFormat, SourceDiskIdentity,
 };
 use crate::vdi;
 use crate::ventoy_config::{
@@ -19,6 +19,7 @@ use alloc::vec::Vec;
 use core::ptr::{self, NonNull};
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::fat32::Fat32;
+use nextboot_fs::gpt::parse_mbr;
 use nextboot_fs::iso9660::{detect_udf_volume, read_efi_eltorito_boot_info, ElToritoBootInfo};
 use nextboot_fs::ntfs::Ntfs;
 use nextboot_fs::{detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError};
@@ -35,6 +36,7 @@ use uefi::{Handle, Identify};
 
 const VENTOY_CONFIG_PATH: &str = "/ventoy/ventoy.json";
 const VENTOY_CONFIG_MAX_SIZE: usize = 256 * 1024;
+const PARTITION_TABLE_SCAN_BYTES: usize = 256 * 1024;
 
 /// ISO 文件信息
 #[derive(Debug, Clone)]
@@ -207,6 +209,26 @@ struct ResolvedImageMetadata {
 struct VolumeBlockInfo {
     block_size: u32,
     total_size: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PartitionCandidate {
+    number: u32,
+    start_lba: u64,
+    block_count: u64,
+    format: PartitionFormat,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PartitionRange {
+    start_lba: u64,
+    block_count: u64,
+}
+
+impl PartitionRange {
+    fn matches(self, start_lba: u64, block_count: u64) -> bool {
+        self.start_lba == start_lba && self.block_count == block_count
+    }
 }
 
 /// 可启动镜像格式。
@@ -548,8 +570,9 @@ impl<'a> IsoScanner<'a> {
             .locate_handle_buffer(SearchType::ByProtocol(&BlockIO::GUID))?;
         let mut files = Vec::new();
         let mut block_volume_index = 0usize;
+        let all_block_handles: Vec<Handle> = block_handles.iter().copied().collect();
 
-        for handle in block_handles.iter().copied() {
+        for handle in all_block_handles.iter().copied() {
             if handle_list_contains(simple_fs_handles, handle) {
                 continue;
             }
@@ -584,6 +607,21 @@ impl<'a> IsoScanner<'a> {
                 fs_type,
                 FileSystemType::Fat32 | FileSystemType::ExFat | FileSystemType::Ntfs
             ) {
+                let scanned = self.scan_partitioned_block_device(
+                    handle,
+                    &all_block_handles,
+                    volume_index_base,
+                    &mut block_volume_index,
+                    &block_io,
+                    shared,
+                    &boot_sector,
+                    default_search_paths,
+                    extensions,
+                    &mut files,
+                );
+                if scanned == 0 {
+                    continue;
+                }
                 continue;
             }
 
@@ -612,6 +650,7 @@ impl<'a> IsoScanner<'a> {
                         &fs,
                         default_search_paths,
                         extensions,
+                        0,
                         &mut files,
                     );
                 }
@@ -632,6 +671,7 @@ impl<'a> IsoScanner<'a> {
                         &fs,
                         default_search_paths,
                         extensions,
+                        0,
                         &mut files,
                     );
                 }
@@ -652,6 +692,7 @@ impl<'a> IsoScanner<'a> {
                         &fs,
                         default_search_paths,
                         extensions,
+                        0,
                         &mut files,
                     );
                 }
@@ -661,6 +702,198 @@ impl<'a> IsoScanner<'a> {
         }
 
         Ok(files)
+    }
+
+    fn scan_partitioned_block_device(
+        &self,
+        physical_handle: Handle,
+        all_block_handles: &[Handle],
+        volume_index_base: usize,
+        block_volume_index: &mut usize,
+        block_io: &BlockIO,
+        shared: nextboot_fs::SharedBlockIo,
+        first_block: &[u8],
+        default_search_paths: &[&str],
+        extensions: &[&str],
+        files: &mut Vec<IsoFile>,
+    ) -> usize {
+        let Some(volume_info) = block_io_info(block_io) else {
+            return 0;
+        };
+        let partitions = discover_partition_candidates(shared.clone(), first_block);
+        if partitions.is_empty() {
+            return 0;
+        }
+
+        let exposed = self.exposed_child_partitions(physical_handle, all_block_handles);
+        let mut scanned = 0usize;
+        for partition in partitions {
+            if exposed
+                .iter()
+                .any(|range| range.matches(partition.start_lba, partition.block_count))
+            {
+                continue;
+            }
+            if partition.block_count == 0
+                || partition
+                    .start_lba
+                    .checked_add(partition.block_count)
+                    .map_or(true, |end| end > shared.total_blocks())
+            {
+                continue;
+            }
+
+            let partition_io: nextboot_fs::SharedBlockIo = Rc::new(PartitionBlockIo::new(
+                shared.clone(),
+                partition.start_lba,
+                partition.block_count,
+            ));
+            let mut boot_sector = match alloc_buffer_for_block(partition_io.block_size()) {
+                Ok(buf) => buf,
+                Err(_) => continue,
+            };
+            if partition_io.read_blocks(0, &mut boot_sector).is_err() {
+                continue;
+            }
+            let fs_type = detect_fs_type(&boot_sector);
+            if !matches!(
+                fs_type,
+                FileSystemType::Fat32 | FileSystemType::ExFat | FileSystemType::Ntfs
+            ) {
+                continue;
+            }
+
+            let volume_index = volume_index_base + *block_volume_index;
+            let source_disk = partition_source_disk_identity(first_block, volume_info, partition);
+            let source_disk_size = source_disk
+                .map(|disk| disk.disk_size)
+                .unwrap_or(volume_info.total_size);
+
+            match fs_type {
+                FileSystemType::Fat32 => {
+                    let fs = match Fat32::open(partition_io.clone()) {
+                        Ok(fs) => fs,
+                        Err(err) => {
+                            log::warn!(
+                                "Ignoring FAT32 partition {} on {:?}: {:?}",
+                                partition.number,
+                                physical_handle,
+                                err
+                            );
+                            continue;
+                        }
+                    };
+                    self.scan_block_filesystem_paths(
+                        physical_handle,
+                        volume_index,
+                        source_disk,
+                        source_disk_size,
+                        block_io,
+                        &fs,
+                        default_search_paths,
+                        extensions,
+                        partition.start_lba,
+                        files,
+                    );
+                }
+                FileSystemType::ExFat => {
+                    let fs = match ExFat::open(partition_io.clone()) {
+                        Ok(fs) => fs,
+                        Err(err) => {
+                            log::warn!(
+                                "Ignoring exFAT partition {} on {:?}: {:?}",
+                                partition.number,
+                                physical_handle,
+                                err
+                            );
+                            continue;
+                        }
+                    };
+                    self.scan_block_filesystem_paths(
+                        physical_handle,
+                        volume_index,
+                        source_disk,
+                        source_disk_size,
+                        block_io,
+                        &fs,
+                        default_search_paths,
+                        extensions,
+                        partition.start_lba,
+                        files,
+                    );
+                }
+                FileSystemType::Ntfs => {
+                    let fs = match Ntfs::open(partition_io) {
+                        Ok(fs) => fs,
+                        Err(err) => {
+                            log::warn!(
+                                "Ignoring NTFS partition {} on {:?}: {:?}",
+                                partition.number,
+                                physical_handle,
+                                err
+                            );
+                            continue;
+                        }
+                    };
+                    self.scan_block_filesystem_paths(
+                        physical_handle,
+                        volume_index,
+                        source_disk,
+                        source_disk_size,
+                        block_io,
+                        &fs,
+                        default_search_paths,
+                        extensions,
+                        partition.start_lba,
+                        files,
+                    );
+                }
+                _ => continue,
+            }
+
+            *block_volume_index += 1;
+            scanned += 1;
+        }
+
+        scanned
+    }
+
+    fn exposed_child_partitions(
+        &self,
+        physical_handle: Handle,
+        all_block_handles: &[Handle],
+    ) -> Vec<PartitionRange> {
+        let Some(physical_path) = self.handle_device_path_bytes(physical_handle) else {
+            return Vec::new();
+        };
+        let mut ranges = Vec::new();
+
+        for handle in all_block_handles.iter().copied() {
+            if handle.as_ptr() == physical_handle.as_ptr() {
+                continue;
+            }
+            let Some(path) = self.handle_device_path_bytes(handle) else {
+                continue;
+            };
+            let Some(hard_drive) = parse_last_hard_drive_device_path(&path) else {
+                continue;
+            };
+            let Some(parent_path) = parent_device_path_bytes(&path, &hard_drive) else {
+                continue;
+            };
+            if parent_path != physical_path {
+                continue;
+            }
+            if ranges.try_reserve_exact(1).is_err() {
+                break;
+            }
+            ranges.push(PartitionRange {
+                start_lba: hard_drive.partition_start_lba,
+                block_count: hard_drive.partition_size_blocks,
+            });
+        }
+
+        ranges
     }
 
     fn scan_block_filesystem_paths<F: FileSystem>(
@@ -673,6 +906,7 @@ impl<'a> IsoScanner<'a> {
         fs: &F,
         default_search_paths: &[&str],
         extensions: &[&str],
+        extent_lba_offset: u64,
         files: &mut Vec<IsoFile>,
     ) {
         let config = self.load_block_ventoy_config(fs);
@@ -689,6 +923,7 @@ impl<'a> IsoScanner<'a> {
                 search_path,
                 extensions,
                 &config,
+                extent_lba_offset,
                 config.max_search_level,
                 0,
                 files,
@@ -707,6 +942,7 @@ impl<'a> IsoScanner<'a> {
         display_path: &str,
         extensions: &[&str],
         config: &VentoyConfig,
+        extent_lba_offset: u64,
         max_search_level: Option<usize>,
         depth: usize,
         files: &mut Vec<IsoFile>,
@@ -736,6 +972,7 @@ impl<'a> IsoScanner<'a> {
                     &full_path,
                     extensions,
                     config,
+                    extent_lba_offset,
                     max_search_level,
                     depth + 1,
                     files,
@@ -763,6 +1000,7 @@ impl<'a> IsoScanner<'a> {
                         &full_path,
                         entry.size,
                         image_format,
+                        extent_lba_offset,
                     )
                     .unwrap_or_else(|| ResolvedImageMetadata {
                         block_size: fs.block_size(),
@@ -1107,6 +1345,7 @@ impl<'a> IsoScanner<'a> {
         path: &str,
         size: u64,
         image_format: ImageFormat,
+        extent_lba_offset: u64,
     ) -> Option<ResolvedImageMetadata> {
         let block_size = fs.block_size();
         let extents: Vec<IsoExtent> = fs
@@ -1115,15 +1354,21 @@ impl<'a> IsoScanner<'a> {
             .into_iter()
             .map(IsoExtent::from)
             .collect();
-        let (image_format, virtual_size, virtual_block_size) =
-            self.detect_image_virtual_metadata(block_io, block_size, size, &extents, image_format);
+        let read_extents = offset_extents_for_physical_read(&extents, extent_lba_offset)?;
+        let (image_format, virtual_size, virtual_block_size) = self.detect_image_virtual_metadata(
+            block_io,
+            block_size,
+            size,
+            &read_extents,
+            image_format,
+        );
         let (boot_info, is_udf) = if image_format.is_iso() {
-            self.resolve_iso_metadata(block_io, block_size, size, &extents)
+            self.resolve_iso_metadata(block_io, block_size, size, &read_extents)
         } else {
             (None, false)
         };
         let wim_info = if image_format.is_wim_container() {
-            self.read_wim_boot_info(block_io, block_size, size, &extents)
+            self.read_wim_boot_info(block_io, block_size, size, &read_extents)
         } else {
             None
         };
@@ -1463,6 +1708,216 @@ fn block_io_info(block_io: &BlockIO) -> Option<VolumeBlockInfo> {
     })
 }
 
+fn discover_partition_candidates(
+    shared: nextboot_fs::SharedBlockIo,
+    first_block: &[u8],
+) -> Vec<PartitionCandidate> {
+    if let Some(partitions) = discover_gpt_partitions(shared.clone(), first_block) {
+        return partitions;
+    }
+    discover_mbr_partitions(first_block)
+}
+
+fn discover_gpt_partitions(
+    shared: nextboot_fs::SharedBlockIo,
+    first_block: &[u8],
+) -> Option<Vec<PartitionCandidate>> {
+    if !has_mbr_signature(first_block) {
+        return None;
+    }
+    let has_protective = (0..4).any(|index| {
+        first_block
+            .get(0x1be + index * 16 + 4)
+            .copied()
+            .unwrap_or(0)
+            == 0xee
+    });
+    if !has_protective {
+        return None;
+    }
+
+    let data = read_partition_table_prefix(shared)?;
+    let block_size = usize::try_from(data.block_size).ok()?;
+    let header_offset = block_size;
+    let header = data.bytes.get(header_offset..header_offset + block_size)?;
+    if header.get(0..8)? != b"EFI PART" {
+        return None;
+    }
+
+    let header_size = read_le_u32(header, 12)?;
+    if header_size < 92 {
+        return None;
+    }
+    let entry_lba = read_le_u64(header, 72)?;
+    let num_entries = read_le_u32(header, 80)?;
+    let entry_size = read_le_u32(header, 84)?;
+    if entry_size < 128 || entry_size > 4096 {
+        return None;
+    }
+
+    let entry_lba = usize::try_from(entry_lba).ok()?;
+    let entry_size = usize::try_from(entry_size).ok()?;
+    let num_entries = usize::try_from(num_entries).ok()?.min(1024);
+    let entries_offset = entry_lba.checked_mul(block_size)?;
+
+    let mut out = Vec::new();
+    for index in 0..num_entries {
+        let offset = entries_offset.checked_add(index.checked_mul(entry_size)?)?;
+        let entry = match data.bytes.get(offset..offset + entry_size) {
+            Some(entry) => entry,
+            None => break,
+        };
+        if entry.get(0..16)?.iter().all(|byte| *byte == 0) {
+            continue;
+        }
+        let start_lba = read_le_u64(entry, 32)?;
+        let end_lba = read_le_u64(entry, 40)?;
+        if start_lba == 0 || end_lba < start_lba {
+            continue;
+        }
+        if out.try_reserve_exact(1).is_err() {
+            break;
+        }
+        out.push(PartitionCandidate {
+            number: u32::try_from(index + 1).ok()?,
+            start_lba,
+            block_count: end_lba - start_lba + 1,
+            format: PartitionFormat::Gpt,
+        });
+    }
+
+    Some(out)
+}
+
+fn discover_mbr_partitions(first_block: &[u8]) -> Vec<PartitionCandidate> {
+    let mut out = Vec::new();
+    let Some(partitions) = parse_mbr(first_block) else {
+        return out;
+    };
+    for (index, partition) in partitions.iter().enumerate() {
+        if partition.partition_type == 0xee
+            || is_extended_mbr_partition(partition.partition_type)
+            || partition.start_lba == 0
+            || partition.total_sectors == 0
+        {
+            continue;
+        }
+        if out.try_reserve_exact(1).is_err() {
+            break;
+        }
+        out.push(PartitionCandidate {
+            number: u32::try_from(index + 1).unwrap_or(u32::MAX),
+            start_lba: u64::from(partition.start_lba),
+            block_count: u64::from(partition.total_sectors),
+            format: PartitionFormat::Mbr,
+        });
+    }
+    out
+}
+
+fn is_extended_mbr_partition(partition_type: u8) -> bool {
+    matches!(partition_type, 0x05 | 0x0f | 0x85)
+}
+
+fn has_mbr_signature(block: &[u8]) -> bool {
+    block.get(510) == Some(&0x55) && block.get(511) == Some(&0xaa)
+}
+
+struct PartitionTablePrefix {
+    bytes: Vec<u8>,
+    block_size: u32,
+}
+
+fn read_partition_table_prefix(shared: nextboot_fs::SharedBlockIo) -> Option<PartitionTablePrefix> {
+    let block_size = usize::try_from(shared.block_size()).ok()?;
+    if block_size == 0 {
+        return None;
+    }
+    let total_blocks = shared.total_blocks();
+    if total_blocks == 0 {
+        return None;
+    }
+
+    let wanted_blocks = div_round_up_usize(PARTITION_TABLE_SCAN_BYTES, block_size)
+        .max(2)
+        .min(usize::try_from(total_blocks).ok()?);
+    let len = wanted_blocks.checked_mul(block_size)?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(len).ok()?;
+    bytes.resize(len, 0);
+    shared.read_blocks(0, &mut bytes).ok()?;
+
+    Some(PartitionTablePrefix {
+        bytes,
+        block_size: u32::try_from(block_size).ok()?,
+    })
+}
+
+fn partition_source_disk_identity(
+    first_block: &[u8],
+    volume_info: VolumeBlockInfo,
+    partition: PartitionCandidate,
+) -> Option<SourceDiskIdentity> {
+    let info = HardDriveDevicePathInfo {
+        node_offset: 0,
+        partition_number: partition.number,
+        partition_start_lba: partition.start_lba,
+        partition_size_blocks: partition.block_count,
+        partition_format: partition.format,
+        signature_type: match partition.format {
+            PartitionFormat::Gpt => 2,
+            PartitionFormat::Mbr => 1,
+            PartitionFormat::Unknown => 0,
+        },
+    };
+    build_source_disk_identity(
+        first_block,
+        volume_info.total_size,
+        volume_info.block_size,
+        Some(info),
+    )
+}
+
+fn offset_extents_for_physical_read(
+    extents: &[IsoExtent],
+    lba_offset: u64,
+) -> Option<Vec<IsoExtent>> {
+    if lba_offset == 0 {
+        return Some(extents.to_vec());
+    }
+
+    let mut out = Vec::new();
+    out.try_reserve_exact(extents.len()).ok()?;
+    for extent in extents {
+        out.push(IsoExtent {
+            virtual_block_start: extent.virtual_block_start,
+            physical_lba: extent.physical_lba.checked_add(lba_offset)?,
+            block_count: extent.block_count,
+        });
+    }
+    Some(out)
+}
+
+fn read_le_u32(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        data.get(offset..offset + 4)?.try_into().ok()?,
+    ))
+}
+
+fn read_le_u64(data: &[u8], offset: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(
+        data.get(offset..offset + 8)?.try_into().ok()?,
+    ))
+}
+
+fn div_round_up_usize(value: usize, divisor: usize) -> usize {
+    if divisor == 0 {
+        0
+    } else {
+        value.saturating_add(divisor - 1) / divisor
+    }
+}
+
 fn alloc_buffer_for_block(block_size: u32) -> Result<Vec<u8>, FsError> {
     let len = usize::try_from(block_size).map_err(|_| FsError::InvalidArgument)?;
     if len == 0 {
@@ -1568,6 +2023,50 @@ impl BlockIoOps for UefiBlockIo {
         block_io
             .read_blocks(self.media_id, lba, buf)
             .map_err(|_| FsError::ReadError)
+    }
+}
+
+struct PartitionBlockIo {
+    parent: nextboot_fs::SharedBlockIo,
+    start_lba: u64,
+    total_blocks: u64,
+}
+
+impl PartitionBlockIo {
+    fn new(parent: nextboot_fs::SharedBlockIo, start_lba: u64, total_blocks: u64) -> Self {
+        Self {
+            parent,
+            start_lba,
+            total_blocks,
+        }
+    }
+}
+
+impl BlockIoOps for PartitionBlockIo {
+    fn block_size(&self) -> u32 {
+        self.parent.block_size()
+    }
+
+    fn total_blocks(&self) -> u64 {
+        self.total_blocks
+    }
+
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        let block_size = self.block_size() as usize;
+        if block_size == 0 || buf.is_empty() || buf.len() % block_size != 0 {
+            return Err(FsError::InvalidArgument);
+        }
+
+        let block_count = (buf.len() / block_size) as u64;
+        if lba
+            .checked_add(block_count)
+            .map_or(true, |end| end > self.total_blocks)
+        {
+            return Err(FsError::ReadError);
+        }
+
+        let parent_lba = self.start_lba.checked_add(lba).ok_or(FsError::ReadError)?;
+        self.parent.read_blocks(parent_lba, buf)
     }
 }
 
