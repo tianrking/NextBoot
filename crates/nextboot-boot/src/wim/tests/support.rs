@@ -1,7 +1,11 @@
 use super::super::*;
 use alloc::vec::Vec;
 
-fn make_wim_header(flags: u32, image_count: u32, boot_index: u32) -> [u8; WIM_HEADER_SIZE] {
+pub(super) fn make_wim_header(
+    flags: u32,
+    image_count: u32,
+    boot_index: u32,
+) -> [u8; WIM_HEADER_SIZE] {
     let mut header = [0u8; WIM_HEADER_SIZE];
     header[0..8].copy_from_slice(WIM_SIGNATURE);
     write_le_u32(&mut header, HEADER_LEN_OFFSET, WIM_HEADER_SIZE as u32);
@@ -34,17 +38,17 @@ fn make_wim_header(flags: u32, image_count: u32, boot_index: u32) -> [u8; WIM_HE
     header
 }
 
-fn make_wim_metadata_with_chunk_len(chunk_len: u32) -> WimMetadata {
+pub(super) fn make_wim_metadata_with_chunk_len(chunk_len: u32) -> WimMetadata {
     make_wim_metadata_with_flags(WIM_HDR_XPRESS, chunk_len)
 }
 
-fn make_wim_metadata_with_flags(flags: u32, chunk_len: u32) -> WimMetadata {
+pub(super) fn make_wim_metadata_with_flags(flags: u32, chunk_len: u32) -> WimMetadata {
     let mut header = make_wim_header(flags, 1, 1);
     write_le_u32(&mut header, CHUNK_LEN_OFFSET, chunk_len);
     parse_wim_metadata(&header).expect("metadata")
 }
 
-fn make_xpress_literal_stream(bytes: &[u8]) -> Vec<u8> {
+pub(super) fn make_xpress_literal_stream(bytes: &[u8]) -> Vec<u8> {
     let mut out = alloc::vec![0x99u8; XPRESS_LENGTH_TABLE_SIZE];
     let mut bits = Vec::new();
     for byte in bytes {
@@ -69,7 +73,7 @@ fn make_xpress_literal_stream(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-fn make_sparse_xpress_literal_stream(byte: u8) -> Vec<u8> {
+pub(super) fn make_sparse_xpress_literal_stream(byte: u8) -> Vec<u8> {
     let mut out = alloc::vec![0u8; XPRESS_LENGTH_TABLE_SIZE];
     set_xpress_code_len(&mut out, usize::from(byte), 1);
     set_xpress_code_len(&mut out, usize::from(XPRESS_END_MARKER), 1);
@@ -78,7 +82,7 @@ fn make_sparse_xpress_literal_stream(byte: u8) -> Vec<u8> {
     out
 }
 
-fn set_xpress_code_len(lengths: &mut [u8], symbol: usize, len: u8) {
+pub(super) fn set_xpress_code_len(lengths: &mut [u8], symbol: usize, len: u8) {
     let slot = &mut lengths[symbol / 2];
     if symbol % 2 == 0 {
         *slot = (*slot & 0xf0) | (len & 0x0f);
@@ -87,7 +91,7 @@ fn set_xpress_code_len(lengths: &mut [u8], symbol: usize, len: u8) {
     }
 }
 
-fn make_lzx_uncompressed_block(bytes: &[u8]) -> Vec<u8> {
+pub(super) fn make_lzx_uncompressed_block(bytes: &[u8]) -> Vec<u8> {
     let mut bits = Vec::new();
     push_bits(&mut bits, 3, 3);
     push_bits(&mut bits, 0, 1);
@@ -109,13 +113,13 @@ fn make_lzx_uncompressed_block(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-fn push_bits(bits: &mut Vec<u8>, value: u16, count: usize) {
+pub(super) fn push_bits(bits: &mut Vec<u8>, value: u16, count: usize) {
     for index in (0..count).rev() {
         bits.push(((value >> index) & 1) as u8);
     }
 }
 
-fn bits_to_le_words(bits: &[u8]) -> Vec<u8> {
+pub(super) fn bits_to_le_words(bits: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     for chunk in bits.chunks_exact(16) {
         let mut word = 0u16;
@@ -128,7 +132,7 @@ fn bits_to_le_words(bits: &[u8]) -> Vec<u8> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn write_lookup_entry(
+pub(super) fn write_lookup_entry(
     data: &mut [u8],
     offset: usize,
     compressed_size: u64,
@@ -152,7 +156,7 @@ fn write_lookup_entry(
     data[offset + LOOKUP_ENTRY_HASH_OFFSET..offset + WIM_LOOKUP_ENTRY_SIZE].copy_from_slice(hash);
 }
 
-fn write_directory_entry(
+pub(super) fn write_directory_entry(
     data: &mut [u8],
     offset: usize,
     name: &str,
@@ -191,7 +195,7 @@ fn write_directory_entry(
     len
 }
 
-fn write_resource_header(
+pub(super) fn write_resource_header(
     data: &mut [u8],
     offset: usize,
     compressed_size: u64,
@@ -205,14 +209,18 @@ fn write_resource_header(
     write_le_u64(data, offset + 16, uncompressed_size);
 }
 
-fn write_le_u16(data: &mut [u8], offset: usize, value: u16) {
+pub(super) fn write_le_u16(data: &mut [u8], offset: usize, value: u16) {
     data[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
 
-fn write_le_u32(data: &mut [u8], offset: usize, value: u32) {
+pub(super) fn write_le_u32(data: &mut [u8], offset: usize, value: u32) {
     data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
-fn write_le_u64(data: &mut [u8], offset: usize, value: u64) {
+pub(super) fn write_le_u64(data: &mut [u8], offset: usize, value: u64) {
     data[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+pub(super) fn align_up_8(value: usize) -> Option<usize> {
+    value.checked_add(7).map(|value| value & !7)
 }
