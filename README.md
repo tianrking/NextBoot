@@ -101,6 +101,9 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 # 用 4K Native NVMe 固定盘路径测试
 ./scripts/run-qemu.sh --bus nvme --sector-size 4096 --no-run
 
+# 用真实 SSD 风格的 ESP + Data 双分区 GPT 布局测试
+./scripts/run-qemu.sh --bus nvme --layout split --image ~/Downloads/ubuntu.iso
+
 # 只生成 GPT/FAT32 测试盘，不启动虚拟机
 ./scripts/run-qemu.sh --bus sata --no-run
 ```
@@ -108,7 +111,9 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 `run-qemu.sh` 会直接创建 GPT/FAT32 磁盘镜像，并支持 `virtio`、`nvme`、`sata`、
 `usb` 四种 QEMU 存储路径，用来覆盖固定盘和可移动盘的启动差异。`--sector-size
 4096` 会生成 4K Native 测试盘，并让 QEMU 设备暴露 4096B logical/physical block
-size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异。
+size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异。`--layout split` 会
+生成独立 ESP 和 Data 分区：ESP 只放 `BOOTX64.EFI`，Data 分区放 `/ISO`，用于验证
+固定盘上“引导分区与镜像分区分离”的真实部署路径。
 
 ### 写入 U 盘
 
