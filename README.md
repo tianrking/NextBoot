@@ -8,7 +8,7 @@ NextBoot 是一个基于 Rust 的 UEFI 启动加载器，核心功能是无需�
 
 ## 功能特性
 
-- ✅ 支持 FAT32/exFAT/ISO9660 文件系统
+- ✅ 支持 FAT32/exFAT/NTFS/ISO9660 文件系统
 - ✅ GPT 分区表解析
 - ✅ 虚拟 Block IO 设备模拟
 - ✅ 图形化菜单界面 (GOP)
@@ -22,7 +22,7 @@ NextBoot 是一个基于 Rust 的 UEFI 启动加载器，核心功能是无需�
 NextBoot/
 ├── crates/
 │   ├── nextboot-boot/     # 主 bootloader 入口
-│   ├── nextboot-fs/       # 文件系统模块 (FAT32, exFAT, ISO9660)
+│   ├── nextboot-fs/       # 文件系统模块 (FAT32, exFAT, NTFS, ISO9660)
 │   ├── nextboot-virtio/   # 虚拟 Block IO 驱动
 │   ├── nextboot-menu/     # UEFI GOP 菜单渲染
 │   ├── nextboot-linux/    # Linux 引导支持
@@ -104,6 +104,9 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 # 用真实 SSD 风格的 ESP + exFAT Data 双分区 GPT 布局测试
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --image ~/Downloads/ubuntu.iso
 
+# 用 NTFS Data 分区覆盖 Windows/大文件盘常见布局
+./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-linux-plugins
+
 # 启动 QEMU 并自动断言 NextBoot 扫描到镜像、进入菜单
 ./scripts/run-qemu.sh --bus nvme --layout split --sector-size 4096 --image ~/Downloads/ubuntu.iso --smoke
 
@@ -126,14 +129,14 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 ./scripts/run-qemu.sh --bus sata --no-run
 ```
 
-`run-qemu.sh` 会直接创建 GPT/FAT32/exFAT 磁盘镜像，并支持 `virtio`、`nvme`、`sata`、
+`run-qemu.sh` 会直接创建 GPT/FAT32/exFAT/NTFS 磁盘镜像，并支持 `virtio`、`nvme`、`sata`、
 `usb` 四种 QEMU 存储路径，用来覆盖固定盘和可移动盘的启动差异。`--sector-size
 4096` 会生成 4K Native 测试盘，并让 QEMU 设备暴露 4096B logical/physical block
 size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异。`--layout split` 会
 生成独立 ESP 和 Data 分区：ESP 只放 `BOOTX64.EFI`，Data 分区放 `/ISO`，用于验证
-固定盘上“引导分区与镜像分区分离”的真实部署路径；`--data-fs exfat|fat32` 可覆盖
-默认写盘布局和 FAT32 兼容布局。生成后脚本会调用 `verify-qemu-image.py` 校验 GPT
-CRC、分区布局、FAT32/exFAT 目录、`BOOTX64.EFI`、`/ISO` 文件和物理 extent；`--smoke`
+固定盘上“引导分区与镜像分区分离”的真实部署路径；`--data-fs exfat|fat32|ntfs` 可覆盖
+默认写盘布局、FAT32 兼容布局和 NTFS 大文件布局。生成后脚本会调用 `verify-qemu-image.py` 校验 GPT
+CRC、分区布局、FAT32/exFAT/NTFS 目录、`BOOTX64.EFI`、`/ISO` 文件和物理 extent；`--smoke`
 会继续启动 QEMU 并检查 NextBoot 日志里是否进入扫描/菜单阶段；`--smoke-boot` 会
 自动按 Enter 并检查是否安装虚拟 Block IO；`--smoke-efi-iso` 会生成一个带 EFI
 El Torito boot catalog、内含 `/EFI/BOOT/BOOTX64.EFI` 的最小 ISO，并继续验证该 EFI
