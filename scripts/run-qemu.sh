@@ -1047,6 +1047,7 @@ if [ "$SMOKE" -eq 1 ]; then
             )
             if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
                 EXPECT_ARGS+=(
+                    --expect "Using EFI El Torito boot image"
                     --expect "Loaded EFI image"
                     --expect "NEXTBOOT_SMOKE_EFI_STARTED"
                 )

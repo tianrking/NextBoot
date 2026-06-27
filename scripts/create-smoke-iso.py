@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a minimal ISO9660 image with /EFI/BOOT/BOOTX64.EFI."""
+"""Create a minimal EFI smoke ISO9660 image with El Torito metadata."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from pathlib import Path
 
 SECTOR_SIZE = 2048
 SYSTEM_ID = b"NEXTBOOT"
+EL_TORITO_ID = b"EL TORITO SPECIFICATION"
+EL_TORITO_PLATFORM_EFI = 0xEF
 
 
 def pad_ascii(text: str, size: int) -> bytes:
@@ -105,6 +107,40 @@ def primary_volume_descriptor(
     return bytes(pvd)
 
 
+def eltorito_boot_record(catalog_lba: int) -> bytes:
+    data = bytearray(SECTOR_SIZE)
+    data[0] = 0
+    data[1:6] = b"CD001"
+    data[6] = 1
+    data[7 : 7 + len(EL_TORITO_ID)] = EL_TORITO_ID
+    data[0x47:0x4B] = catalog_lba.to_bytes(4, "little")
+    return bytes(data)
+
+
+def eltorito_boot_catalog(boot_image_lba: int, boot_image_size: int) -> bytes:
+    catalog = bytearray(SECTOR_SIZE)
+    catalog[0] = 0x01
+    catalog[1] = EL_TORITO_PLATFORM_EFI
+    catalog[30] = 0x55
+    catalog[31] = 0xAA
+    checksum = (-sum(
+        int.from_bytes(catalog[index : index + 2], "little")
+        for index in range(0, 32, 2)
+    )) & 0xFFFF
+    catalog[28:30] = checksum.to_bytes(2, "little")
+
+    sector_count = max(1, math.ceil(boot_image_size / 512))
+    if sector_count > 0xFFFF:
+        raise ValueError("El Torito boot image is too large")
+    catalog[32] = 0x88
+    catalog[33] = 0x00
+    catalog[34:36] = (0).to_bytes(2, "little")
+    catalog[36] = 0x00
+    catalog[38:40] = sector_count.to_bytes(2, "little")
+    catalog[40:44] = boot_image_lba.to_bytes(4, "little")
+    return bytes(catalog)
+
+
 def volume_descriptor_terminator() -> bytes:
     data = bytearray(SECTOR_SIZE)
     data[0] = 255
@@ -118,13 +154,15 @@ def write_smoke_iso(output: Path, efi: Path, label: str) -> None:
     file_sectors = max(1, math.ceil(len(efi_data) / SECTOR_SIZE))
 
     pvd_lba = 16
-    terminator_lba = 17
-    le_path_table_lba = 18
-    be_path_table_lba = 19
-    root_lba = 20
-    efi_dir_lba = 21
-    boot_dir_lba = 22
-    file_lba = 23
+    eltorito_record_lba = 17
+    terminator_lba = 18
+    eltorito_catalog_lba = 19
+    le_path_table_lba = 20
+    be_path_table_lba = 21
+    root_lba = 22
+    efi_dir_lba = 23
+    boot_dir_lba = 24
+    file_lba = 25
     total_sectors = file_lba + file_sectors
 
     path_entries = [
@@ -176,8 +214,14 @@ def write_smoke_iso(output: Path, efi: Path, label: str) -> None:
             be_path_table_lba,
         )
     )
+    image[eltorito_record_lba * SECTOR_SIZE : (eltorito_record_lba + 1) * SECTOR_SIZE] = (
+        eltorito_boot_record(eltorito_catalog_lba)
+    )
     image[terminator_lba * SECTOR_SIZE : (terminator_lba + 1) * SECTOR_SIZE] = (
         volume_descriptor_terminator()
+    )
+    image[eltorito_catalog_lba * SECTOR_SIZE : (eltorito_catalog_lba + 1) * SECTOR_SIZE] = (
+        eltorito_boot_catalog(file_lba, len(efi_data))
     )
     image[le_path_table_lba * SECTOR_SIZE : (le_path_table_lba + 1) * SECTOR_SIZE] = sector(
         le_path_table
