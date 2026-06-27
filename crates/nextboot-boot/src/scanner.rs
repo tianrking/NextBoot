@@ -2,6 +2,7 @@
 //!
 //! 负责扫描存储设备上的 ISO 文件
 
+mod block_io;
 mod model;
 mod partitions;
 
@@ -18,7 +19,8 @@ use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::ptr::{self, NonNull};
+use block_io::{alloc_buffer_for_block, PartitionBlockIo, UefiBlockIo, VirtualIsoBlockIo};
+use core::ptr;
 use model::{PartitionCandidate, PartitionRange, ResolvedImageMetadata, VolumeBlockInfo};
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::fat32::Fat32;
@@ -26,9 +28,7 @@ use nextboot_fs::iso9660::{detect_udf_volume, read_efi_eltorito_boot_info, Iso96
 use nextboot_fs::ntfs::Ntfs;
 use nextboot_fs::udf::Udf;
 use nextboot_fs::{detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError};
-use nextboot_virtio::{
-    PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
-};
+use nextboot_virtio::{VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
 use partitions::discover_partition_candidates;
 use uefi::data_types::CString16;
 use uefi::proto::device_path::{DevicePath, FfiDevicePath};
@@ -2245,19 +2245,6 @@ fn div_round_up_usize(value: usize, divisor: usize) -> usize {
     }
 }
 
-fn alloc_buffer_for_block(block_size: u32) -> Result<Vec<u8>, FsError> {
-    let len = usize::try_from(block_size).map_err(|_| FsError::InvalidArgument)?;
-    if len == 0 {
-        return Err(FsError::InvalidArgument);
-    }
-
-    let mut buf = Vec::new();
-    buf.try_reserve_exact(len)
-        .map_err(|_| FsError::OutOfMemory)?;
-    buf.resize(len, 0);
-    Ok(buf)
-}
-
 fn handle_list_contains(handles: &[Handle], needle: Handle) -> bool {
     handles
         .iter()
@@ -2296,154 +2283,6 @@ unsafe fn device_path_byte_len(ptr: *const u8) -> Option<usize> {
         if node_type == 0x7f && node_subtype == 0xff {
             return Some(offset);
         }
-    }
-}
-
-struct UefiBlockIo {
-    block_io: NonNull<BlockIO>,
-    media_id: u32,
-    block_size: u32,
-    total_blocks: u64,
-}
-
-impl UefiBlockIo {
-    fn new(block_io: &BlockIO) -> Option<Self> {
-        let media = block_io.media();
-        let block_size = media.block_size();
-        if block_size == 0 {
-            return None;
-        }
-
-        Some(Self {
-            block_io: NonNull::from(block_io),
-            media_id: media.media_id(),
-            block_size,
-            total_blocks: media.last_block() + 1,
-        })
-    }
-}
-
-impl BlockIoOps for UefiBlockIo {
-    fn block_size(&self) -> u32 {
-        self.block_size
-    }
-
-    fn total_blocks(&self) -> u64 {
-        self.total_blocks
-    }
-
-    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
-        let block_size = self.block_size as usize;
-        if block_size == 0 || buf.is_empty() || buf.len() % block_size != 0 {
-            return Err(FsError::InvalidArgument);
-        }
-
-        let block_count = (buf.len() / block_size) as u64;
-        if lba
-            .checked_add(block_count)
-            .map_or(true, |end| end > self.total_blocks)
-        {
-            return Err(FsError::ReadError);
-        }
-
-        let block_io = unsafe { self.block_io.as_ref() };
-        block_io
-            .read_blocks(self.media_id, lba, buf)
-            .map_err(|_| FsError::ReadError)
-    }
-}
-
-struct PartitionBlockIo {
-    parent: nextboot_fs::SharedBlockIo,
-    start_lba: u64,
-    total_blocks: u64,
-}
-
-impl PartitionBlockIo {
-    fn new(parent: nextboot_fs::SharedBlockIo, start_lba: u64, total_blocks: u64) -> Self {
-        Self {
-            parent,
-            start_lba,
-            total_blocks,
-        }
-    }
-}
-
-impl BlockIoOps for PartitionBlockIo {
-    fn block_size(&self) -> u32 {
-        self.parent.block_size()
-    }
-
-    fn total_blocks(&self) -> u64 {
-        self.total_blocks
-    }
-
-    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
-        let block_size = self.block_size() as usize;
-        if block_size == 0 || buf.is_empty() || buf.len() % block_size != 0 {
-            return Err(FsError::InvalidArgument);
-        }
-
-        let block_count = (buf.len() / block_size) as u64;
-        if lba
-            .checked_add(block_count)
-            .map_or(true, |end| end > self.total_blocks)
-        {
-            return Err(FsError::ReadError);
-        }
-
-        let parent_lba = self.start_lba.checked_add(lba).ok_or(FsError::ReadError)?;
-        self.parent.read_blocks(parent_lba, buf)
-    }
-}
-
-impl PhysicalReader for UefiBlockIo {
-    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
-        let block_size = self.block_size as usize;
-        if block_size == 0 || buf.is_empty() || buf.len() % block_size != 0 {
-            return Err(VirtIoError::InvalidBufferSize);
-        }
-
-        let block_count = (buf.len() / block_size) as u64;
-        if lba
-            .checked_add(block_count)
-            .map_or(true, |end| end > self.total_blocks)
-        {
-            return Err(VirtIoError::OutOfBounds);
-        }
-
-        let block_io = unsafe { self.block_io.as_ref() };
-        block_io
-            .read_blocks(self.media_id, lba, buf)
-            .map_err(|_| VirtIoError::ReadFailed)
-    }
-}
-
-struct VirtualIsoBlockIo {
-    vbio: VirtualBlockIo,
-    media_id: u32,
-}
-
-impl VirtualIsoBlockIo {
-    fn new(vbio: VirtualBlockIo) -> Self {
-        let media_id = vbio.media_id();
-        Self { vbio, media_id }
-    }
-}
-
-impl BlockIoOps for VirtualIsoBlockIo {
-    fn block_size(&self) -> u32 {
-        self.vbio.block_size()
-    }
-
-    fn total_blocks(&self) -> u64 {
-        self.vbio.block_count()
-    }
-
-    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
-        self.vbio
-            .read_blocks(self.media_id, lba, buf)
-            .map_err(|_| FsError::ReadError)
     }
 }
 
