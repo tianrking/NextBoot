@@ -34,6 +34,7 @@ LAYOUT="single"
 DATA_FS="exfat"
 DISK_IMG=""
 NO_RUN=0
+VERIFY_IMAGE=1
 MEMORY="1024M"
 IMAGES=()
 
@@ -55,6 +56,7 @@ Options:
   --data-fs FS       Data filesystem for split layout: exfat or fat32 (default: exfat)
   --disk-image PATH  Output disk image path
   --memory SIZE      QEMU guest memory (default: 1024M)
+  --skip-verify      Do not verify the generated GPT/filesystem image
   --no-run           Create the disk image and print the QEMU command only
   -h, --help         Show this help
 
@@ -135,6 +137,10 @@ while [ $# -gt 0 ]; do
             [ $# -ge 2 ] || die "--memory requires a value"
             MEMORY="$2"
             shift 2
+            ;;
+        --skip-verify)
+            VERIFY_IMAGE=0
+            shift
             ;;
         --no-run)
             NO_RUN=1
@@ -862,6 +868,23 @@ with open(path, "wb") as f:
 PY
 
 info "Disk image created: ${DISK_IMG}"
+
+if [ "$VERIFY_IMAGE" -eq 1 ]; then
+    VERIFY_SCRIPT="${SCRIPT_DIR}/verify-qemu-image.py"
+    [ -f "$VERIFY_SCRIPT" ] || die "QEMU image verifier not found: ${VERIFY_SCRIPT}"
+    warn "Verifying GPT/filesystem layout..."
+    VERIFY_ARGS=(
+        --disk-image "$DISK_IMG"
+        --sector-size "$SECTOR_SIZE"
+        --layout "$LAYOUT"
+        --data-fs "$DATA_FS"
+        --efi-file "$EFI_FILE"
+    )
+    for image in "${IMAGES[@]}"; do
+        VERIFY_ARGS+=(--image "$image")
+    done
+    python3 "$VERIFY_SCRIPT" "${VERIFY_ARGS[@]}"
+fi
 
 DEVICE_BLOCK_OPTS=""
 if [ "$SECTOR_SIZE" -ne 512 ]; then
