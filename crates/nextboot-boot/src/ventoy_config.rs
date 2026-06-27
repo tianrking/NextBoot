@@ -230,6 +230,7 @@ pub struct VentoyConfig {
     pub default_image: Option<String>,
     pub default_menu_mode: Option<u32>,
     pub linux_remount: bool,
+    pub windows_uefi_resolution_lock: u8,
     pub image_list_mode: VentoyImageListMode,
     pub image_list: Vec<String>,
     pub menu_aliases: Vec<VentoyMenuAlias>,
@@ -723,6 +724,14 @@ fn parse_u32_text(text: &str) -> Option<u32> {
     Some(value)
 }
 
+fn parse_windows_uefi_resolution_lock(text: &str) -> u8 {
+    match text.trim() {
+        "1" => 1,
+        "2" => 2,
+        _ => 0,
+    }
+}
+
 #[cfg(target_arch = "aarch64")]
 const VENTOY_PLATFORM_SUFFIX: &str = "aa64";
 #[cfg(target_arch = "x86_64")]
@@ -867,6 +876,10 @@ impl<'a> JsonParser<'a> {
                         }
                         "VTOY_LINUX_REMOUNT" => {
                             config.linux_remount = value == "1";
+                        }
+                        "VTOY_WIN_UEFI_RES_LOCK" => {
+                            config.windows_uefi_resolution_lock =
+                                parse_windows_uefi_resolution_lock(&value);
                         }
                         "VTOY_FILT_DOT_UNDERSCORE_FILE" => {
                             config.filter_dot_underscore = value == "1";
@@ -1789,6 +1802,7 @@ mod tests {
                 { "VTOY_DEFAULT_SEARCH_ROOT": "/ISO" },
                 { "VTOY_MAX_SEARCH_LEVEL": "2" },
                 { "VTOY_LINUX_REMOUNT": "1" },
+                { "VTOY_WIN_UEFI_RES_LOCK": "2" },
                 { "VTOY_FILT_DOT_UNDERSCORE_FILE": "1" }
             ],
             "menu_alias": [
@@ -1802,6 +1816,7 @@ mod tests {
         assert!(config.filters.wim);
         assert!(config.filter_dot_underscore);
         assert!(config.linux_remount);
+        assert_eq!(config.windows_uefi_resolution_lock, 2);
         assert_eq!(config.default_search_root.as_deref(), Some("/ISO"));
         assert_eq!(config.max_search_level, Some(2));
         assert_eq!(config.image_list_mode, VentoyImageListMode::Deny);
@@ -1822,6 +1837,23 @@ mod tests {
         let config = VentoyConfig::parse(json).expect("config");
 
         assert_eq!(config.max_search_level, None);
+    }
+
+    #[test]
+    fn maps_windows_uefi_resolution_lock_like_ventoy_reserved_flag() {
+        let lock_one = VentoyConfig::parse(br#"{"control":[{"VTOY_WIN_UEFI_RES_LOCK":"1"}]}"#)
+            .expect("lock one");
+        let lock_two = VentoyConfig::parse(br#"{"control":[{"VTOY_WIN_UEFI_RES_LOCK":"2"}]}"#)
+            .expect("lock two");
+        let default_mode = VentoyConfig::parse(br#"{"control":[{"VTOY_WIN_UEFI_RES_LOCK":"3"}]}"#)
+            .expect("default mode");
+        let invalid = VentoyConfig::parse(br#"{"control":[{"VTOY_WIN_UEFI_RES_LOCK":"bad"}]}"#)
+            .expect("invalid mode");
+
+        assert_eq!(lock_one.windows_uefi_resolution_lock, 1);
+        assert_eq!(lock_two.windows_uefi_resolution_lock, 2);
+        assert_eq!(default_mode.windows_uefi_resolution_lock, 0);
+        assert_eq!(invalid.windows_uefi_resolution_lock, 0);
     }
 
     #[test]
