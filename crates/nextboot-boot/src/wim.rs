@@ -296,10 +296,41 @@ pub fn read_resource_range(
     offset: u64,
     out: &mut [u8],
 ) -> Result<(), WimReadError> {
+    read_resource_range_with(
+        metadata,
+        wim_file.len() as u64,
+        resource,
+        offset,
+        out,
+        |offset, buf| {
+            let start = usize::try_from(offset).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+            let end = start
+                .checked_add(buf.len())
+                .ok_or(WimReadError::ResourceOutOfBounds)?;
+            let source = wim_file
+                .get(start..end)
+                .ok_or(WimReadError::ResourceOutOfBounds)?;
+            buf.copy_from_slice(source);
+            Ok(())
+        },
+    )
+}
+
+pub fn read_resource_range_with<F>(
+    metadata: &WimMetadata,
+    wim_len: u64,
+    resource: &WimResourceHeader,
+    offset: u64,
+    out: &mut [u8],
+    mut read_at: F,
+) -> Result<(), WimReadError>
+where
+    F: FnMut(u64, &mut [u8]) -> Result<(), WimReadError>,
+{
     if out.is_empty() {
         return Ok(());
     }
-    validate_resource_range(wim_file, resource)?;
+    validate_resource_bounds(wim_len, resource)?;
 
     let read_end = offset
         .checked_add(out.len() as u64)
@@ -313,14 +344,7 @@ pub fn read_resource_range(
             .offset
             .checked_add(offset)
             .ok_or(WimReadError::ResourceOutOfBounds)?;
-        let start = usize::try_from(start).map_err(|_| WimReadError::ResourceOutOfBounds)?;
-        let end = start
-            .checked_add(out.len())
-            .ok_or(WimReadError::ResourceOutOfBounds)?;
-        let source = wim_file
-            .get(start..end)
-            .ok_or(WimReadError::ResourceOutOfBounds)?;
-        out.copy_from_slice(source);
+        read_at(start, out)?;
         return Ok(());
     }
 
@@ -329,7 +353,7 @@ pub fn read_resource_range(
     let mut output_offset = 0usize;
 
     while remaining > 0 {
-        let chunk = resource_chunk_span(metadata, wim_file, resource, resource_offset)?;
+        let chunk = resource_chunk_span_with(metadata, resource, resource_offset, &mut read_at)?;
         let skip = resource_offset
             .checked_sub(chunk.uncompressed_offset)
             .ok_or(WimReadError::InvalidRange)?;
@@ -345,17 +369,12 @@ pub fn read_resource_range(
                 .compressed_offset
                 .checked_add(skip)
                 .ok_or(WimReadError::ResourceOutOfBounds)?;
-            let source_start =
-                usize::try_from(source_start).map_err(|_| WimReadError::ResourceOutOfBounds)?;
-            let source_end = source_start
-                .checked_add(copy_len_usize)
-                .ok_or(WimReadError::ResourceOutOfBounds)?;
-            let source = wim_file
-                .get(source_start..source_end)
-                .ok_or(WimReadError::ResourceOutOfBounds)?;
-            out[output_offset..output_offset + copy_len_usize].copy_from_slice(source);
+            read_at(
+                source_start,
+                &mut out[output_offset..output_offset + copy_len_usize],
+            )?;
         } else if metadata.compression == WimCompression::Xpress {
-            let decompressed = decompress_xpress_chunk(wim_file, &chunk)?;
+            let decompressed = decompress_xpress_chunk_with(&chunk, &mut read_at)?;
             let skip = usize::try_from(skip).map_err(|_| WimReadError::ResourceOutOfBounds)?;
             let end = skip
                 .checked_add(copy_len_usize)
@@ -363,7 +382,7 @@ pub fn read_resource_range(
             out[output_offset..output_offset + copy_len_usize]
                 .copy_from_slice(&decompressed[skip..end]);
         } else if metadata.compression == WimCompression::Lzx {
-            let decompressed = decompress_lzx_chunk(wim_file, &chunk)?;
+            let decompressed = decompress_lzx_chunk_with(&chunk, &mut read_at)?;
             let skip = usize::try_from(skip).map_err(|_| WimReadError::ResourceOutOfBounds)?;
             let end = skip
                 .checked_add(copy_len_usize)
@@ -467,26 +486,29 @@ impl WimChunkSpan {
     }
 }
 
-fn validate_resource_range(
-    wim_file: &[u8],
+fn validate_resource_bounds(
+    wim_len: u64,
     resource: &WimResourceHeader,
 ) -> Result<(), WimReadError> {
     let end = resource
         .offset
         .checked_add(resource.compressed_size)
         .ok_or(WimReadError::ResourceOutOfBounds)?;
-    if end > wim_file.len() as u64 {
+    if end > wim_len {
         return Err(WimReadError::ResourceOutOfBounds);
     }
     Ok(())
 }
 
-fn resource_chunk_span(
+fn resource_chunk_span_with<F>(
     metadata: &WimMetadata,
-    wim_file: &[u8],
     resource: &WimResourceHeader,
     uncompressed_offset: u64,
-) -> Result<WimChunkSpan, WimReadError> {
+    read_at: &mut F,
+) -> Result<WimChunkSpan, WimReadError>
+where
+    F: FnMut(u64, &mut [u8]) -> Result<(), WimReadError>,
+{
     let chunk_len = u64::from(metadata.chunk_len);
     if chunk_len == 0 {
         return Err(WimReadError::InvalidChunkLength);
@@ -506,8 +528,8 @@ fn resource_chunk_span(
             .checked_sub(chunk_uncompressed_offset)
             .ok_or(WimReadError::InvalidRange)?,
     );
-    let chunk_start = resource_chunk_data_offset(wim_file, resource, chunk_len, chunk_index)?;
-    let chunk_end = resource_chunk_data_offset(wim_file, resource, chunk_len, chunk_index + 1)?;
+    let chunk_start = resource_chunk_data_offset_with(resource, chunk_len, chunk_index, read_at)?;
+    let chunk_end = resource_chunk_data_offset_with(resource, chunk_len, chunk_index + 1, read_at)?;
     if chunk_end < chunk_start || chunk_end > resource.compressed_size {
         return Err(WimReadError::InvalidChunkTable);
     }
@@ -524,17 +546,29 @@ fn resource_chunk_span(
     })
 }
 
-fn decompress_xpress_chunk(wim_file: &[u8], chunk: &WimChunkSpan) -> Result<Vec<u8>, WimReadError> {
-    let start =
-        usize::try_from(chunk.compressed_offset).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+fn read_compressed_chunk<F>(chunk: &WimChunkSpan, read_at: &mut F) -> Result<Vec<u8>, WimReadError>
+where
+    F: FnMut(u64, &mut [u8]) -> Result<(), WimReadError>,
+{
     let compressed_size =
         usize::try_from(chunk.compressed_size).map_err(|_| WimReadError::ResourceOutOfBounds)?;
-    let end = start
-        .checked_add(compressed_size)
-        .ok_or(WimReadError::ResourceOutOfBounds)?;
-    let compressed = wim_file
-        .get(start..end)
-        .ok_or(WimReadError::ResourceOutOfBounds)?;
+    let mut compressed = Vec::new();
+    compressed
+        .try_reserve_exact(compressed_size)
+        .map_err(|_| WimReadError::OutputReserveFailed)?;
+    compressed.resize(compressed_size, 0);
+    read_at(chunk.compressed_offset, &mut compressed)?;
+    Ok(compressed)
+}
+
+fn decompress_xpress_chunk_with<F>(
+    chunk: &WimChunkSpan,
+    read_at: &mut F,
+) -> Result<Vec<u8>, WimReadError>
+where
+    F: FnMut(u64, &mut [u8]) -> Result<(), WimReadError>,
+{
+    let compressed = read_compressed_chunk(chunk, read_at)?;
     let mut out = Vec::new();
     let expected =
         usize::try_from(chunk.uncompressed_size).map_err(|_| WimReadError::ResourceOutOfBounds)?;
@@ -542,7 +576,7 @@ fn decompress_xpress_chunk(wim_file: &[u8], chunk: &WimChunkSpan) -> Result<Vec<
         .map_err(|_| WimReadError::OutputReserveFailed)?;
     out.resize(expected, 0);
     let produced =
-        decompress_xpress(compressed, &mut out).map_err(WimReadError::XpressDecodeFailed)?;
+        decompress_xpress(&compressed, &mut out).map_err(WimReadError::XpressDecodeFailed)?;
     if produced != expected {
         return Err(WimReadError::XpressDecodeFailed(
             XpressDecodeError::OutputOverflow,
@@ -551,17 +585,14 @@ fn decompress_xpress_chunk(wim_file: &[u8], chunk: &WimChunkSpan) -> Result<Vec<
     Ok(out)
 }
 
-fn decompress_lzx_chunk(wim_file: &[u8], chunk: &WimChunkSpan) -> Result<Vec<u8>, WimReadError> {
-    let start =
-        usize::try_from(chunk.compressed_offset).map_err(|_| WimReadError::ResourceOutOfBounds)?;
-    let compressed_size =
-        usize::try_from(chunk.compressed_size).map_err(|_| WimReadError::ResourceOutOfBounds)?;
-    let end = start
-        .checked_add(compressed_size)
-        .ok_or(WimReadError::ResourceOutOfBounds)?;
-    let compressed = wim_file
-        .get(start..end)
-        .ok_or(WimReadError::ResourceOutOfBounds)?;
+fn decompress_lzx_chunk_with<F>(
+    chunk: &WimChunkSpan,
+    read_at: &mut F,
+) -> Result<Vec<u8>, WimReadError>
+where
+    F: FnMut(u64, &mut [u8]) -> Result<(), WimReadError>,
+{
+    let compressed = read_compressed_chunk(chunk, read_at)?;
     let mut out = Vec::new();
     let expected =
         usize::try_from(chunk.uncompressed_size).map_err(|_| WimReadError::ResourceOutOfBounds)?;
@@ -569,7 +600,7 @@ fn decompress_lzx_chunk(wim_file: &[u8], chunk: &WimChunkSpan) -> Result<Vec<u8>
         .map_err(|_| WimReadError::OutputReserveFailed)?;
     out.resize(expected, 0);
     let produced =
-        lzx::decompress_lzx(compressed, &mut out).map_err(WimReadError::LzxDecodeFailed)?;
+        lzx::decompress_lzx(&compressed, &mut out).map_err(WimReadError::LzxDecodeFailed)?;
     if produced != expected {
         return Err(WimReadError::LzxDecodeFailed(
             lzx::LzxDecodeError::OutputOverflow,
@@ -848,12 +879,15 @@ impl<'a> XpressBitstream<'a> {
     }
 }
 
-fn resource_chunk_data_offset(
-    wim_file: &[u8],
+fn resource_chunk_data_offset_with<F>(
     resource: &WimResourceHeader,
     chunk_len: u64,
     chunk_index: u64,
-) -> Result<u64, WimReadError> {
+    read_at: &mut F,
+) -> Result<u64, WimReadError>
+where
+    F: FnMut(u64, &mut [u8]) -> Result<(), WimReadError>,
+{
     if resource.uncompressed_size == 0 {
         return Ok(0);
     }
@@ -893,13 +927,12 @@ fn resource_chunk_data_offset(
                 .ok_or(WimReadError::InvalidChunkTable)?,
         )
         .ok_or(WimReadError::ResourceOutOfBounds)?;
-    let table_entry_offset =
-        usize::try_from(table_entry_offset).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+    let mut raw = [0u8; 8];
+    let raw_len = usize::try_from(offset_entry_len).map_err(|_| WimReadError::InvalidChunkTable)?;
+    read_at(table_entry_offset, &mut raw[..raw_len])?;
     let raw_offset = match offset_entry_len {
-        4 => u64::from(
-            read_le_u32(wim_file, table_entry_offset).ok_or(WimReadError::InvalidChunkTable)?,
-        ),
-        8 => read_le_u64(wim_file, table_entry_offset).ok_or(WimReadError::InvalidChunkTable)?,
+        4 => u64::from(read_le_u32(&raw, 0).ok_or(WimReadError::InvalidChunkTable)?),
+        8 => read_le_u64(&raw, 0).ok_or(WimReadError::InvalidChunkTable)?,
         _ => return Err(WimReadError::InvalidChunkTable),
     };
     let offset = chunks_len
@@ -1339,6 +1372,48 @@ mod tests {
         read_resource_range(&metadata, &wim_file, &resource, 1, &mut out).expect("xpress chunk");
 
         assert_eq!(&out, b"xy");
+    }
+
+    #[test]
+    fn reads_compressed_resource_with_random_access_reader() {
+        let metadata = make_wim_metadata_with_chunk_len(4);
+        let compressed = make_xpress_literal_stream(b"wxyz");
+        let mut wim_file = alloc::vec![0u8; 16 + compressed.len()];
+        wim_file[16..].copy_from_slice(&compressed);
+        let resource = WimResourceHeader {
+            compressed_size: compressed.len() as u64,
+            flags: WIM_RESHDR_COMPRESSED,
+            offset: 16,
+            uncompressed_size: 4,
+        };
+        let mut out = [0u8; 3];
+        let mut calls = 0usize;
+
+        read_resource_range_with(
+            &metadata,
+            wim_file.len() as u64,
+            &resource,
+            1,
+            &mut out,
+            |offset, buf| {
+                calls += 1;
+                let start =
+                    usize::try_from(offset).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+                let end = start
+                    .checked_add(buf.len())
+                    .ok_or(WimReadError::ResourceOutOfBounds)?;
+                buf.copy_from_slice(
+                    wim_file
+                        .get(start..end)
+                        .ok_or(WimReadError::ResourceOutOfBounds)?,
+                );
+                Ok(())
+            },
+        )
+        .expect("reader-backed xpress resource");
+
+        assert_eq!(&out, b"xyz");
+        assert!(calls > 0);
     }
 
     #[test]

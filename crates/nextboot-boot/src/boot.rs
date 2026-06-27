@@ -11,6 +11,7 @@ use crate::virtual_fs::{
     IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem, VirtualFileReplacement,
     VirtualIsoFilesystem,
 };
+use crate::wim;
 use crate::wimboot::{self, WimbootCallbacks, WimbootVirtualFile};
 use crate::xz::{self, XzDecodeError};
 use alloc::boxed::Box;
@@ -132,6 +133,7 @@ const WIMBOOT_MAX_CALLBACK_PATH: usize = 512;
 const WIMBOOT_BOOT_WIM_CALLBACK_PATH: &str = "nb-boot-wim";
 const WIMBOOT_BCD_CALLBACK_PATH: &str = "nb-bcd";
 const WIMBOOT_BOOT_SDI_CALLBACK_PATH: &str = "nb-boot-sdi";
+const WIMBOOT_BOOTMGFW_CALLBACK_PATH: &str = "nb-bootmgfw";
 const WIMBOOT_SELF_CALLBACK_PATH: &str = "nb-wimboot";
 const WIMBOOT_XZ_MAX_OUTPUT_SIZE: usize = 2 * 1024 * 1024;
 const VENTOY_COMMON_CPIO_CANDIDATES: &[&str] = &["/ventoy/ventoy.cpio"];
@@ -264,6 +266,13 @@ const WINDOWS_ISO_BOOT_SDI_CANDIDATES: &[&str] = &[
     "/boot/uqi.sdi",
     "/ISYL/boot.sdi",
     "/WEPE/WEPE.SDI",
+];
+const WIMBOOT_BOOTMGFW_VIRTUAL_NAME: &str = "bootmgfw.efi";
+const WIMBOOT_WIM_BOOTMGFW_CANDIDATES: &[&str] = &["\\Windows\\Boot\\EFI\\bootmgfw.efi"];
+const WIMBOOT_WIM_BCD_CANDIDATES: &[&str] = &["\\Windows\\Boot\\DVD\\EFI\\BCD"];
+const WIMBOOT_WIM_BOOT_SDI_CANDIDATES: &[&str] = &[
+    "\\Windows\\Boot\\DVD\\EFI\\boot.sdi",
+    "\\sms\\boot\\boot.sdi",
 ];
 
 static WIMBOOT_RUNTIME_CONTEXT: AtomicPtr<WimbootRuntimeContext> = AtomicPtr::new(ptr::null_mut());
@@ -538,34 +547,62 @@ impl<'a> BootManager<'a> {
         &self,
         helper: &SourceVolumeFile,
     ) -> uefi::Result<WimbootRuntimeInputs> {
+        let boot_wim = WimbootRuntimeFile::from_iso(self.iso, WIMBOOT_BOOT_WIM_CALLBACK_PATH)?;
+        let mut internal = {
+            let source_block_io = self
+                .bt
+                .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+            let reader = SourceVolumeReader::new(&source_block_io, self.iso.source_disk)
+                .ok_or(uefi::Status::DEVICE_ERROR)?;
+            let boot_index = self.iso.wim_info.map(|info| info.boot_index).unwrap_or(0);
+            self.collect_wimboot_internal_files(&reader, &boot_wim, boot_index)
+        };
+
         let mut runtime_files = Vec::new();
         runtime_files
-            .try_reserve_exact(4)
+            .try_reserve_exact(6)
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        runtime_files.push(WimbootRuntimeFile::from_iso(
-            self.iso,
-            WIMBOOT_BOOT_WIM_CALLBACK_PATH,
-        )?);
+        runtime_files.push(boot_wim);
         runtime_files.push(WimbootRuntimeFile::from_memory(
             WIMBOOT_SELF_CALLBACK_PATH,
             helper.data.clone(),
         ));
-
-        let mut bcd = self
-            .find_source_volume_file(WIMBOOT_BCD_CANDIDATES, WIMBOOT_COMPRESSED_BCD_CANDIDATES)?;
-        let patched = wimboot::patch_bcd_for_efi(&mut bcd.data);
-        if patched != 0 {
-            info!(
-                "Patched {} UTF-16 BCD .exe reference(s) for UEFI WIMBOOT",
-                patched
-            );
+        let mut include_bootmgfw = false;
+        if let Some(bootmgfw) = internal.bootmgfw.take() {
+            runtime_files.push(bootmgfw);
+            include_bootmgfw = true;
         }
-        runtime_files.push(WimbootRuntimeFile::from_memory(
-            WIMBOOT_BCD_CALLBACK_PATH,
-            bcd.data,
-        ));
 
-        let boot_sdi =
+        let mut include_bcd = false;
+        match self
+            .find_source_volume_file(WIMBOOT_BCD_CANDIDATES, WIMBOOT_COMPRESSED_BCD_CANDIDATES)
+        {
+            Ok(mut bcd) => {
+                let patched = wimboot::patch_bcd_for_efi(&mut bcd.data);
+                if patched != 0 {
+                    info!(
+                        "Patched {} UTF-16 BCD .exe reference(s) for UEFI WIMBOOT",
+                        patched
+                    );
+                }
+                runtime_files.push(WimbootRuntimeFile::from_memory(
+                    WIMBOOT_BCD_CALLBACK_PATH,
+                    bcd.data,
+                ));
+                include_bcd = true;
+            }
+            Err(err) if err.status() == Status::NOT_FOUND => {
+                if let Some(bcd) = internal.bcd.take() {
+                    runtime_files.push(bcd);
+                    include_bcd = true;
+                } else {
+                    info!("WIMBOOT BCD was not found externally; relying on boot.wim extraction");
+                }
+            }
+            Err(err) => return Err(err),
+        }
+
+        let include_boot_sdi =
             match self.find_optional_source_volume_file_metadata(WIMBOOT_BOOT_SDI_CANDIDATES) {
                 Ok(Some(file)) => {
                     runtime_files.push(WimbootRuntimeFile::from_source_file(
@@ -575,15 +612,20 @@ impl<'a> BootManager<'a> {
                     true
                 }
                 Ok(None) => {
-                    info!("WIMBOOT boot.sdi was not found; continuing without boot.sdi vf entry");
-                    false
+                    if let Some(boot_sdi) = internal.boot_sdi.take() {
+                        runtime_files.push(boot_sdi);
+                        true
+                    } else {
+                        info!("WIMBOOT boot.sdi was not found; relying on boot.wim extraction");
+                        false
+                    }
                 }
                 Err(err) => return Err(err),
             };
 
         let mut virtual_files = Vec::new();
         virtual_files
-            .try_reserve_exact(if boot_sdi { 4 } else { 3 })
+            .try_reserve_exact(5)
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         virtual_files.push(
             WimbootVirtualFile::new("boot.wim", WIMBOOT_BOOT_WIM_CALLBACK_PATH)
@@ -593,11 +635,22 @@ impl<'a> BootManager<'a> {
             WimbootVirtualFile::new("vtoy_wimboot", WIMBOOT_SELF_CALLBACK_PATH)
                 .map_err(|_| Status::INVALID_PARAMETER)?,
         );
-        virtual_files.push(
-            WimbootVirtualFile::new("bcd", WIMBOOT_BCD_CALLBACK_PATH)
+        if include_bootmgfw {
+            virtual_files.push(
+                WimbootVirtualFile::new(
+                    WIMBOOT_BOOTMGFW_VIRTUAL_NAME,
+                    WIMBOOT_BOOTMGFW_CALLBACK_PATH,
+                )
                 .map_err(|_| Status::INVALID_PARAMETER)?,
-        );
-        if boot_sdi {
+            );
+        }
+        if include_bcd {
+            virtual_files.push(
+                WimbootVirtualFile::new("bcd", WIMBOOT_BCD_CALLBACK_PATH)
+                    .map_err(|_| Status::INVALID_PARAMETER)?,
+            );
+        }
+        if include_boot_sdi {
             virtual_files.push(
                 WimbootVirtualFile::new("boot.sdi", WIMBOOT_BOOT_SDI_CALLBACK_PATH)
                     .map_err(|_| Status::INVALID_PARAMETER)?,
@@ -654,56 +707,86 @@ impl<'a> BootManager<'a> {
         &self,
         helper: &SourceVolumeFile,
     ) -> uefi::Result<WimbootRuntimeInputs> {
-        let (boot_wim, mut bcd, boot_sdi) = {
+        let (boot_wim, bcd, boot_sdi) = {
             let source_block_io = self
                 .bt
                 .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
             let fs = self.open_virtual_iso_filesystem(&source_block_io)?;
 
             let boot_wim = self.find_iso_file_metadata(&fs, WINDOWS_ISO_BOOT_WIM_CANDIDATES)?;
-            let bcd = self.find_iso_file_data(&fs, WINDOWS_ISO_BCD_CANDIDATES)?;
+            let bcd = self.find_optional_iso_file_data(&fs, WINDOWS_ISO_BCD_CANDIDATES)?;
             let boot_sdi =
                 self.find_optional_iso_file_data(&fs, WINDOWS_ISO_BOOT_SDI_CANDIDATES)?;
             (boot_wim, bcd, boot_sdi)
         };
-        let patched = wimboot::patch_bcd_for_efi(&mut bcd.data);
-        if patched != 0 {
-            info!(
-                "Patched {} UTF-16 Windows ISO BCD .exe reference(s) for UEFI WIMBOOT",
-                patched
-            );
-        }
-
-        let mut runtime_files = Vec::new();
-        runtime_files
-            .try_reserve_exact(if boot_sdi.is_some() { 4 } else { 3 })
-            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        runtime_files.push(WimbootRuntimeFile::from_mapped_segments(
+        let boot_wim_runtime = WimbootRuntimeFile::from_mapped_segments(
             WIMBOOT_BOOT_WIM_CALLBACK_PATH,
             boot_wim.size,
             boot_wim.segments,
-        )?);
+        )?;
+        let mut internal = {
+            let source_block_io = self
+                .bt
+                .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+            let reader = SourceVolumeReader::new(&source_block_io, self.iso.source_disk)
+                .ok_or(uefi::Status::DEVICE_ERROR)?;
+            self.collect_wimboot_internal_files(&reader, &boot_wim_runtime, 0)
+        };
+
+        let mut runtime_files = Vec::new();
+        runtime_files
+            .try_reserve_exact(6)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        runtime_files.push(boot_wim_runtime);
         runtime_files.push(WimbootRuntimeFile::from_memory(
             WIMBOOT_SELF_CALLBACK_PATH,
             helper.data.clone(),
         ));
-        runtime_files.push(WimbootRuntimeFile::from_memory(
-            WIMBOOT_BCD_CALLBACK_PATH,
-            bcd.data,
-        ));
+
+        let mut include_bootmgfw = false;
+        if let Some(bootmgfw) = internal.bootmgfw.take() {
+            runtime_files.push(bootmgfw);
+            include_bootmgfw = true;
+        }
+
+        let mut include_bcd = false;
+        if let Some(mut bcd) = bcd {
+            let patched = wimboot::patch_bcd_for_efi(&mut bcd.data);
+            if patched != 0 {
+                info!(
+                    "Patched {} UTF-16 Windows ISO BCD .exe reference(s) for UEFI WIMBOOT",
+                    patched
+                );
+            }
+            runtime_files.push(WimbootRuntimeFile::from_memory(
+                WIMBOOT_BCD_CALLBACK_PATH,
+                bcd.data,
+            ));
+            include_bcd = true;
+        } else if let Some(bcd) = internal.bcd.take() {
+            runtime_files.push(bcd);
+            include_bcd = true;
+        } else {
+            info!("Windows ISO BCD was not found externally; relying on boot.wim extraction");
+        }
+
+        let mut include_boot_sdi = false;
         if let Some(boot_sdi) = boot_sdi {
             runtime_files.push(WimbootRuntimeFile::from_memory(
                 WIMBOOT_BOOT_SDI_CALLBACK_PATH,
                 boot_sdi.data,
             ));
+            include_boot_sdi = true;
+        } else if let Some(boot_sdi) = internal.boot_sdi.take() {
+            runtime_files.push(boot_sdi);
+            include_boot_sdi = true;
+        } else {
+            info!("Windows ISO boot.sdi was not found externally; relying on boot.wim extraction");
         }
 
-        let include_boot_sdi = runtime_files
-            .iter()
-            .any(|file| file.callback_path == WIMBOOT_BOOT_SDI_CALLBACK_PATH);
         let mut virtual_files = Vec::new();
         virtual_files
-            .try_reserve_exact(if include_boot_sdi { 4 } else { 3 })
+            .try_reserve_exact(5)
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         virtual_files.push(
             WimbootVirtualFile::new("boot.wim", WIMBOOT_BOOT_WIM_CALLBACK_PATH)
@@ -713,10 +796,21 @@ impl<'a> BootManager<'a> {
             WimbootVirtualFile::new("vtoy_wimboot", WIMBOOT_SELF_CALLBACK_PATH)
                 .map_err(|_| Status::INVALID_PARAMETER)?,
         );
-        virtual_files.push(
-            WimbootVirtualFile::new("bcd", WIMBOOT_BCD_CALLBACK_PATH)
+        if include_bootmgfw {
+            virtual_files.push(
+                WimbootVirtualFile::new(
+                    WIMBOOT_BOOTMGFW_VIRTUAL_NAME,
+                    WIMBOOT_BOOTMGFW_CALLBACK_PATH,
+                )
                 .map_err(|_| Status::INVALID_PARAMETER)?,
-        );
+            );
+        }
+        if include_bcd {
+            virtual_files.push(
+                WimbootVirtualFile::new("bcd", WIMBOOT_BCD_CALLBACK_PATH)
+                    .map_err(|_| Status::INVALID_PARAMETER)?,
+            );
+        }
         if include_boot_sdi {
             virtual_files.push(
                 WimbootVirtualFile::new("boot.sdi", WIMBOOT_BOOT_SDI_CALLBACK_PATH)
@@ -728,6 +822,168 @@ impl<'a> BootManager<'a> {
             runtime_files,
             virtual_files,
         })
+    }
+
+    fn collect_wimboot_internal_files(
+        &self,
+        reader: &SourceVolumeReader,
+        boot_wim: &WimbootRuntimeFile,
+        boot_index: u32,
+    ) -> WimbootInternalFiles {
+        let image = match self.load_wimboot_wim_image(reader, boot_wim, boot_index) {
+            Ok(image) => image,
+            Err(err) => {
+                warn!(
+                    "Could not inspect WIM internals for {}: {:?}",
+                    self.iso.path,
+                    err.status()
+                );
+                return WimbootInternalFiles::default();
+            }
+        };
+
+        let bootmgfw = self
+            .find_wim_resource_file(&image, WIMBOOT_WIM_BOOTMGFW_CANDIDATES)
+            .map(|resource| {
+                info!(
+                    "Registered WIM internal {} ({} bytes)",
+                    WIMBOOT_BOOTMGFW_VIRTUAL_NAME, resource.uncompressed_size
+                );
+                WimbootRuntimeFile::from_wim_resource(
+                    WIMBOOT_BOOTMGFW_CALLBACK_PATH,
+                    boot_wim,
+                    image.metadata,
+                    resource,
+                )
+            });
+
+        let boot_sdi = self
+            .find_wim_resource_file(&image, WIMBOOT_WIM_BOOT_SDI_CANDIDATES)
+            .map(|resource| {
+                info!(
+                    "Registered WIM internal boot.sdi ({} bytes)",
+                    resource.uncompressed_size
+                );
+                WimbootRuntimeFile::from_wim_resource(
+                    WIMBOOT_BOOT_SDI_CALLBACK_PATH,
+                    boot_wim,
+                    image.metadata,
+                    resource,
+                )
+            });
+
+        let bcd = self
+            .find_wim_resource_file(&image, WIMBOOT_WIM_BCD_CANDIDATES)
+            .and_then(|resource| {
+                match self.read_wim_resource_to_vec(reader, boot_wim, &image.metadata, &resource) {
+                    Ok(mut data) => {
+                        let patched = wimboot::patch_bcd_for_efi(&mut data);
+                        if patched != 0 {
+                            info!(
+                                "Patched {} UTF-16 WIM internal BCD .exe reference(s) for UEFI WIMBOOT",
+                                patched
+                            );
+                        }
+                        info!("Registered WIM internal BCD ({} bytes)", data.len());
+                        Some(WimbootRuntimeFile::from_memory(WIMBOOT_BCD_CALLBACK_PATH, data))
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Could not read WIM internal BCD for {}: {:?}",
+                            self.iso.path,
+                            err.status()
+                        );
+                        None
+                    }
+                }
+            });
+
+        WimbootInternalFiles {
+            bootmgfw,
+            bcd,
+            boot_sdi,
+        }
+    }
+
+    fn load_wimboot_wim_image(
+        &self,
+        reader: &SourceVolumeReader,
+        boot_wim: &WimbootRuntimeFile,
+        boot_index: u32,
+    ) -> uefi::Result<WimbootWimImage> {
+        let mut header = [0u8; wim::WIM_HEADER_SIZE];
+        boot_wim
+            .read_range(reader, 0, &mut header)
+            .ok_or(Status::DEVICE_ERROR)?;
+        let metadata = wim::parse_wim_metadata(&header).ok_or(Status::LOAD_ERROR)?;
+        if !metadata.is_wimboot_supported() {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let lookup =
+            self.read_wim_resource_to_vec(reader, boot_wim, &metadata, &metadata.lookup)?;
+        let image_index = boot_index;
+        let image_metadata_resource =
+            wim::metadata_resource_for_image(&metadata, &lookup, image_index)
+                .ok_or(Status::NOT_FOUND)?;
+        let image_metadata =
+            self.read_wim_resource_to_vec(reader, boot_wim, &metadata, &image_metadata_resource)?;
+
+        Ok(WimbootWimImage {
+            metadata,
+            lookup,
+            image_metadata,
+        })
+    }
+
+    fn read_wim_resource_to_vec(
+        &self,
+        reader: &SourceVolumeReader,
+        boot_wim: &WimbootRuntimeFile,
+        metadata: &wim::WimMetadata,
+        resource: &wim::WimResourceHeader,
+    ) -> uefi::Result<Vec<u8>> {
+        let len =
+            usize::try_from(resource.uncompressed_size).map_err(|_| Status::OUT_OF_RESOURCES)?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(len)
+            .map_err(|_| Status::OUT_OF_RESOURCES)?;
+        out.resize(len, 0);
+        wim::read_resource_range_with(
+            metadata,
+            boot_wim.size,
+            resource,
+            0,
+            &mut out,
+            |offset, buf| {
+                boot_wim
+                    .read_range(reader, offset, buf)
+                    .ok_or(wim::WimReadError::ResourceOutOfBounds)
+            },
+        )
+        .map_err(wim_read_error_to_uefi_status)?;
+        Ok(out)
+    }
+
+    fn find_wim_resource_file(
+        &self,
+        image: &WimbootWimImage,
+        candidates: &[&str],
+    ) -> Option<wim::WimResourceHeader> {
+        for path in candidates {
+            match wim::file_resource_for_path(&image.image_metadata, &image.lookup, path) {
+                Ok(resource) => return Some(resource),
+                Err(wim::WimPathError::NotFound | wim::WimPathError::ResourceNotFound) => {}
+                Err(err) => {
+                    warn!(
+                        "WIM internal file candidate {} failed for {}: {:?}",
+                        path, self.iso.path, err
+                    );
+                }
+            }
+        }
+
+        None
     }
 
     fn register_wimboot_runtime_files(
@@ -1677,31 +1933,6 @@ impl<'a> BootManager<'a> {
         Err(last_status.into())
     }
 
-    fn find_iso_file_data(
-        &self,
-        fs: &VirtualIsoFilesystem,
-        candidates: &[&str],
-    ) -> uefi::Result<SourceVolumeFile> {
-        let mut last_status = Status::NOT_FOUND;
-        for path in candidates {
-            match self.load_iso_file_from_fs(fs, path) {
-                Ok(file) => {
-                    info!("Loaded ISO file {} ({} bytes)", file.path, file.data.len());
-                    return Ok(file);
-                }
-                Err(err) if err.status() == Status::NOT_FOUND => {
-                    last_status = Status::NOT_FOUND;
-                }
-                Err(err) => {
-                    last_status = err.status();
-                    warn!("ISO file candidate {} failed: {:?}", path, err.status());
-                }
-            }
-        }
-
-        Err(last_status.into())
-    }
-
     fn find_optional_iso_file_data(
         &self,
         fs: &VirtualIsoFilesystem,
@@ -1870,37 +2101,6 @@ impl<'a> BootManager<'a> {
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
         let fs = SourceVolumeFileSystem::open(&source_block_io, self.iso.source_disk)?;
         fs.file_metadata(path)
-    }
-
-    fn find_source_volume_file_metadata(
-        &self,
-        candidates: &[&str],
-    ) -> uefi::Result<SourceVolumeFileMetadata> {
-        let mut last_status = Status::NOT_FOUND;
-        for path in candidates {
-            match self.source_volume_file_metadata(path) {
-                Ok(file) => {
-                    info!(
-                        "Found source volume file {} ({} bytes)",
-                        file.path, file.size
-                    );
-                    return Ok(file);
-                }
-                Err(err) if err.status() == Status::NOT_FOUND => {
-                    last_status = Status::NOT_FOUND;
-                }
-                Err(err) => {
-                    last_status = err.status();
-                    warn!(
-                        "Source volume candidate {} failed: {:?}",
-                        path,
-                        err.status()
-                    );
-                }
-            }
-        }
-
-        Err(last_status.into())
     }
 
     fn find_optional_source_volume_file_metadata(
@@ -3928,6 +4128,19 @@ struct WimbootRuntimeInputs {
     virtual_files: Vec<WimbootVirtualFile<'static>>,
 }
 
+#[derive(Default)]
+struct WimbootInternalFiles {
+    bootmgfw: Option<WimbootRuntimeFile>,
+    bcd: Option<WimbootRuntimeFile>,
+    boot_sdi: Option<WimbootRuntimeFile>,
+}
+
+struct WimbootWimImage {
+    metadata: wim::WimMetadata,
+    lookup: Vec<u8>,
+    image_metadata: Vec<u8>,
+}
+
 struct WimbootRuntimeContext {
     reader: SourceVolumeReader,
     files: Vec<WimbootRuntimeFile>,
@@ -3941,6 +4154,7 @@ impl WimbootRuntimeContext {
     }
 }
 
+#[derive(Clone)]
 struct WimbootRuntimeFile {
     callback_path: String,
     size: u64,
@@ -3954,6 +4168,7 @@ struct WimbootMappedSegment {
     byte_count: u64,
 }
 
+#[derive(Clone)]
 enum WimbootRuntimeFileStorage {
     Disk {
         block_size: u32,
@@ -3961,6 +4176,11 @@ enum WimbootRuntimeFileStorage {
     },
     MappedBytes(Vec<WimbootMappedSegment>),
     Memory(Vec<u8>),
+    WimResource {
+        wim: Box<WimbootRuntimeFile>,
+        metadata: wim::WimMetadata,
+        resource: wim::WimResourceHeader,
+    },
 }
 
 impl WimbootRuntimeFileStorage {
@@ -3977,6 +4197,22 @@ impl WimbootRuntimeFileStorage {
                 buf.copy_from_slice(data.get(start..end)?);
                 Some(())
             }
+            Self::WimResource {
+                wim,
+                metadata,
+                resource,
+            } => wim::read_resource_range_with(
+                metadata,
+                wim.size,
+                resource,
+                offset,
+                buf,
+                |wim_offset, wim_buf| {
+                    wim.read_range(reader, wim_offset, wim_buf)
+                        .ok_or(wim::WimReadError::ResourceOutOfBounds)
+                },
+            )
+            .ok(),
         }
     }
 }
@@ -4036,6 +4272,23 @@ impl WimbootRuntimeFile {
             callback_path: String::from(callback_path),
             size: data.len() as u64,
             storage: WimbootRuntimeFileStorage::Memory(data),
+        }
+    }
+
+    fn from_wim_resource(
+        callback_path: &str,
+        wim: &WimbootRuntimeFile,
+        metadata: wim::WimMetadata,
+        resource: wim::WimResourceHeader,
+    ) -> Self {
+        Self {
+            callback_path: String::from(callback_path),
+            size: resource.uncompressed_size,
+            storage: WimbootRuntimeFileStorage::WimResource {
+                wim: Box::new(wim.clone()),
+                metadata,
+                resource,
+            },
         }
     }
 
@@ -4632,6 +4885,19 @@ fn xz_error_to_uefi_status(err: XzDecodeError) -> Status {
             Status::OUT_OF_RESOURCES
         }
         XzDecodeError::Decoder(_) | XzDecodeError::Stalled => Status::LOAD_ERROR,
+    }
+}
+
+fn wim_read_error_to_uefi_status(err: wim::WimReadError) -> Status {
+    match err {
+        wim::WimReadError::InvalidChunkLength
+        | wim::WimReadError::InvalidRange
+        | wim::WimReadError::InvalidChunkTable
+        | wim::WimReadError::XpressDecodeFailed(_)
+        | wim::WimReadError::LzxDecodeFailed(_) => Status::LOAD_ERROR,
+        wim::WimReadError::ResourceOutOfBounds => Status::DEVICE_ERROR,
+        wim::WimReadError::OutputReserveFailed => Status::OUT_OF_RESOURCES,
+        wim::WimReadError::UnsupportedCompressedChunk { .. } => Status::UNSUPPORTED,
     }
 }
 
