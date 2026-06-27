@@ -5,27 +5,18 @@
 use crate::scanner::{ImageFormat, IsoFile, OsType};
 use crate::vdi;
 use crate::vhdx;
-use crate::virtual_fs::{
-    IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem, VirtualFileReplacement,
-    VirtualIsoFilesystem,
-};
 use crate::wim;
 use crate::wimboot::{self, WimbootVirtualFile};
-use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use log::{info, warn};
-use nextboot_fs::iso9660::Iso9660;
-use nextboot_fs::udf::Udf;
-use nextboot_fs::{BlockIoOps, FileExtent, FsError};
+use nextboot_fs::FileExtent;
 use nextboot_virtio::mapping::ByteMappingTable;
 use nextboot_virtio::{MemoryOverlay, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
-use uefi::proto::device_path::DevicePath;
 use uefi::proto::media::block::BlockIO;
-use uefi::proto::media::fs::SimpleFileSystem;
-use uefi::table::boot::{BootServices, OpenProtocolAttributes, OpenProtocolParams, SearchType};
+use uefi::table::boot::BootServices;
 use uefi::table::runtime::RuntimeServices;
-use uefi::{Handle, Identify, Status};
+use uefi::{Handle, Status};
 
 mod candidates;
 mod chain_load;
@@ -38,15 +29,15 @@ mod os_param;
 mod source_volume;
 mod util;
 mod vhd;
+mod virtual_boot;
 mod virtual_device;
 mod wimboot_runtime;
 use candidates::*;
 use errors::{
-    fs_error_to_uefi_status, ventoy_windows_runtime_data_error_to_uefi_status,
-    ventoy_windows_wimboot_payload_error_to_uefi_status, virtio_error_to_fs_error,
-    virtio_error_to_uefi_status, wim_read_error_to_uefi_status,
+    ventoy_windows_runtime_data_error_to_uefi_status,
+    ventoy_windows_wimboot_payload_error_to_uefi_status, virtio_error_to_uefi_status,
+    wim_read_error_to_uefi_status,
 };
-use load_file::{normalize_load_file_key, PreloadedFile};
 use source_volume::{SourceVolumeFile, SourceVolumeReader, ZeroPhysicalReader};
 use util::*;
 use wimboot_runtime::{
@@ -825,21 +816,6 @@ impl<'a> BootManager<'a> {
         Err(last_status.into())
     }
 
-    fn open_iso9660_filesystem(&self, source_block_io: &BlockIO) -> uefi::Result<Iso9660> {
-        let config = self.iso9660_virtual_config();
-        let vbio = self.build_source_backed_virtual_block_io(config, source_block_io)?;
-        Ok(
-            Iso9660::open(Rc::new(VirtualIsoBlockIo::new(vbio)))
-                .map_err(fs_error_to_uefi_status)?,
-        )
-    }
-
-    fn open_udf_filesystem(&self, source_block_io: &BlockIO) -> uefi::Result<Udf> {
-        let config = self.iso9660_virtual_config();
-        let vbio = self.build_source_backed_virtual_block_io(config, source_block_io)?;
-        Ok(Udf::open(Rc::new(VirtualIsoBlockIo::new(vbio))).map_err(fs_error_to_uefi_status)?)
-    }
-
     fn boot_virtual_config(&self) -> VirtualDeviceConfig {
         use nextboot_virtio::CdRomBootInfo;
 
@@ -1594,214 +1570,11 @@ impl<'a> BootManager<'a> {
 
         Ok(())
     }
-
-    fn open_virtual_iso_filesystem(
-        &self,
-        source_block_io: &BlockIO,
-    ) -> uefi::Result<VirtualIsoFilesystem> {
-        let config = self.iso9660_virtual_config();
-        if self.iso.is_udf {
-            let vbio =
-                self.build_source_backed_virtual_block_io(config.clone(), source_block_io)?;
-            match Udf::open(Rc::new(VirtualIsoBlockIo::new(vbio))) {
-                Ok(udf) => {
-                    info!("Using UDF SimpleFileSystem backend for {}", self.iso.path);
-                    return Ok(VirtualIsoFilesystem::Udf(udf));
-                }
-                Err(err) => {
-                    warn!(
-                        "Failed to open UDF filesystem for {}, falling back to ISO9660: {:?}",
-                        self.iso.path, err
-                    );
-                }
-            }
-        }
-
-        let vbio = self.build_source_backed_virtual_block_io(config, source_block_io)?;
-        let iso = Iso9660::open(Rc::new(VirtualIsoBlockIo::new(vbio)))
-            .map_err(fs_error_to_uefi_status)?;
-        Ok(VirtualIsoFilesystem::Iso9660(iso))
-    }
-
-    fn install_iso_simple_file_system(
-        &self,
-        source_block_io: &BlockIO,
-        virtual_handle: Handle,
-        replacements: Vec<VirtualFileReplacement>,
-    ) -> uefi::Result<RegisteredIsoSimpleFileSystem> {
-        let fs = self.open_virtual_iso_filesystem(source_block_io)?;
-        let block_size = fs.block_size();
-        IsoSimpleFileSystemProtocol::install(
-            self.bt,
-            virtual_handle,
-            Rc::new(fs),
-            self.iso.size,
-            block_size,
-            replacements,
-        )
-    }
-
-    fn preload_load_file_entries(&self) -> Vec<PreloadedFile> {
-        let mut entries = Vec::new();
-        if !self.iso.image_format.is_iso() {
-            return entries;
-        }
-
-        for path in generic_efi_boot_paths() {
-            match self.load_file(path) {
-                Ok(data) if !data.is_empty() => {
-                    let key = normalize_load_file_key(path);
-                    if entries
-                        .iter()
-                        .any(|entry: &PreloadedFile| entry.path == key)
-                    {
-                        continue;
-                    }
-
-                    info!("Preloaded LoadFile path {} ({} bytes)", path, data.len());
-                    entries.push(PreloadedFile { path: key, data });
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    info!("LoadFile preload skipped {}: {:?}", path, err.status());
-                }
-            }
-        }
-
-        entries
-    }
-
-    fn boot_virtual_device(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
-        info!("Connecting virtual boot device {:?}", device.handle);
-        if let Err(err) = self.bt.connect_controller(device.handle, None, None, true) {
-            warn!(
-                "ConnectController on virtual device returned {:?}; trying LoadImage anyway",
-                err.status()
-            );
-        }
-
-        if !self.iso.image_format.is_iso() {
-            match self.boot_virtual_disk_partitions(device) {
-                Ok(()) => return Ok(()),
-                Err(err) => warn!(
-                    "Virtual disk partition boot failed for {}: {:?}",
-                    self.iso.path,
-                    err.status()
-                ),
-            }
-        }
-
-        self.try_load_image_paths(
-            device.handle,
-            &device.device_path,
-            default_efi_boot_paths(),
-            "virtual device",
-        )
-    }
-
-    fn boot_virtual_disk_partitions(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
-        let mut last_status = Status::NOT_FOUND;
-        for attempt in 0..3 {
-            let fs_handles = self
-                .bt
-                .locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))?;
-            let mut matched_partitions = 0usize;
-
-            for handle in fs_handles.iter().copied() {
-                let Ok(partition_path) = self.handle_device_path_bytes(handle) else {
-                    continue;
-                };
-
-                if !is_child_device_path(&device.device_path, &partition_path) {
-                    continue;
-                }
-
-                matched_partitions += 1;
-                info!(
-                    "Found virtual disk filesystem partition {:?} for {}",
-                    handle, self.iso.path
-                );
-
-                match self.try_load_image_paths(
-                    handle,
-                    &partition_path,
-                    default_efi_boot_paths(),
-                    "virtual disk partition",
-                ) {
-                    Ok(()) => return Ok(()),
-                    Err(err) => {
-                        last_status = err.status();
-                        warn!(
-                            "No bootable EFI path on virtual partition {:?}: {:?}",
-                            handle,
-                            err.status()
-                        );
-                    }
-                }
-            }
-
-            if matched_partitions > 0 {
-                return Err(last_status.into());
-            }
-
-            warn!(
-                "No SimpleFileSystem partitions found under {} (attempt {}/3)",
-                self.iso.path,
-                attempt + 1
-            );
-            self.bt.stall(2_000_000);
-        }
-
-        Err(last_status.into())
-    }
-
-    fn handle_device_path_bytes(&self, handle: Handle) -> uefi::Result<Vec<u8>> {
-        let device_path = unsafe {
-            self.bt.open_protocol::<DevicePath>(
-                OpenProtocolParams {
-                    handle,
-                    agent: self.parent_image,
-                    controller: None,
-                },
-                OpenProtocolAttributes::GetProtocol,
-            )
-        }?;
-
-        device_path_to_vec(&device_path)
-    }
 }
 
 struct VirtualBootDevice {
     handle: Handle,
     device_path: Vec<u8>,
-}
-
-struct VirtualIsoBlockIo {
-    vbio: VirtualBlockIo,
-    media_id: u32,
-}
-
-impl VirtualIsoBlockIo {
-    fn new(vbio: VirtualBlockIo) -> Self {
-        let media_id = vbio.media_id();
-        Self { vbio, media_id }
-    }
-}
-
-impl BlockIoOps for VirtualIsoBlockIo {
-    fn block_size(&self) -> u32 {
-        self.vbio.block_size()
-    }
-
-    fn total_blocks(&self) -> u64 {
-        self.vbio.block_count()
-    }
-
-    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
-        self.vbio
-            .read_blocks(self.media_id, lba, buf)
-            .map_err(virtio_error_to_fs_error)
-    }
 }
 
 /// 引导模式
