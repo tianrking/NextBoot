@@ -456,4 +456,5 @@ pub fn alloc_buffer(size: usize) -> Result<Vec<u8>, FsError> {
 extern crate std;
 
 #[cfg(test)]
+#[path = "lib/tests.rs"]
 mod tests;

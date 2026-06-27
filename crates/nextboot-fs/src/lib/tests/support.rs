@@ -2,18 +2,18 @@ use super::*;
 
 pub(super) struct MemoryBlockIo {
     block_size: u32,
-    data: Vec<u8>,
+    pub(super) data: Vec<u8>,
 }
 
 impl MemoryBlockIo {
-    fn new(block_size: u32, blocks: usize) -> Self {
+    pub(super) fn new(block_size: u32, blocks: usize) -> Self {
         Self {
             block_size,
             data: vec![0; block_size as usize * blocks],
         }
     }
 
-    fn block_mut(&mut self, lba: usize) -> &mut [u8] {
+    pub(super) fn block_mut(&mut self, lba: usize) -> &mut [u8] {
         let block_size = self.block_size as usize;
         let start = lba * block_size;
         &mut self.data[start..start + block_size]

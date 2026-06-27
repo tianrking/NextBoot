@@ -8,6 +8,7 @@ use crate::udf::Udf;
 use alloc::rc::Rc;
 use alloc::vec;
 
+#[path = "tests/support.rs"]
 mod support;
 use support::*;
 
