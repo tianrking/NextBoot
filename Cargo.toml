@@ -18,7 +18,7 @@ authors = ["NextBoot Team"]
 
 [workspace.dependencies]
 # UEFI 核心
-uefi = { version = "0.28", features = ["global_allocator", "panic_handler"] }
+uefi = { version = "0.28", features = ["alloc", "global_allocator", "panic_handler"] }
 uefi-services = "0.25"
 
 # 日志

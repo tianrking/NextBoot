@@ -5,8 +5,14 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
-use uefi::table::boot::BootServices;
+use uefi::data_types::CString16;
+use uefi::proto::media::file::{Directory, File, FileAttribute, FileMode};
+use uefi::proto::media::fs::SimpleFileSystem;
+use uefi::table::boot::{BootServices, SearchType};
+use uefi::Identify;
 use crate::init::StorageDevice;
+
+const MAX_SCAN_DEPTH: usize = 4;
 
 /// ISO 文件信息
 #[derive(Debug, Clone)]
@@ -86,6 +92,7 @@ impl<'a> IsoScanner<'a> {
 
         // 扫描常见目录
         let search_paths = [
+            root,
             "/",
             "/ISO",
             "/iso",
@@ -95,9 +102,18 @@ impl<'a> IsoScanner<'a> {
             "/boot",
         ];
 
-        for search_path in &search_paths {
-            if let Ok(files) = self.scan_directory(search_path, &extensions) {
-                iso_files.extend(files);
+        let fs_handles = self.bt.locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))?;
+
+        for handle in fs_handles.iter().copied() {
+            let mut fs = match self.bt.open_protocol_exclusive::<SimpleFileSystem>(handle) {
+                Ok(fs) => fs,
+                Err(_) => continue,
+            };
+
+            for search_path in &search_paths {
+                if let Ok(files) = self.scan_volume_path(&mut fs, search_path, &extensions) {
+                    iso_files.extend(files);
+                }
             }
         }
 
@@ -118,25 +134,162 @@ impl<'a> IsoScanner<'a> {
 
     /// 扫描单个目录
     fn scan_directory(&self, path: &str, extensions: &[&str]) -> uefi::Result<Vec<IsoFile>> {
+        let fs_handles = self.bt.locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))?;
         let mut files = Vec::new();
 
-        // 尝试打开目录
-        // 这里简化实现，实际需要使用文件系统驱动
+        for handle in fs_handles.iter().copied() {
+            let mut fs = match self.bt.open_protocol_exclusive::<SimpleFileSystem>(handle) {
+                Ok(fs) => fs,
+                Err(_) => continue,
+            };
 
-        // TODO: 实现实际的目录扫描
-        // 1. 打开目录
-        // 2. 遍历条目
-        // 3. 过滤 ISO 文件
-        // 4. 获取文件信息
+            if let Ok(mut volume_files) = self.scan_volume_path(&mut fs, path, extensions) {
+                files.append(&mut volume_files);
+            }
+        }
 
         Ok(files)
     }
 
     /// 检测 ISO 文件类型
-    fn detect_iso_type(&self, _path: &str) -> OsType {
-        // TODO: 读取 ISO 内部文件来检测类型
-        OsType::Unknown
+    fn detect_iso_type(&self, path: &str) -> OsType {
+        OsType::detect_from_path(path)
     }
+
+    fn scan_volume_path(
+        &self,
+        fs: &mut SimpleFileSystem,
+        path: &str,
+        extensions: &[&str],
+    ) -> uefi::Result<Vec<IsoFile>> {
+        let mut root = fs.open_volume()?;
+        let normalized = normalize_scan_path(path);
+        let mut dir = if normalized == "/" {
+            root
+        } else {
+            match open_directory(&mut root, &normalized) {
+                Ok(dir) => dir,
+                Err(e) => return Err(e),
+            }
+        };
+
+        let mut files = Vec::new();
+        self.scan_directory_entries(&mut dir, &normalized, extensions, 0, &mut files)?;
+        Ok(files)
+    }
+
+    fn scan_directory_entries(
+        &self,
+        dir: &mut Directory,
+        display_path: &str,
+        extensions: &[&str],
+        depth: usize,
+        files: &mut Vec<IsoFile>,
+    ) -> uefi::Result<()> {
+        while let Some(entry) = dir.read_entry_boxed()? {
+            let name = cstr16_to_string(entry.file_name());
+
+            if name.is_empty() || name == "." || name == ".." {
+                continue;
+            }
+
+            let full_path = join_display_path(display_path, &name);
+
+            if entry.is_directory() {
+                if depth >= MAX_SCAN_DEPTH || is_hidden_tree(&name) {
+                    continue;
+                }
+
+                if let Ok(mut child) = open_directory(dir, &name) {
+                    let _ = self.scan_directory_entries(
+                        &mut child,
+                        &full_path,
+                        extensions,
+                        depth + 1,
+                        files,
+                    );
+                }
+                continue;
+            }
+
+            if has_supported_extension(&name, extensions) {
+                files.push(IsoFile {
+                    path: full_path.clone(),
+                    size: entry.file_size(),
+                    // UEFI SimpleFileSystem exposes file paths but not physical extents.
+                    // The raw Block IO mapper will fill this when Ventoy-style virtual media is wired in.
+                    start_lba: 0,
+                    os_type: self.detect_iso_type(&full_path),
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn open_directory(parent: &mut Directory, path: &str) -> uefi::Result<Directory> {
+    let uefi_path = to_uefi_relative_path(path);
+    let c_path = CString16::try_from(uefi_path.as_str())
+        .map_err(|_| uefi::Status::INVALID_PARAMETER)?;
+    let handle = parent.open(c_path.as_ref(), FileMode::Read, FileAttribute::empty())?;
+    handle
+        .into_directory()
+        .ok_or_else(|| uefi::Error::new(uefi::Status::NOT_FOUND, ()))
+}
+
+fn normalize_scan_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == "/" {
+        return String::from("/");
+    }
+
+    let mut normalized = String::from("/");
+    normalized.push_str(trimmed.trim_matches('/'));
+    normalized
+}
+
+fn to_uefi_relative_path(path: &str) -> String {
+    let mut out = String::new();
+    for (index, part) in path.trim_matches('/').split('/').filter(|s| !s.is_empty()).enumerate() {
+        if index > 0 {
+            out.push('\\');
+        }
+        out.push_str(part);
+    }
+    out
+}
+
+fn join_display_path(parent: &str, name: &str) -> String {
+    if parent == "/" || parent.is_empty() {
+        format!("/{}", name)
+    } else {
+        format!("{}/{}", parent.trim_end_matches('/'), name)
+    }
+}
+
+fn cstr16_to_string(name: &uefi::CStr16) -> String {
+    let mut out = String::new();
+    for ch in name.as_slice() {
+        let c = char::from(*ch);
+        if c == '\0' {
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn has_supported_extension(name: &str, extensions: &[&str]) -> bool {
+    let lower = name.to_lowercase();
+    extensions.iter().any(|ext| lower.ends_with(ext))
+}
+
+fn is_hidden_tree(name: &str) -> bool {
+    matches!(
+        name,
+        "$RECYCLE.BIN" | "System Volume Information" | ".Trash" | ".Spotlight-V100" | ".fseventsd"
+    )
 }
 
 /// 缓存的 ISO 列表
