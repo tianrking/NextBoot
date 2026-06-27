@@ -1,7 +1,5 @@
 use super::model::{MbrPartitionEntry, PartitionCandidate, PartitionRange};
-use super::{
-    alloc_buffer_for_block, has_mbr_signature, read_block_range, read_le_u32, read_le_u64,
-};
+use super::{alloc_buffer_for_block, helpers};
 use crate::source_disk::PartitionFormat;
 use alloc::vec::Vec;
 use nextboot_fs::BlockIoOps;
@@ -36,7 +34,7 @@ fn discover_gpt_partitions(
     shared: nextboot_fs::SharedBlockIo,
     first_block: &[u8],
 ) -> Option<Vec<PartitionCandidate>> {
-    if !has_mbr_signature(first_block) {
+    if !helpers::has_mbr_signature(first_block) {
         return None;
     }
     let has_protective = (0..4).any(|index| {
@@ -56,7 +54,7 @@ fn discover_gpt_partitions(
         return None;
     }
 
-    let header_size = read_le_u32(header, 12)?;
+    let header_size = helpers::read_le_u32(header, 12)?;
     if header_size < GPT_HEADER_MIN_SIZE
         || usize::try_from(header_size)
             .ok()
@@ -64,9 +62,9 @@ fn discover_gpt_partitions(
     {
         return None;
     }
-    let entry_lba = read_le_u64(header, GPT_PARTITION_ENTRY_LBA_OFFSET)?;
-    let num_entries = read_le_u32(header, GPT_NUM_PARTITION_ENTRIES_OFFSET)?;
-    let entry_size = read_le_u32(header, GPT_PARTITION_ENTRY_SIZE_OFFSET)?;
+    let entry_lba = helpers::read_le_u64(header, GPT_PARTITION_ENTRY_LBA_OFFSET)?;
+    let num_entries = helpers::read_le_u32(header, GPT_NUM_PARTITION_ENTRIES_OFFSET)?;
+    let entry_size = helpers::read_le_u32(header, GPT_PARTITION_ENTRY_SIZE_OFFSET)?;
     let entry_size = usize::try_from(entry_size).ok()?;
     if !(GPT_MIN_PARTITION_ENTRY_SIZE..=GPT_MAX_PARTITION_ENTRY_SIZE).contains(&entry_size) {
         return None;
@@ -79,7 +77,7 @@ fn discover_gpt_partitions(
     if entry_bytes_len == 0 || entry_bytes_len > GPT_MAX_PARTITION_ENTRY_ARRAY_BYTES {
         return None;
     }
-    let entry_bytes = read_block_range(&shared, entry_lba, entry_bytes_len)?;
+    let entry_bytes = helpers::read_block_range(&shared, entry_lba, entry_bytes_len)?;
 
     let mut out = Vec::new();
     for index in 0..num_entries {
@@ -91,8 +89,8 @@ fn discover_gpt_partitions(
         if entry.get(0..16)?.iter().all(|byte| *byte == 0) {
             continue;
         }
-        let start_lba = read_le_u64(entry, 32)?;
-        let end_lba = read_le_u64(entry, 40)?;
+        let start_lba = helpers::read_le_u64(entry, 32)?;
+        let end_lba = helpers::read_le_u64(entry, 40)?;
         if start_lba == 0 || end_lba < start_lba {
             continue;
         }
@@ -115,7 +113,7 @@ fn discover_mbr_partitions(
     first_block: &[u8],
 ) -> Vec<PartitionCandidate> {
     let mut out = Vec::new();
-    if !has_mbr_signature(first_block) {
+    if !helpers::has_mbr_signature(first_block) {
         return out;
     }
 
@@ -188,7 +186,7 @@ fn discover_mbr_logical_partitions(
         let Some(ebr) = read_one_block(shared, current_ebr_lba) else {
             break;
         };
-        if !has_mbr_signature(&ebr) {
+        if !helpers::has_mbr_signature(&ebr) {
             break;
         }
 
@@ -263,7 +261,7 @@ fn find_next_ebr_lba(
 }
 
 fn parse_mbr_partition(block: &[u8], index: usize) -> Option<MbrPartitionEntry> {
-    if index >= MBR_PRIMARY_PARTITION_COUNT || !has_mbr_signature(block) {
+    if index >= MBR_PRIMARY_PARTITION_COUNT || !helpers::has_mbr_signature(block) {
         return None;
     }
     let offset =
@@ -274,8 +272,8 @@ fn parse_mbr_partition(block: &[u8], index: usize) -> Option<MbrPartitionEntry> 
     }
     Some(MbrPartitionEntry {
         partition_type,
-        start_lba: read_le_u32(block, offset + 8)?,
-        total_sectors: read_le_u32(block, offset + 12)?,
+        start_lba: helpers::read_le_u32(block, offset + 8)?,
+        total_sectors: helpers::read_le_u32(block, offset + 12)?,
     })
 }
 
