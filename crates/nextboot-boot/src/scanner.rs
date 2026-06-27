@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 use core::ptr::{self, NonNull};
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::fat32::Fat32;
-use nextboot_fs::iso9660::{read_efi_eltorito_boot_info, ElToritoBootInfo};
+use nextboot_fs::iso9660::{detect_udf_volume, read_efi_eltorito_boot_info, ElToritoBootInfo};
 use nextboot_fs::{detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError};
 use nextboot_virtio::{
     PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
@@ -59,6 +59,8 @@ pub struct IsoFile {
     pub image_format: ImageFormat,
     /// ISO 内的 EFI El Torito 启动镜像信息
     pub boot_info: Option<IsoBootInfo>,
+    /// ISO 是否包含 Ventoy 兼容的 UDF volume recognition sequence。
+    pub is_udf: bool,
     /// WIM/ESD 启动元数据。
     pub wim_info: Option<WimBootInfo>,
     /// 文件所在源盘/分区身份，用于 Ventoy 兼容 OS 参数。
@@ -172,6 +174,7 @@ struct ResolvedImageMetadata {
     block_size: u32,
     extents: Vec<IsoExtent>,
     boot_info: Option<IsoBootInfo>,
+    is_udf: bool,
     wim_info: Option<WimBootInfo>,
     image_format: ImageFormat,
     virtual_size: u64,
@@ -512,6 +515,7 @@ impl<'a> IsoScanner<'a> {
                     block_size,
                     extents,
                     boot_info,
+                    is_udf,
                     wim_info,
                     image_format,
                     virtual_size,
@@ -527,6 +531,7 @@ impl<'a> IsoScanner<'a> {
                         block_size: self.device.block_size,
                         extents: Vec::new(),
                         boot_info: None,
+                        is_udf: false,
                         wim_info: None,
                         image_format,
                         virtual_size: entry.file_size(),
@@ -548,6 +553,7 @@ impl<'a> IsoScanner<'a> {
                     os_type,
                     image_format,
                     boot_info,
+                    is_udf,
                     wim_info,
                     source_disk,
                 });
@@ -592,10 +598,10 @@ impl<'a> IsoScanner<'a> {
         let extents: Vec<IsoExtent> = extents.into_iter().map(IsoExtent::from).collect();
         let (image_format, virtual_size, virtual_block_size) =
             self.detect_image_virtual_metadata(&block_io, block_size, size, &extents, image_format);
-        let boot_info = if image_format.is_iso() {
-            self.resolve_iso_boot_info(&block_io, block_size, size, &extents)
+        let (boot_info, is_udf) = if image_format.is_iso() {
+            self.resolve_iso_metadata(&block_io, block_size, size, &extents)
         } else {
-            None
+            (None, false)
         };
         let wim_info = if image_format.is_wim_container() {
             self.read_wim_boot_info(&block_io, block_size, size, &extents)
@@ -607,6 +613,7 @@ impl<'a> IsoScanner<'a> {
             block_size,
             extents,
             boot_info,
+            is_udf,
             wim_info,
             image_format,
             virtual_size,
@@ -877,15 +884,15 @@ impl<'a> IsoScanner<'a> {
         Some(data)
     }
 
-    fn resolve_iso_boot_info(
+    fn resolve_iso_metadata(
         &self,
         block_io: &BlockIO,
         source_block_size: u32,
         size: u64,
         extents: &[IsoExtent],
-    ) -> Option<IsoBootInfo> {
+    ) -> (Option<IsoBootInfo>, bool) {
         if extents.is_empty() || size == 0 {
-            return None;
+            return (None, false);
         }
 
         let config = VirtualDeviceConfig::new(VirtualDeviceType::DvdRom, 0, size, 2048)
@@ -902,13 +909,19 @@ impl<'a> IsoScanner<'a> {
             .collect();
 
         let mut vbio = VirtualBlockIo::from_file_extents(config, &extent_map);
-        vbio.set_physical_reader(UefiBlockIo::new(block_io)?);
+        let Some(reader) = UefiBlockIo::new(block_io) else {
+            return (None, false);
+        };
+        vbio.set_physical_reader(reader);
         let iso_io = VirtualIsoBlockIo::new(vbio);
 
-        read_efi_eltorito_boot_info(&iso_io)
+        let boot_info = read_efi_eltorito_boot_info(&iso_io)
             .ok()
             .flatten()
-            .map(IsoBootInfo::from)
+            .map(IsoBootInfo::from);
+        let is_udf = detect_udf_volume(&iso_io).unwrap_or(false);
+
+        (boot_info, is_udf)
     }
 }
 

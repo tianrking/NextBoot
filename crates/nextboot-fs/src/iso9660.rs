@@ -15,6 +15,8 @@ const EL_TORITO_PLATFORM_EFI: u8 = 0xEF;
 const EL_TORITO_BOOTABLE: u8 = 0x88;
 const EL_TORITO_SECTION_HEADER: u8 = 0x90;
 const EL_TORITO_FINAL_SECTION_HEADER: u8 = 0x91;
+const UDF_PROBE_START_LBA: u64 = 16;
+const UDF_PROBE_END_LBA: u64 = 32;
 
 /// Parsed El Torito boot catalog entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -452,6 +454,60 @@ pub fn read_efi_eltorito_boot_info(
 ) -> Result<Option<ElToritoBootInfo>, FsError> {
     Ok(read_eltorito_boot_info(block_io)?
         .filter(|entry| entry.platform_id == EL_TORITO_PLATFORM_EFI))
+}
+
+/// Detect whether an ISO image also contains a UDF volume recognition sequence.
+///
+/// Ventoy uses this same descriptor order to decide whether `ventoy_fs_probe`
+/// should be `udf`: scan ISO descriptors from sector 16, stop at the volume
+/// descriptor terminator, then expect `BEA01` followed by `NSR02` or `NSR03`.
+pub fn detect_udf_volume(block_io: &dyn crate::BlockIoOps) -> Result<bool, FsError> {
+    if block_io.block_size() != ISO_SECTOR_SIZE as u32 {
+        return Err(FsError::BlockSizeMismatch);
+    }
+
+    let mut sector = alloc_buffer(ISO_SECTOR_SIZE)?;
+    let mut terminator_lba = None;
+
+    for lba in UDF_PROBE_START_LBA..UDF_PROBE_END_LBA {
+        if !read_iso_sector(block_io, lba, &mut sector)? {
+            return Ok(false);
+        }
+
+        if sector[0] == 255 {
+            terminator_lba = Some(lba);
+            break;
+        }
+    }
+
+    let Some(bea_lba) = terminator_lba.and_then(|lba| lba.checked_add(1)) else {
+        return Ok(false);
+    };
+    if !read_iso_sector(block_io, bea_lba, &mut sector)? || &sector[1..6] != b"BEA01" {
+        return Ok(false);
+    }
+
+    let Some(nsr_lba) = bea_lba.checked_add(1) else {
+        return Ok(false);
+    };
+    if !read_iso_sector(block_io, nsr_lba, &mut sector)? {
+        return Ok(false);
+    }
+
+    Ok(&sector[1..6] == b"NSR02" || &sector[1..6] == b"NSR03")
+}
+
+fn read_iso_sector(
+    block_io: &dyn crate::BlockIoOps,
+    lba: u64,
+    sector: &mut [u8],
+) -> Result<bool, FsError> {
+    if lba >= block_io.total_blocks() {
+        return Ok(false);
+    }
+
+    read_full_blocks(block_io, lba, sector)?;
+    Ok(true)
 }
 
 /// Read the El Torito boot catalog and return the best available entry.

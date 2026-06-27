@@ -451,7 +451,9 @@ mod tests {
     use super::*;
     use crate::exfat::ExFat;
     use crate::fat32::Fat32;
-    use crate::iso9660::{get_eltorito_boot_info, read_efi_eltorito_boot_info, Iso9660};
+    use crate::iso9660::{
+        detect_udf_volume, get_eltorito_boot_info, read_efi_eltorito_boot_info, Iso9660,
+    };
     use alloc::rc::Rc;
     use alloc::vec;
 
@@ -649,6 +651,35 @@ mod tests {
         assert_eq!(info.image_lba, 42);
         assert_eq!(info.sector_count, 8);
         assert_eq!(info.image_block_count_2048(), 2);
+    }
+
+    #[test]
+    fn detects_udf_volume_after_iso_terminator() {
+        let mut io = MemoryBlockIo::new(2048, 40);
+
+        {
+            let terminator = io.block_mut(18);
+            terminator[0] = 255;
+            terminator[1..6].copy_from_slice(b"CD001");
+        }
+        io.block_mut(19)[1..6].copy_from_slice(b"BEA01");
+        io.block_mut(20)[1..6].copy_from_slice(b"NSR03");
+
+        assert_eq!(detect_udf_volume(&io).expect("udf probe"), true);
+    }
+
+    #[test]
+    fn rejects_udf_probe_without_nsr_descriptor() {
+        let mut io = MemoryBlockIo::new(2048, 40);
+
+        {
+            let terminator = io.block_mut(18);
+            terminator[0] = 255;
+            terminator[1..6].copy_from_slice(b"CD001");
+        }
+        io.block_mut(19)[1..6].copy_from_slice(b"BEA01");
+
+        assert_eq!(detect_udf_volume(&io).expect("udf probe"), false);
     }
 
     #[test]

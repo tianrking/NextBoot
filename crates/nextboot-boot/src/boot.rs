@@ -1146,7 +1146,7 @@ impl<'a> BootManager<'a> {
     fn ventoy_reserved_flags(&self, disk_signature: [u8; 4]) -> crate::ventoy::VentoyReserved {
         crate::ventoy::VentoyReserved::new()
             .with_chain_type(ventoy_chain_type(self.iso))
-            .with_iso_udf(false)
+            .with_iso_udf(self.iso.is_udf)
             .with_windows_cd_prompt(false)
             .with_linux_remount(false)
             .with_vlnk(false)
