@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::{ptr, slice};
@@ -148,10 +148,109 @@ impl VirtualIsoFilesystem {
     }
 }
 
+pub struct VirtualFileReplacement {
+    path: String,
+    data: Vec<u8>,
+}
+
+impl VirtualFileReplacement {
+    pub fn new(path: &str, data: Vec<u8>) -> Self {
+        Self {
+            path: normalize_path_segments(path),
+            data,
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+}
+
+struct FileReplacementSet {
+    entries: Vec<FileReplacementEntry>,
+}
+
+impl FileReplacementSet {
+    fn new(replacements: Vec<VirtualFileReplacement>) -> Self {
+        let entries = replacements
+            .into_iter()
+            .map(FileReplacementEntry::new)
+            .collect();
+        Self { entries }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn find_index(&self, path: &str) -> Option<usize> {
+        let key = path_key(path);
+        self.entries.iter().position(|entry| entry.key == key)
+    }
+
+    fn data(&self, index: usize) -> Option<&[u8]> {
+        self.entries
+            .get(index)
+            .map(|entry| entry.replacement.data.as_slice())
+    }
+
+    fn apply_to_file_info(&self, index: usize, info: &mut FsFileInfo) {
+        let Some(data) = self.data(index) else {
+            return;
+        };
+        info.size = data.len() as u64;
+        info.is_dir = false;
+        info.start_cluster = 0;
+        info.contiguous = false;
+        info.attributes.remove(FsFileAttributes::DIRECTORY);
+    }
+
+    fn apply_to_directory(&self, dir: &str, entries: &mut [FsFileInfo]) {
+        let dir_key = path_key(dir);
+        for replacement in &self.entries {
+            if replacement.parent_key != dir_key {
+                continue;
+            }
+            for entry in entries.iter_mut() {
+                if !entry.is_dir && entry.name.eq_ignore_ascii_case(&replacement.file_name) {
+                    entry.size = replacement.replacement.data.len() as u64;
+                    entry.start_cluster = 0;
+                    entry.contiguous = false;
+                }
+            }
+        }
+    }
+}
+
+struct FileReplacementEntry {
+    replacement: VirtualFileReplacement,
+    key: String,
+    parent_key: String,
+    file_name: String,
+}
+
+impl FileReplacementEntry {
+    fn new(replacement: VirtualFileReplacement) -> Self {
+        let key = path_key(&replacement.path);
+        let (parent, file_name) = split_normalized_path(&replacement.path);
+        Self {
+            replacement,
+            key,
+            parent_key: path_key(&parent),
+            file_name,
+        }
+    }
+}
+
 #[repr(C)]
 pub struct IsoSimpleFileSystemProtocol {
     protocol: SimpleFileSystemProtocol,
     fs: Rc<VirtualIsoFilesystem>,
+    replacements: Rc<FileReplacementSet>,
     volume_size: u64,
     block_size: u32,
 }
@@ -163,13 +262,16 @@ impl IsoSimpleFileSystemProtocol {
         fs: Rc<VirtualIsoFilesystem>,
         volume_size: u64,
         block_size: u32,
+        replacements: Vec<VirtualFileReplacement>,
     ) -> uefi::Result<RegisteredIsoSimpleFileSystem> {
+        let replacement_count = replacements.len();
         let mut protocol = Box::new(Self {
             protocol: SimpleFileSystemProtocol {
                 revision: SIMPLE_FILE_SYSTEM_REVISION,
                 open_volume: Self::open_volume_handler,
             },
             fs,
+            replacements: Rc::new(FileReplacementSet::new(replacements)),
             volume_size,
             block_size,
         });
@@ -179,7 +281,10 @@ impl IsoSimpleFileSystemProtocol {
             bt.install_protocol_interface(Some(handle), &IsoSimpleFileSystem::GUID, interface)
         }?;
 
-        info!("Installed read-only SimpleFileSystem on virtual ISO handle");
+        info!(
+            "Installed read-only SimpleFileSystem on virtual ISO handle with {} replacement(s)",
+            replacement_count
+        );
         Ok(RegisteredIsoSimpleFileSystem { protocol })
     }
 
@@ -201,6 +306,7 @@ impl IsoSimpleFileSystemProtocol {
 
         let mut root_file = IsoFileProtocol::root(
             protocol.fs.clone(),
+            protocol.replacements.clone(),
             protocol.volume_size,
             protocol.block_size,
         );
@@ -234,8 +340,10 @@ impl RegisteredIsoSimpleFileSystem {
 struct IsoFileProtocol {
     protocol: FileProtocol,
     fs: Rc<VirtualIsoFilesystem>,
+    replacements: Rc<FileReplacementSet>,
     path: String,
     info: FsFileInfo,
+    replacement_index: Option<usize>,
     position: u64,
     dir_entries: Option<Vec<FsFileInfo>>,
     dir_index: usize,
@@ -244,16 +352,31 @@ struct IsoFileProtocol {
 }
 
 impl IsoFileProtocol {
-    fn root(fs: Rc<VirtualIsoFilesystem>, volume_size: u64, block_size: u32) -> Box<Self> {
+    fn root(
+        fs: Rc<VirtualIsoFilesystem>,
+        replacements: Rc<FileReplacementSet>,
+        volume_size: u64,
+        block_size: u32,
+    ) -> Box<Self> {
         let mut info = FsFileInfo::new(String::new(), 0, true, 0);
         info.attributes = FsFileAttributes::DIRECTORY;
-        Self::new(fs, String::from("/"), info, volume_size, block_size)
+        Self::new(
+            fs,
+            replacements,
+            String::from("/"),
+            info,
+            None,
+            volume_size,
+            block_size,
+        )
     }
 
     fn new(
         fs: Rc<VirtualIsoFilesystem>,
+        replacements: Rc<FileReplacementSet>,
         path: String,
         info: FsFileInfo,
+        replacement_index: Option<usize>,
         volume_size: u64,
         block_size: u32,
     ) -> Box<Self> {
@@ -276,8 +399,10 @@ impl IsoFileProtocol {
                 flush_ex: Self::flush_ex_handler,
             },
             fs,
+            replacements,
             path,
             info,
+            replacement_index,
             position: 0,
             dir_entries: None,
             dir_index: 0,
@@ -318,15 +443,29 @@ impl IsoFileProtocol {
             return Status::INVALID_PARAMETER;
         };
         let path = resolve_child_path(&file.path, &requested);
-        let info = match file.fs.stat(&path) {
+        let mut info = match file.fs.stat(&path) {
             Ok(info) => info,
             Err(err) => return fs_error_to_status(err),
         };
+        let replacement_index = if info.is_dir {
+            None
+        } else {
+            file.replacements.find_index(&path)
+        };
+        if let Some(index) = replacement_index {
+            file.replacements.apply_to_file_info(index, &mut info);
+            info!(
+                "Serving EFI file replacement for {} ({} bytes)",
+                path, info.size
+            );
+        }
 
         let mut child = Self::new(
             file.fs.clone(),
+            file.replacements.clone(),
             path,
             info,
+            replacement_index,
             file.volume_size,
             file.block_size,
         );
@@ -574,7 +713,13 @@ impl IsoFileProtocol {
         }
 
         let dst = unsafe { slice::from_raw_parts_mut(buffer.cast::<u8>(), requested) };
-        match self.fs.read_file(&self.path, self.position, dst) {
+        let read_result = if let Some(index) = self.replacement_index {
+            self.read_replacement_file(index, dst)
+        } else {
+            self.fs.read_file(&self.path, self.position, dst)
+        };
+
+        match read_result {
             Ok(read) => {
                 self.position = self.position.saturating_add(read as u64);
                 unsafe {
@@ -589,7 +734,13 @@ impl IsoFileProtocol {
     fn read_directory_entry(&mut self, buffer_size: *mut usize, buffer: *mut c_void) -> Status {
         if self.dir_entries.is_none() {
             match self.fs.read_dir(&self.path) {
-                Ok(entries) => self.dir_entries = Some(entries),
+                Ok(mut entries) => {
+                    if !self.replacements.is_empty() {
+                        self.replacements
+                            .apply_to_directory(&self.path, &mut entries);
+                    }
+                    self.dir_entries = Some(entries);
+                }
                 Err(err) => return fs_error_to_status(err),
             }
         }
@@ -616,6 +767,21 @@ impl IsoFileProtocol {
         }
 
         status
+    }
+
+    fn read_replacement_file(&self, index: usize, dst: &mut [u8]) -> Result<usize, FsError> {
+        let Some(data) = self.replacements.data(index) else {
+            return Err(FsError::FileNotFound);
+        };
+        if self.position >= data.len() as u64 {
+            return Ok(0);
+        }
+
+        let start = usize::try_from(self.position).map_err(|_| FsError::FileTooLarge)?;
+        let available = data.len().saturating_sub(start);
+        let to_copy = available.min(dst.len());
+        dst[..to_copy].copy_from_slice(&data[start..start + to_copy]);
+        Ok(to_copy)
     }
 }
 
@@ -812,6 +978,24 @@ fn normalize_path_segments(path: &str) -> String {
         normalized.push_str(part);
     }
     normalized
+}
+
+fn path_key(path: &str) -> String {
+    let mut key = normalize_path_segments(path);
+    key.make_ascii_lowercase();
+    key
+}
+
+fn split_normalized_path(path: &str) -> (String, String) {
+    let normalized = normalize_path_segments(path);
+    match normalized.rfind('/') {
+        Some(0) => (String::from("/"), normalized[1..].to_string()),
+        Some(index) => (
+            normalized[..index].to_string(),
+            normalized[index + 1..].to_string(),
+        ),
+        None => (String::from("/"), normalized),
+    }
 }
 
 fn fs_error_to_status(err: FsError) -> Status {

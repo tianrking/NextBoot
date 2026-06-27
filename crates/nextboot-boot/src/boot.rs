@@ -8,7 +8,8 @@ use crate::vdi;
 use crate::ventoy_linux::{VentoyDudFile, VentoyLinuxInitrdInput};
 use crate::vhdx;
 use crate::virtual_fs::{
-    IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem, VirtualIsoFilesystem,
+    IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem, VirtualFileReplacement,
+    VirtualIsoFilesystem,
 };
 use crate::wimboot::{self, WimbootCallbacks, WimbootVirtualFile};
 use crate::xz::{self, XzDecodeError};
@@ -1654,6 +1655,7 @@ impl<'a> BootManager<'a> {
             .bt
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
         let memory_overlays = self.build_conf_replace_overlays(&source_block_io, &mut config)?;
+        let efi_file_replacements = self.build_efi_file_replacements(&source_block_io)?;
         let mut vbio = self.build_virtual_block_io(config, &source_block_io)?;
         for overlay in memory_overlays {
             vbio.add_memory_overlay(overlay)
@@ -1665,7 +1667,11 @@ impl<'a> BootManager<'a> {
         let device_path = registered.device_path().to_vec();
 
         let simple_file_system = if self.iso.image_format.is_iso() {
-            match self.install_iso_simple_file_system(&source_block_io, virtual_handle) {
+            match self.install_iso_simple_file_system(
+                &source_block_io,
+                virtual_handle,
+                efi_file_replacements,
+            ) {
                 Ok(protocol) => Some(protocol),
                 Err(err) => {
                     warn!(
@@ -1906,6 +1912,72 @@ impl<'a> BootManager<'a> {
         }
 
         Ok(overlays)
+    }
+
+    fn build_efi_file_replacements(
+        &self,
+        source_block_io: &BlockIO,
+    ) -> uefi::Result<Vec<VirtualFileReplacement>> {
+        let Some(plugin) = self.iso.ventoy_plugin.as_ref() else {
+            return Ok(Vec::new());
+        };
+        if plugin.conf_replace.is_empty() || !self.iso.image_format.is_iso() {
+            return Ok(Vec::new());
+        }
+
+        let img_replace_count = plugin
+            .conf_replace
+            .iter()
+            .filter(|rule| rule.img.unwrap_or(0) > 0)
+            .count();
+        if img_replace_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let source_fs = SourceVolumeFileSystem::open(source_block_io)?;
+        let mut replacements = Vec::new();
+        replacements
+            .try_reserve_exact(img_replace_count)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+
+        for rule in plugin
+            .conf_replace
+            .iter()
+            .filter(|rule| rule.img.unwrap_or(0) > 0)
+        {
+            let replacement = match source_fs.load_file(&rule.new_path) {
+                Ok(file) => file,
+                Err(err) => {
+                    warn!(
+                        "Ventoy EFI img_replace new path {} for {} was not loaded: {:?}",
+                        rule.new_path,
+                        self.iso.path,
+                        err.status()
+                    );
+                    continue;
+                }
+            };
+            if replacement.data.len() > VENTOY_CONF_REPLACE_MAX_SIZE {
+                warn!(
+                    "Ventoy EFI img_replace new path {} for {} is too large: {} bytes",
+                    replacement.path,
+                    self.iso.path,
+                    replacement.data.len()
+                );
+                continue;
+            }
+
+            info!(
+                "Prepared Ventoy EFI img_replace for {}: {} -> {} ({} bytes)",
+                self.iso.path,
+                rule.org,
+                replacement.path,
+                replacement.data.len()
+            );
+            replacements.push(VirtualFileReplacement::new(&rule.org, replacement.data));
+        }
+
+        Ok(replacements)
     }
 
     fn open_iso9660_filesystem(&self, source_block_io: &BlockIO) -> uefi::Result<Iso9660> {
@@ -2843,6 +2915,7 @@ impl<'a> BootManager<'a> {
         &self,
         source_block_io: &BlockIO,
         virtual_handle: Handle,
+        replacements: Vec<VirtualFileReplacement>,
     ) -> uefi::Result<RegisteredIsoSimpleFileSystem> {
         let fs = self.open_virtual_iso_filesystem(source_block_io)?;
         let block_size = fs.block_size();
@@ -2852,6 +2925,7 @@ impl<'a> BootManager<'a> {
             Rc::new(fs),
             self.iso.size,
             block_size,
+            replacements,
         )
     }
 
