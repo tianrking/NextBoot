@@ -24,6 +24,7 @@ Options:
   --smoke-efi-iso    Generate a minimal UEFI ISO and verify its loader starts
   --smoke-vlnk-iso   Generate a minimal UEFI ISO behind a Ventoy .vlnk pointer
   --smoke-raw-img    Generate a bootable raw GPT/FAT32 .img and verify it starts
+  --smoke-vhd        Generate a bootable fixed VHD and verify it starts
   --smoke-auto-memdisk
                      Generate a minimal UEFI ISO and force Ventoy auto_memdisk
   --smoke-menu-memdisk
@@ -47,6 +48,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vlnk-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-raw-img
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vhd
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
   $0 --bus nvme --layout split --data-fs ext3 --sector-size 4096 --smoke-efi-iso

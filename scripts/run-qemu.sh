@@ -45,6 +45,7 @@ SMOKE_BOOT=0
 SMOKE_EFI_ISO=0
 SMOKE_VLNK_ISO=0
 SMOKE_RAW_IMG=0
+SMOKE_FIXED_VHD=0
 SMOKE_AUTO_MEMDISK=0
 SMOKE_MENU_MEMDISK=0
 SMOKE_WINDOWS_ISO=0
@@ -75,6 +76,7 @@ require_command() {
 
 source "${SCRIPT_DIR}/qemu/usage.sh"
 source "${SCRIPT_DIR}/qemu/device.sh"
+source "${SCRIPT_DIR}/qemu/smoke-images.sh"
 source "${SCRIPT_DIR}/qemu/run-smoke.sh"
 
 while [ $# -gt 0 ]; do
@@ -159,6 +161,12 @@ while [ $# -gt 0 ]; do
             SMOKE=1
             SMOKE_BOOT=1
             SMOKE_RAW_IMG=1
+            shift
+            ;;
+        --smoke-vhd)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_FIXED_VHD=1
             shift
             ;;
         --smoke-auto-memdisk)
@@ -263,7 +271,7 @@ if [ "$LAYOUT" = "single" ] && [ "$DATA_FS" != "exfat" ]; then
     warn "--data-fs is ignored for single layout"
 fi
 
-if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "$SMOKE_RAW_IMG" -eq 0 ]; then
+if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "$SMOKE_RAW_IMG" -eq 0 ] && [ "$SMOKE_FIXED_VHD" -eq 0 ]; then
     die "--smoke without a generated smoke image cannot be combined with --no-run"
 fi
 
@@ -271,11 +279,15 @@ if [ "$SMOKE_WINDOWS_ISO" -eq 1 ] && [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
     die "--smoke-windows-iso and --smoke-linux-iso cannot be combined"
 fi
 
-if [ "$SMOKE_RAW_IMG" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 1 ]; then
-    die "--smoke-raw-img cannot be combined with ISO smoke generators"
+if { [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ]; } && [ "$SMOKE_EFI_ISO" -eq 1 ]; then
+    die "--smoke-raw-img/--smoke-vhd cannot be combined with ISO smoke generators"
 fi
 
-if [ "$SMOKE_BOOT" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "$SMOKE_RAW_IMG" -eq 0 ] && [ "${#IMAGES[@]}" -eq 0 ]; then
+if [ "$SMOKE_RAW_IMG" -eq 1 ] && [ "$SMOKE_FIXED_VHD" -eq 1 ]; then
+    die "--smoke-raw-img and --smoke-vhd cannot be combined"
+fi
+
+if [ "$SMOKE_BOOT" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "$SMOKE_RAW_IMG" -eq 0 ] && [ "$SMOKE_FIXED_VHD" -eq 0 ] && [ "${#IMAGES[@]}" -eq 0 ]; then
     die "--smoke-boot requires at least one --image"
 fi
 
@@ -308,47 +320,7 @@ if [ ! -f "$EFI_FILE" ]; then
     die "EFI file not found: ${EFI_FILE}. Run ./scripts/build.sh ${BUILD_MODE} first."
 fi
 
-if [ "$SMOKE_EFI_ISO" -eq 1 ] || [ "$SMOKE_RAW_IMG" -eq 1 ]; then
-    SMOKE_EFI_FILE="${PROJECT_DIR}/target/${TARGET}/${BUILD_MODE}/nextboot-smoke-efi.efi"
-    SMOKE_HELPER_FILE="$SMOKE_EFI_FILE"
-    if [ ! -f "$SMOKE_EFI_FILE" ]; then
-        die "Smoke EFI file not found: ${SMOKE_EFI_FILE}. Run ./scripts/build.sh ${BUILD_MODE} first."
-    fi
-fi
-
-if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
-    SMOKE_ISO_PROFILE="generic"
-    SMOKE_ISO_BASENAME="nextboot-smoke-efi.iso"
-    if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
-        SMOKE_ISO_PROFILE="windows"
-        SMOKE_ISO_BASENAME="nextboot-smoke-windows.iso"
-    fi
-    if [ "$SMOKE_WINDOWS_WIMBOOT" -eq 1 ]; then
-        SMOKE_ISO_PROFILE="windows-wimboot"
-        SMOKE_ISO_BASENAME="nextboot-smoke-windows-wimboot.iso"
-    fi
-    if [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
-        SMOKE_ISO_PROFILE="linux"
-        SMOKE_ISO_BASENAME="nextboot-smoke-linux.iso"
-    fi
-    SMOKE_ISO_FILE="${PROJECT_DIR}/target/${SMOKE_ISO_BASENAME}"
-    require_command python3 "python3 is required to create the smoke ISO"
-    warn "Creating ${SMOKE_ISO_PROFILE} UEFI smoke ISO..."
-    python3 "${SCRIPT_DIR}/create-smoke-iso.py" \
-        --profile "$SMOKE_ISO_PROFILE" \
-        --efi "$SMOKE_EFI_FILE" \
-        "$SMOKE_ISO_FILE"
-    IMAGES=("$SMOKE_ISO_FILE" "${IMAGES[@]}")
-fi
-if [ "$SMOKE_RAW_IMG" -eq 1 ]; then
-    SMOKE_RAW_IMG_FILE="${PROJECT_DIR}/target/nextboot-smoke-raw.img"
-    require_command python3 "python3 is required to create the smoke raw disk image"
-    warn "Creating raw GPT/FAT32 smoke disk image..."
-    python3 "${SCRIPT_DIR}/qemu/create-disk-image.py" \
-        "$SMOKE_RAW_IMG_FILE" 64 512 single exfat "$SMOKE_EFI_FILE" \
-        0 0 0 "" "" 0
-    IMAGES=("$SMOKE_RAW_IMG_FILE" "${IMAGES[@]}")
-fi
+create_generated_smoke_images
 SMOKE_VLNK_FILE=""
 if [ "$SMOKE_VLNK_ISO" -eq 1 ]; then
     SMOKE_VLNK_FILE="${PROJECT_DIR}/target/nextboot-smoke-vlnk.vlnk.iso"
