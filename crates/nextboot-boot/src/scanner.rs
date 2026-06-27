@@ -8,7 +8,9 @@ use crate::source_disk::{
     SourceDiskIdentity,
 };
 use crate::vdi;
-use crate::ventoy_config::{VentoyConfig, VentoyConfigError, VentoyImagePlugin, VentoyPassword};
+use crate::ventoy_config::{
+    VentoyConfig, VentoyConfigError, VentoyImagePlugin, VentoyMenuTip, VentoyPassword,
+};
 use crate::vhdx;
 use crate::wim;
 use alloc::format;
@@ -43,6 +45,10 @@ pub struct IsoFile {
     pub path: String,
     /// Ventoy menu_alias 插件提供的显示名。
     pub menu_alias: Option<String>,
+    /// Ventoy menu_class 插件为该镜像匹配出的菜单 class。
+    pub ventoy_menu_class: Option<String>,
+    /// Ventoy menu_tip 插件为该镜像匹配出的提示。
+    pub ventoy_menu_tip: Option<VentoyMenuTip>,
     /// Ventoy control.VTOY_DEFAULT_IMAGE 是否指向该镜像。
     pub ventoy_default_image: bool,
     /// Ventoy control.VTOY_MENU_TIMEOUT 为该卷菜单设置的自动启动超时。
@@ -639,6 +645,10 @@ impl<'a> IsoScanner<'a> {
                 continue;
             }
 
+            if config.filter_dot_underscore && is_dot_underscore_file(&entry.name) {
+                continue;
+            }
+
             if has_supported_extension(&entry.name, extensions)
                 && config.supports_image_name(&entry.name)
                 && config.allows_image_path(&full_path)
@@ -666,6 +676,10 @@ impl<'a> IsoScanner<'a> {
                 files.push(IsoFile {
                     path: full_path.clone(),
                     menu_alias: config.menu_alias_for(&full_path).map(ToString::to_string),
+                    ventoy_menu_class: config
+                        .menu_class_for_image(&full_path)
+                        .map(ToString::to_string),
+                    ventoy_menu_tip: config.menu_tip_for_image(&full_path).cloned(),
                     ventoy_default_image: config.default_image_matches(&full_path),
                     ventoy_menu_timeout: config.menu_timeout,
                     ventoy_password: config.image_password_for(&full_path).cloned(),
@@ -734,6 +748,10 @@ impl<'a> IsoScanner<'a> {
                 continue;
             }
 
+            if config.filter_dot_underscore && is_dot_underscore_file(&name) {
+                continue;
+            }
+
             if has_supported_extension(&name, extensions)
                 && config.supports_image_name(&name)
                 && config.allows_image_path(&full_path)
@@ -771,6 +789,10 @@ impl<'a> IsoScanner<'a> {
                 files.push(IsoFile {
                     path: full_path.clone(),
                     menu_alias: config.menu_alias_for(&full_path).map(ToString::to_string),
+                    ventoy_menu_class: config
+                        .menu_class_for_image(&full_path)
+                        .map(ToString::to_string),
+                    ventoy_menu_tip: config.menu_tip_for_image(&full_path).cloned(),
                     ventoy_default_image: config.default_image_matches(&full_path),
                     ventoy_menu_timeout: config.menu_timeout,
                     ventoy_password: config.image_password_for(&full_path).cloned(),
@@ -1546,6 +1568,10 @@ fn is_hidden_tree(name: &str) -> bool {
         name,
         "$RECYCLE.BIN" | "System Volume Information" | ".Trash" | ".Spotlight-V100" | ".fseventsd"
     )
+}
+
+fn is_dot_underscore_file(name: &str) -> bool {
+    name.starts_with("._")
 }
 
 /// 缓存的 ISO 列表

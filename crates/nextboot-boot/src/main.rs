@@ -236,7 +236,7 @@ fn show_menu<'a>(
     let mut active_timeout = config.timeout;
     loop {
         // 显示菜单
-        display_menu(st, &state, &config, active_timeout)?;
+        display_menu(st, &state, iso_files, &config, active_timeout)?;
 
         // 等待输入
         let input = match wait_for_key_or_timeout(st, active_timeout) {
@@ -364,6 +364,7 @@ fn has_duplicate_filename(iso_files: &[scanner::IsoFile], filename: &str) -> boo
 fn display_menu(
     st: &mut SystemTable<Boot>,
     state: &MenuState,
+    iso_files: &[scanner::IsoFile],
     config: &MenuConfig,
     active_timeout: Option<u64>,
 ) -> uefi::Result<()> {
@@ -381,17 +382,25 @@ fn display_menu(
         let prefix = if i == state.selected { "  > " } else { "    " };
         let icon = item.iso_type.icon();
         let size = format_size(item.size);
+        let class_tag = iso_files
+            .get(i)
+            .and_then(|iso| iso.ventoy_menu_class.as_deref())
+            .map(|class| format!("[{}]", truncate_chars(class, 10)))
+            .unwrap_or_default();
 
         // 截断长文件名
-        let name = if item.label.len() > 30 {
-            format!("{}...", &item.label[..27])
+        let name = if class_tag.is_empty() {
+            truncate_chars(&item.label, 30)
         } else {
-            item.label.clone()
+            truncate_chars(&item.label, 24)
         };
 
         output_text(
             stdout,
-            &format!("{}{} {} {:<30} {:>10}\r\n", prefix, icon, name, "", size),
+            &format!(
+                "{}{} {:<30} {:<12} {:>10}\r\n",
+                prefix, icon, name, class_tag, size
+            ),
         )?;
     }
 
@@ -409,7 +418,37 @@ fn display_menu(
         output_text(stdout, "  ↑↓: Select  Enter: Boot  Esc: Exit\r\n")?;
     }
 
+    if let Some(tip) = iso_files
+        .get(state.selected)
+        .and_then(|iso| iso.ventoy_menu_tip.as_ref())
+    {
+        if !tip.tip1.is_empty() {
+            output_text(
+                stdout,
+                &format!("  Tip: {}\r\n", truncate_chars(&tip.tip1, 72)),
+            )?;
+        }
+        if !tip.tip2.is_empty() {
+            output_text(
+                stdout,
+                &format!("       {}\r\n", truncate_chars(&tip.tip2, 72)),
+            )?;
+        }
+    }
+
     Ok(())
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let len = text.chars().count();
+    if len <= max_chars {
+        return text.to_string();
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let mut out: String = text.chars().take(keep).collect();
+    out.push_str("...");
+    out
 }
 
 /// 输出文本

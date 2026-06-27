@@ -62,6 +62,43 @@ pub struct VentoyMenuAlias {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VentoyMenuTip {
+    pub tip1: String,
+    pub tip2: String,
+}
+
+impl VentoyMenuTip {
+    pub fn is_empty(&self) -> bool {
+        self.tip1.is_empty() && self.tip2.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VentoyMenuTipTarget {
+    Image(String),
+    Dir(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VentoyMenuTipRule {
+    pub target: VentoyMenuTipTarget,
+    pub tip: VentoyMenuTip,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VentoyMenuClassTarget {
+    Key(String),
+    Parent(String),
+    Dir(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VentoyMenuClassRule {
+    pub target: VentoyMenuClassTarget,
+    pub class: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VentoyPathTarget {
     Image(String),
     Parent(String),
@@ -186,6 +223,7 @@ impl VentoyImagePlugin {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VentoyConfig {
     pub filters: VentoyFileFilters,
+    pub filter_dot_underscore: bool,
     pub default_search_root: Option<String>,
     pub menu_timeout: Option<u32>,
     pub default_image: Option<String>,
@@ -193,6 +231,8 @@ pub struct VentoyConfig {
     pub image_list_mode: VentoyImageListMode,
     pub image_list: Vec<String>,
     pub menu_aliases: Vec<VentoyMenuAlias>,
+    pub menu_tips: Vec<VentoyMenuTipRule>,
+    pub menu_classes: Vec<VentoyMenuClassRule>,
     pub password: VentoyPasswordConfig,
     pub auto_install: Vec<VentoyPathRule<VentoyAutoInstall>>,
     pub persistence: Vec<VentoyPathRule<VentoyPersistence>>,
@@ -284,6 +324,39 @@ impl VentoyConfig {
             .iter()
             .find(|entry| path_pattern_eq(entry.image.as_str(), path))
             .map(|entry| entry.alias.as_str())
+    }
+
+    pub fn menu_tip_for_image(&self, path: &str) -> Option<&VentoyMenuTip> {
+        self.menu_tips
+            .iter()
+            .find(|entry| match &entry.target {
+                VentoyMenuTipTarget::Image(pattern) => path_pattern_eq(pattern.as_str(), path),
+                VentoyMenuTipTarget::Dir(_) => false,
+            })
+            .map(|entry| &entry.tip)
+            .filter(|tip| !tip.is_empty())
+    }
+
+    pub fn menu_class_for_image(&self, path: &str) -> Option<&str> {
+        let filename = path.rsplit('/').next().unwrap_or(path);
+
+        for rule in &self.menu_classes {
+            if let VentoyMenuClassTarget::Key(pattern) = &rule.target {
+                if pattern.len() < filename.len() && filename.contains(pattern.as_str()) {
+                    return Some(rule.class.as_str());
+                }
+            }
+        }
+
+        for rule in &self.menu_classes {
+            if let VentoyMenuClassTarget::Parent(parent) = &rule.target {
+                if path_parent_matches(parent.as_str(), path) {
+                    return Some(rule.class.as_str());
+                }
+            }
+        }
+
+        None
     }
 
     pub fn default_image_matches(&self, path: &str) -> bool {
@@ -648,6 +721,21 @@ fn parse_u32_text(text: &str) -> Option<u32> {
     Some(value)
 }
 
+#[cfg(target_arch = "aarch64")]
+const VENTOY_PLATFORM_SUFFIX: &str = "aa64";
+#[cfg(target_arch = "x86_64")]
+const VENTOY_PLATFORM_SUFFIX: &str = "uefi";
+#[cfg(target_arch = "x86")]
+const VENTOY_PLATFORM_SUFFIX: &str = "ia32";
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86")))]
+const VENTOY_PLATFORM_SUFFIX: &str = "uefi";
+
+fn is_current_platform_plugin_key(key: &str, base: &str) -> bool {
+    key.strip_prefix(base)
+        .and_then(|suffix| suffix.strip_prefix('_'))
+        == Some(VENTOY_PLATFORM_SUFFIX)
+}
+
 struct JsonParser<'a> {
     input: &'a [u8],
     pos: usize,
@@ -669,6 +757,8 @@ impl<'a> JsonParser<'a> {
     fn parse_config(&mut self) -> Result<VentoyConfig, VentoyConfigError> {
         let mut config = VentoyConfig::default();
         let mut parsed_platform_password = false;
+        let mut parsed_platform_menu_tip = false;
+        let mut parsed_platform_menu_class = false;
         self.skip_ws();
         self.expect(b'{')?;
 
@@ -684,6 +774,18 @@ impl<'a> JsonParser<'a> {
             match key.as_str() {
                 "control" => self.parse_control(&mut config)?,
                 "menu_alias" => self.parse_menu_alias(&mut config)?,
+                key if is_current_platform_plugin_key(key, "menu_tip") => {
+                    self.parse_menu_tip(&mut config)?;
+                    parsed_platform_menu_tip = true;
+                }
+                "menu_tip" if !parsed_platform_menu_tip => self.parse_menu_tip(&mut config)?,
+                key if is_current_platform_plugin_key(key, "menu_class") => {
+                    self.parse_menu_class(&mut config)?;
+                    parsed_platform_menu_class = true;
+                }
+                "menu_class" if !parsed_platform_menu_class => {
+                    self.parse_menu_class(&mut config)?
+                }
                 "password_uefi" | "password_aa64" => {
                     self.parse_password(&mut config)?;
                     parsed_platform_password = true;
@@ -702,6 +804,7 @@ impl<'a> JsonParser<'a> {
                     config.image_list_mode = VentoyImageListMode::Deny;
                     config.image_list = self.parse_string_array()?;
                 }
+                "menu_tip" | "menu_class" => self.skip_value()?,
                 "password" => self.skip_value()?,
                 _ => self.skip_value()?,
             }
@@ -756,6 +859,9 @@ impl<'a> JsonParser<'a> {
                         "VTOY_DEFAULT_MENU_MODE" => {
                             config.default_menu_mode = parse_u32_text(&value);
                         }
+                        "VTOY_FILT_DOT_UNDERSCORE_FILE" => {
+                            config.filter_dot_underscore = value == "1";
+                        }
                         _ => {}
                     }
                 } else {
@@ -778,6 +884,164 @@ impl<'a> JsonParser<'a> {
             break;
         }
 
+        Ok(())
+    }
+
+    fn parse_menu_tip(&mut self, config: &mut VentoyConfig) -> Result<(), VentoyConfigError> {
+        let mut tips = Vec::new();
+
+        self.parse_object_fields(|parser, key| {
+            match key {
+                "tips" => tips = parser.parse_menu_tip_rules()?,
+                _ => parser.skip_value()?,
+            }
+            Ok(())
+        })?;
+
+        config.menu_tips = tips;
+        Ok(())
+    }
+
+    fn parse_menu_tip_rules(&mut self) -> Result<Vec<VentoyMenuTipRule>, VentoyConfigError> {
+        let mut rules = Vec::new();
+        self.skip_ws();
+        self.expect(b'[')?;
+        loop {
+            self.skip_ws();
+            if self.consume(b']') {
+                break;
+            }
+
+            let mut target = None;
+            let mut tip1 = String::new();
+            let mut tip2 = String::new();
+            self.parse_object_fields(|parser, key| {
+                match key {
+                    "image" => {
+                        if let Some(path) = parser.parse_optional_config_path()? {
+                            target = Some(VentoyMenuTipTarget::Image(path));
+                        }
+                    }
+                    "dir" => {
+                        if target.is_none() {
+                            if let Some(path) = parser.parse_optional_config_path()? {
+                                target = Some(VentoyMenuTipTarget::Dir(path));
+                            }
+                        } else {
+                            parser.skip_value()?;
+                        }
+                    }
+                    "tip" | "tip1" => {
+                        if let Some(value) = parser.parse_optional_string()? {
+                            tip1 = value;
+                        } else {
+                            parser.skip_value()?;
+                        }
+                    }
+                    "tip2" => {
+                        if let Some(value) = parser.parse_optional_string()? {
+                            tip2 = value;
+                        } else {
+                            parser.skip_value()?;
+                        }
+                    }
+                    _ => parser.skip_value()?,
+                }
+                Ok(())
+            })?;
+
+            let tip = VentoyMenuTip { tip1, tip2 };
+            if let Some(target) = target {
+                if !tip.is_empty() {
+                    rules
+                        .try_reserve_exact(1)
+                        .map_err(|_| VentoyConfigError::OutOfMemory)?;
+                    rules.push(VentoyMenuTipRule { target, tip });
+                }
+            }
+
+            self.skip_ws();
+            if self.consume(b',') {
+                continue;
+            }
+            self.expect(b']')?;
+            break;
+        }
+
+        Ok(rules)
+    }
+
+    fn parse_menu_class(&mut self, config: &mut VentoyConfig) -> Result<(), VentoyConfigError> {
+        let mut rules = Vec::new();
+        self.skip_ws();
+        self.expect(b'[')?;
+        loop {
+            self.skip_ws();
+            if self.consume(b']') {
+                break;
+            }
+
+            let mut target = None;
+            let mut class = None;
+            self.parse_object_fields(|parser, key| {
+                match key {
+                    "key" => {
+                        if let Some(value) = parser.parse_optional_string()? {
+                            target = Some(VentoyMenuClassTarget::Key(value));
+                        } else {
+                            parser.skip_value()?;
+                        }
+                    }
+                    "parent" => {
+                        if target.is_none() {
+                            if let Some(value) = parser.parse_optional_config_path()? {
+                                target = Some(VentoyMenuClassTarget::Parent(value));
+                            }
+                        } else {
+                            parser.skip_value()?;
+                        }
+                    }
+                    "dir" => {
+                        if target.is_none() {
+                            if let Some(value) = parser.parse_optional_string()? {
+                                target = Some(VentoyMenuClassTarget::Dir(value));
+                            } else {
+                                parser.skip_value()?;
+                            }
+                        } else {
+                            parser.skip_value()?;
+                        }
+                    }
+                    "class" => {
+                        if let Some(value) = parser.parse_optional_string()? {
+                            class = Some(value);
+                        } else {
+                            parser.skip_value()?;
+                        }
+                    }
+                    _ => parser.skip_value()?,
+                }
+                Ok(())
+            })?;
+
+            if let (Some(target), Some(class)) = (target, class) {
+                if !class.is_empty() {
+                    rules
+                        .try_reserve_exact(1)
+                        .map_err(|_| VentoyConfigError::OutOfMemory)?;
+                    rules.push(VentoyMenuClassRule { target, class });
+                }
+            }
+
+            self.skip_ws();
+            if self.consume(b',') {
+                continue;
+            }
+            self.expect(b']')?;
+            break;
+        }
+
+        config.menu_classes = rules;
         Ok(())
     }
 
@@ -1285,6 +1549,16 @@ impl<'a> JsonParser<'a> {
         }
     }
 
+    fn parse_optional_config_path(&mut self) -> Result<Option<String>, VentoyConfigError> {
+        match self.parse_optional_string()? {
+            Some(value) => Ok(clean_plugin_path(value)),
+            None => {
+                self.skip_value()?;
+                Ok(None)
+            }
+        }
+    }
+
     fn parse_optional_i32(&mut self) -> Result<Option<i32>, VentoyConfigError> {
         self.skip_ws();
         let start = self.pos;
@@ -1503,7 +1777,8 @@ mod tests {
         let json = br#"{
             "control": [
                 { "VTOY_FILE_FLT_WIM": "1" },
-                { "VTOY_DEFAULT_SEARCH_ROOT": "/ISO" }
+                { "VTOY_DEFAULT_SEARCH_ROOT": "/ISO" },
+                { "VTOY_FILT_DOT_UNDERSCORE_FILE": "1" }
             ],
             "menu_alias": [
                 { "image": "/ISO/win11.iso", "alias": "Windows 11" }
@@ -1514,6 +1789,7 @@ mod tests {
         let config = VentoyConfig::parse(json).expect("config");
 
         assert!(config.filters.wim);
+        assert!(config.filter_dot_underscore);
         assert_eq!(config.default_search_root.as_deref(), Some("/ISO"));
         assert_eq!(config.image_list_mode, VentoyImageListMode::Deny);
         assert!(!config.allows_image_path("/iso/old.iso"));
@@ -1539,6 +1815,44 @@ mod tests {
         assert_eq!(config.default_menu_mode, Some(1));
         assert!(config.default_image_matches("/iso/win11.iso"));
         assert!(!config.default_image_matches("/iso/ubuntu.iso"));
+    }
+
+    #[test]
+    fn parses_menu_tip_and_class_plugins() {
+        let json = br#"{
+            "menu_tip": {
+                "left": "5%",
+                "tips": [
+                    { "image": "/ISO/ubuntu.iso", "tip": "Daily installer" },
+                    { "dir": "/ISO/tools", "tip1": "Tools", "tip2": "Diagnostics" }
+                ]
+            },
+            "menu_class": [
+                { "key": "ubuntu", "class": "ubuntu" },
+                { "parent": "/ISO", "class": "iso-root" },
+                { "dir": "tools", "class": "folder-tools" }
+            ]
+        }"#;
+
+        let config = VentoyConfig::parse(json).expect("config");
+
+        assert_eq!(
+            config.menu_tip_for_image("/iso/UBUNTU.iso"),
+            Some(&VentoyMenuTip {
+                tip1: "Daily installer".to_string(),
+                tip2: String::new(),
+            })
+        );
+        assert!(config.menu_tip_for_image("/ISO/tools/rescue.iso").is_none());
+        assert_eq!(
+            config.menu_class_for_image("/ISO/ubuntu.iso"),
+            Some("ubuntu")
+        );
+        assert_eq!(
+            config.menu_class_for_image("/ISO/rescue.iso"),
+            Some("iso-root")
+        );
+        assert!(config.menu_class_for_image("/Other/rescue.iso").is_none());
     }
 
     #[test]
