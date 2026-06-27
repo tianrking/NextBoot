@@ -8,6 +8,7 @@ use core::ffi::c_void;
 use core::{ptr, slice};
 use log::{info, warn};
 use nextboot_fs::iso9660::Iso9660;
+use nextboot_fs::udf::Udf;
 use nextboot_fs::{
     FileAttributes as FsFileAttributes, FileInfo as FsFileInfo, FileSystem, FsError,
 };
@@ -112,10 +113,45 @@ const EFI_FILE_INFO_NAME_OFFSET: usize = 80;
 const EFI_FILE_SYSTEM_INFO_LABEL_OFFSET: usize = 36;
 const VOLUME_LABEL: &str = "NEXTBOOT";
 
+pub enum VirtualIsoFilesystem {
+    Iso9660(Iso9660),
+    Udf(Udf),
+}
+
+impl VirtualIsoFilesystem {
+    pub fn block_size(&self) -> u32 {
+        match self {
+            Self::Iso9660(fs) => fs.block_size(),
+            Self::Udf(fs) => fs.block_size(),
+        }
+    }
+
+    pub fn read_dir(&self, path: &str) -> Result<Vec<FsFileInfo>, FsError> {
+        match self {
+            Self::Iso9660(fs) => fs.read_dir(path),
+            Self::Udf(fs) => fs.read_dir(path),
+        }
+    }
+
+    pub fn read_file(&self, path: &str, offset: u64, buf: &mut [u8]) -> Result<usize, FsError> {
+        match self {
+            Self::Iso9660(fs) => fs.read_file(path, offset, buf),
+            Self::Udf(fs) => fs.read_file(path, offset, buf),
+        }
+    }
+
+    pub fn stat(&self, path: &str) -> Result<FsFileInfo, FsError> {
+        match self {
+            Self::Iso9660(fs) => fs.stat(path),
+            Self::Udf(fs) => fs.stat(path),
+        }
+    }
+}
+
 #[repr(C)]
 pub struct IsoSimpleFileSystemProtocol {
     protocol: SimpleFileSystemProtocol,
-    iso: Rc<Iso9660>,
+    fs: Rc<VirtualIsoFilesystem>,
     volume_size: u64,
     block_size: u32,
 }
@@ -124,7 +160,7 @@ impl IsoSimpleFileSystemProtocol {
     pub fn install(
         bt: &BootServices,
         handle: Handle,
-        iso: Rc<Iso9660>,
+        fs: Rc<VirtualIsoFilesystem>,
         volume_size: u64,
         block_size: u32,
     ) -> uefi::Result<RegisteredIsoSimpleFileSystem> {
@@ -133,7 +169,7 @@ impl IsoSimpleFileSystemProtocol {
                 revision: SIMPLE_FILE_SYSTEM_REVISION,
                 open_volume: Self::open_volume_handler,
             },
-            iso,
+            fs,
             volume_size,
             block_size,
         });
@@ -164,7 +200,7 @@ impl IsoSimpleFileSystemProtocol {
         };
 
         let mut root_file = IsoFileProtocol::root(
-            protocol.iso.clone(),
+            protocol.fs.clone(),
             protocol.volume_size,
             protocol.block_size,
         );
@@ -197,7 +233,7 @@ impl RegisteredIsoSimpleFileSystem {
 #[repr(C)]
 struct IsoFileProtocol {
     protocol: FileProtocol,
-    iso: Rc<Iso9660>,
+    fs: Rc<VirtualIsoFilesystem>,
     path: String,
     info: FsFileInfo,
     position: u64,
@@ -208,14 +244,14 @@ struct IsoFileProtocol {
 }
 
 impl IsoFileProtocol {
-    fn root(iso: Rc<Iso9660>, volume_size: u64, block_size: u32) -> Box<Self> {
+    fn root(fs: Rc<VirtualIsoFilesystem>, volume_size: u64, block_size: u32) -> Box<Self> {
         let mut info = FsFileInfo::new(String::new(), 0, true, 0);
         info.attributes = FsFileAttributes::DIRECTORY;
-        Self::new(iso, String::from("/"), info, volume_size, block_size)
+        Self::new(fs, String::from("/"), info, volume_size, block_size)
     }
 
     fn new(
-        iso: Rc<Iso9660>,
+        fs: Rc<VirtualIsoFilesystem>,
         path: String,
         info: FsFileInfo,
         volume_size: u64,
@@ -239,7 +275,7 @@ impl IsoFileProtocol {
                 write_ex: Self::write_ex_handler,
                 flush_ex: Self::flush_ex_handler,
             },
-            iso,
+            fs,
             path,
             info,
             position: 0,
@@ -282,13 +318,13 @@ impl IsoFileProtocol {
             return Status::INVALID_PARAMETER;
         };
         let path = resolve_child_path(&file.path, &requested);
-        let info = match file.iso.stat(&path) {
+        let info = match file.fs.stat(&path) {
             Ok(info) => info,
             Err(err) => return fs_error_to_status(err),
         };
 
         let mut child = Self::new(
-            file.iso.clone(),
+            file.fs.clone(),
             path,
             info,
             file.volume_size,
@@ -538,7 +574,7 @@ impl IsoFileProtocol {
         }
 
         let dst = unsafe { slice::from_raw_parts_mut(buffer.cast::<u8>(), requested) };
-        match self.iso.read_file(&self.path, self.position, dst) {
+        match self.fs.read_file(&self.path, self.position, dst) {
             Ok(read) => {
                 self.position = self.position.saturating_add(read as u64);
                 unsafe {
@@ -552,7 +588,7 @@ impl IsoFileProtocol {
 
     fn read_directory_entry(&mut self, buffer_size: *mut usize, buffer: *mut c_void) -> Status {
         if self.dir_entries.is_none() {
-            match self.iso.read_dir(&self.path) {
+            match self.fs.read_dir(&self.path) {
                 Ok(entries) => self.dir_entries = Some(entries),
                 Err(err) => return fs_error_to_status(err),
             }

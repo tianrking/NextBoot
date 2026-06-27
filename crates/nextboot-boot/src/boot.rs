@@ -6,7 +6,9 @@ use crate::init::StorageDevice;
 use crate::scanner::{ImageFormat, IsoExtent, IsoFile, OsType};
 use crate::vdi;
 use crate::vhdx;
-use crate::virtual_fs::{IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem};
+use crate::virtual_fs::{
+    IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem, VirtualIsoFilesystem,
+};
 use crate::wimboot::{self, WimbootCallbacks, WimbootVirtualFile};
 use crate::xz::{self, XzDecodeError};
 use alloc::boxed::Box;
@@ -20,6 +22,7 @@ use log::{info, warn};
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::Iso9660;
+use nextboot_fs::udf::Udf;
 use nextboot_fs::{
     detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError, SharedBlockIo,
 };
@@ -810,10 +813,10 @@ impl<'a> BootManager<'a> {
         let source_block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let iso = self.open_virtual_iso9660(&source_block_io)?;
+        let fs = self.open_virtual_iso_filesystem(&source_block_io)?;
 
         let path = normalize_iso_path(path);
-        let info = iso.stat(&path).map_err(fs_error_to_uefi_status)?;
+        let info = fs.stat(&path).map_err(fs_error_to_uefi_status)?;
         if info.is_dir {
             return Err(Status::UNSUPPORTED.into());
         }
@@ -824,7 +827,7 @@ impl<'a> BootManager<'a> {
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         data.resize(file_size, 0);
 
-        let read = iso
+        let read = fs
             .read_file(&path, 0, &mut data)
             .map_err(fs_error_to_uefi_status)?;
         data.truncate(read);
@@ -1935,12 +1938,31 @@ impl<'a> BootManager<'a> {
         Ok(())
     }
 
-    fn open_virtual_iso9660(&self, source_block_io: &BlockIO) -> uefi::Result<Iso9660> {
+    fn open_virtual_iso_filesystem(
+        &self,
+        source_block_io: &BlockIO,
+    ) -> uefi::Result<VirtualIsoFilesystem> {
         let config = self.iso9660_virtual_config();
+        if self.iso.is_udf {
+            let vbio = self.build_virtual_block_io(config.clone(), source_block_io)?;
+            match Udf::open(Rc::new(VirtualIsoBlockIo::new(vbio))) {
+                Ok(udf) => {
+                    info!("Using UDF SimpleFileSystem backend for {}", self.iso.path);
+                    return Ok(VirtualIsoFilesystem::Udf(udf));
+                }
+                Err(err) => {
+                    warn!(
+                        "Failed to open UDF filesystem for {}, falling back to ISO9660: {:?}",
+                        self.iso.path, err
+                    );
+                }
+            }
+        }
+
         let vbio = self.build_virtual_block_io(config, source_block_io)?;
         let iso = Iso9660::open(Rc::new(VirtualIsoBlockIo::new(vbio)))
             .map_err(fs_error_to_uefi_status)?;
-        Ok(iso)
+        Ok(VirtualIsoFilesystem::Iso9660(iso))
     }
 
     fn install_iso_simple_file_system(
@@ -1948,12 +1970,12 @@ impl<'a> BootManager<'a> {
         source_block_io: &BlockIO,
         virtual_handle: Handle,
     ) -> uefi::Result<RegisteredIsoSimpleFileSystem> {
-        let iso = self.open_virtual_iso9660(source_block_io)?;
-        let block_size = iso.block_size();
+        let fs = self.open_virtual_iso_filesystem(source_block_io)?;
+        let block_size = fs.block_size();
         IsoSimpleFileSystemProtocol::install(
             self.bt,
             virtual_handle,
-            Rc::new(iso),
+            Rc::new(fs),
             self.iso.size,
             block_size,
         )
