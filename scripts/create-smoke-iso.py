@@ -15,6 +15,7 @@ EL_TORITO_ID = b"EL TORITO SPECIFICATION"
 EL_TORITO_PLATFORM_EFI = 0xEF
 PROFILE_GENERIC = "generic"
 PROFILE_WINDOWS = "windows"
+PROFILE_WINDOWS_WIMBOOT = "windows-wimboot"
 PROFILE_LINUX = "linux"
 LINUX_SMOKE_INITRD = b"070701NEXTBOOT SMOKE INITRD\n"
 
@@ -279,6 +280,42 @@ def make_iso_layout(efi_data: bytes, profile: str) -> tuple[list[dict[str, objec
                 },
             ]
         )
+    elif profile == PROFILE_WINDOWS_WIMBOOT:
+        directories.extend(
+            [
+                {"path": "/NOBOOT", "name": b"NOBOOT", "parent": "/"},
+                {"path": "/SOURCES", "name": b"SOURCES", "parent": "/"},
+                {"path": "/BOOT", "name": b"BOOT", "parent": "/"},
+            ]
+        )
+        files.extend(
+            [
+                {
+                    "dir": "/NOBOOT",
+                    "name": b"IGNORED.EFI;1",
+                    "data": efi_data,
+                    "eltorito": True,
+                },
+                {
+                    "dir": "/SOURCES",
+                    "name": b"BOOT.WIM;1",
+                    "data": b"NEXTBOOT SMOKE WINDOWS WIMBOOT WIM\n",
+                    "eltorito": False,
+                },
+                {
+                    "dir": "/BOOT",
+                    "name": b"BCD;1",
+                    "data": "path\\to\\bootmgr.exe".encode("utf-16le"),
+                    "eltorito": False,
+                },
+                {
+                    "dir": "/BOOT",
+                    "name": b"BOOT.SDI;1",
+                    "data": b"NEXTBOOT SMOKE WINDOWS BOOT SDI\n",
+                    "eltorito": False,
+                },
+            ]
+        )
     elif profile == PROFILE_LINUX:
         directories.append({"path": "/BOOT", "name": b"BOOT", "parent": "/"})
         files.extend(
@@ -420,7 +457,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--profile",
         default=PROFILE_GENERIC,
-        choices=(PROFILE_GENERIC, PROFILE_WINDOWS, PROFILE_LINUX),
+        choices=(
+            PROFILE_GENERIC,
+            PROFILE_WINDOWS,
+            PROFILE_WINDOWS_WIMBOOT,
+            PROFILE_LINUX,
+        ),
         help="file layout to generate",
     )
     return parser.parse_args()

@@ -119,6 +119,9 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 # 自动生成 Windows 风格 ISO，并断言 DVD-ROM/bootmgfw.efi 分支被链式启动
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-windows-iso
 
+# 自动生成无默认 Windows EFI loader 的 ISO，并断言 WIMBOOT fallback 分支被链式启动
+./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
+
 # 自动生成 Linux 风格 ISO，并断言 EFI stub/initrd LoadFile2 分支被启动
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
 
@@ -142,6 +145,9 @@ CRC、分区布局、FAT32/exFAT/NTFS 目录、`BOOTX64.EFI`、`/ISO` 文件和�
 El Torito boot catalog、内含 `/EFI/BOOT/BOOTX64.EFI` 的最小 ISO，并继续验证该 EFI
 loader 被链式启动；`--smoke-windows-iso` 会生成 Windows 风格 ISO，验证 Windows/WinPE
 的 DVD-ROM 虚拟设备与 `/efi/microsoft/boot/bootmgfw.efi` 链式启动路径；
+`--smoke-windows-wimboot` 会生成一个没有默认 Windows EFI loader、但包含 `boot.wim`、BCD
+和 `boot.sdi` 的 ISO，同时在 Data 分区放入 `/ventoy/wimboot.x86_64`，验证 Windows ISO
+WIMBOOT fallback 入口；
 `--smoke-linux-iso` 会生成不含 `/EFI/BOOT/BOOTX64.EFI` 的 Linux 风格 ISO，验证内核
 候选发现、initrd LoadFile2 provider 和 EFI stub 启动路径；`--smoke-linux-plugins`
 会额外生成 `/ventoy/ventoy.json`、自动安装模板、注入包、DUD 镜像和 persistence 后端，

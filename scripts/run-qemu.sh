@@ -15,6 +15,7 @@
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
+#   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
 #   ./scripts/run-qemu.sh --bus usb --mode release --no-run
 
 set -eo pipefail
@@ -42,8 +43,10 @@ SMOKE=0
 SMOKE_BOOT=0
 SMOKE_EFI_ISO=0
 SMOKE_WINDOWS_ISO=0
+SMOKE_WINDOWS_WIMBOOT=0
 SMOKE_LINUX_ISO=0
 SMOKE_LINUX_PLUGINS=0
+SMOKE_HELPER_FILE=""
 SMOKE_TIMEOUT=20
 MEMORY="1024M"
 IMAGES=()
@@ -72,6 +75,8 @@ Options:
   --smoke-efi-iso    Generate a minimal UEFI ISO and verify its loader starts
   --smoke-windows-iso
                      Generate a Windows-style smoke ISO and verify bootmgfw starts
+  --smoke-windows-wimboot
+                     Generate a Windows-style smoke ISO and verify WIMBOOT fallback
   --smoke-linux-iso  Generate a Linux-style smoke ISO and verify EFI stub/initrd starts
   --smoke-linux-plugins
                      Generate Linux smoke ISO plus Ventoy plugin payloads
@@ -87,6 +92,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
+  $0 --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
   $0 --bus usb --no-run
 USAGE
 }
@@ -184,6 +190,14 @@ while [ $# -gt 0 ]; do
             SMOKE_BOOT=1
             SMOKE_EFI_ISO=1
             SMOKE_WINDOWS_ISO=1
+            shift
+            ;;
+        --smoke-windows-wimboot)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_EFI_ISO=1
+            SMOKE_WINDOWS_ISO=1
+            SMOKE_WINDOWS_WIMBOOT=1
             shift
             ;;
         --smoke-linux-iso)
@@ -300,11 +314,16 @@ fi
 
 if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
     SMOKE_EFI_FILE="${PROJECT_DIR}/target/${TARGET}/${BUILD_MODE}/nextboot-smoke-efi.efi"
+    SMOKE_HELPER_FILE="$SMOKE_EFI_FILE"
     SMOKE_ISO_PROFILE="generic"
     SMOKE_ISO_BASENAME="nextboot-smoke-efi.iso"
     if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
         SMOKE_ISO_PROFILE="windows"
         SMOKE_ISO_BASENAME="nextboot-smoke-windows.iso"
+    fi
+    if [ "$SMOKE_WINDOWS_WIMBOOT" -eq 1 ]; then
+        SMOKE_ISO_PROFILE="windows-wimboot"
+        SMOKE_ISO_BASENAME="nextboot-smoke-windows-wimboot.iso"
     fi
     if [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
         SMOKE_ISO_PROFILE="linux"
@@ -355,6 +374,8 @@ PY_ARGS=(
     "$DATA_FS"
     "$EFI_FILE"
     "$SMOKE_LINUX_PLUGINS"
+    "$SMOKE_WINDOWS_WIMBOOT"
+    "$SMOKE_HELPER_FILE"
 )
 if [ "${#IMAGES[@]}" -gt 0 ]; then
     PY_ARGS+=("${IMAGES[@]}")
@@ -375,7 +396,9 @@ layout = sys.argv[4]
 data_fs = sys.argv[5]
 efi_file = sys.argv[6]
 smoke_linux_plugins = sys.argv[7] == "1"
-image_files = sys.argv[8:]
+smoke_windows_wimboot = sys.argv[8] == "1"
+smoke_helper_file = sys.argv[9]
+image_files = sys.argv[10:]
 if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
@@ -485,7 +508,18 @@ def make_smoke_linux_plugin_files(images):
         ),
     ]
 
-extra_files = make_smoke_linux_plugin_files(image_files) if smoke_linux_plugins else []
+def make_smoke_windows_wimboot_files(helper):
+    if not helper:
+        raise SystemExit("windows wimboot smoke helper is missing")
+    with open(helper, "rb") as src:
+        helper_data = src.read()
+    return [("/ventoy/wimboot.x86_64", helper_data)]
+
+extra_files = []
+if smoke_linux_plugins:
+    extra_files.extend(make_smoke_linux_plugin_files(image_files))
+if smoke_windows_wimboot:
+    extra_files.extend(make_smoke_windows_wimboot_files(smoke_helper_file))
 
 def make_short_name(name, used):
     base, ext = split_name(name)
@@ -1548,12 +1582,26 @@ if [ "$SMOKE" -eq 1 ]; then
                     --expect "Using EFI El Torito boot image"
                 )
                 if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
-                    EXPECT_ARGS+=(
-                        --expect "device_type: DvdRom"
-                        --expect "Booting Windows ISO"
-                        --expect "Chain loading: /efi/microsoft/boot/bootmgfw.efi"
-                        --expect "Loaded chained EFI image"
-                    )
+                    if [ "$SMOKE_WINDOWS_WIMBOOT" -eq 1 ]; then
+                        EXPECT_ARGS+=(
+                            --expect "device_type: DvdRom"
+                            --expect "Booting Windows ISO"
+                            --expect "Windows default EFI chain-load paths failed"
+                            --expect "Loaded WIMBOOT helper /ventoy/wimboot.x86_64"
+                            --expect "Prepared Windows ISO WIMBOOT fallback"
+                            --expect "pfsize=0x"
+                            --expect "pfread=0x"
+                            --expect "Chain loading: /ventoy/wimboot.x86_64"
+                            --expect "Loaded chained EFI image"
+                        )
+                    else
+                        EXPECT_ARGS+=(
+                            --expect "device_type: DvdRom"
+                            --expect "Booting Windows ISO"
+                            --expect "Chain loading: /efi/microsoft/boot/bootmgfw.efi"
+                            --expect "Loaded chained EFI image"
+                        )
+                    fi
                 elif [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
                     EXPECT_ARGS+=(
                         --expect "Booting Linux ISO"
