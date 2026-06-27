@@ -244,12 +244,12 @@ case "$LAYOUT" in
 esac
 
 case "$DATA_FS" in
-    exfat|ext4|fat32|ntfs|udf) ;;
-    *) die "--data-fs must be exfat, ext4, fat32, ntfs, or udf" ;;
+    exfat|ext2|ext3|ext4|fat32|ntfs|udf) ;;
+    *) die "--data-fs must be exfat, ext2, ext3, ext4, fat32, ntfs, or udf" ;;
 esac
 
-if [ "$DATA_FS" = "ext4" ] && [ "$SECTOR_SIZE" -ne 4096 ]; then
-    die "--data-fs ext4 currently requires --sector-size 4096 in the QEMU generator"
+if [[ "$DATA_FS" == ext* ]] && [ "$SECTOR_SIZE" -ne 4096 ]; then
+    die "--data-fs ext2/ext3/ext4 currently requires --sector-size 4096 in the QEMU generator"
 fi
 
 if [ "$LAYOUT" = "single" ] && [ "$DATA_FS" != "exfat" ]; then

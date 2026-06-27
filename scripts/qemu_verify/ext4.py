@@ -1,4 +1,4 @@
-"""Minimal ext4 reader used by verify-qemu-image."""
+"""Minimal ext-family reader used by verify-qemu-image."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ class Ext4Volume:
         self.image = image
         self.partition = partition
         self.block_size = image.sector_size
-        require(self.block_size == 4096, f"{partition.name}: verifier expects 4096 byte ext4 blocks")
+        require(self.block_size == 4096, f"{partition.name}: verifier expects 4096 byte ext blocks")
         block0 = self.read_block(0)
         superblock = block0[1024:2048]
         require(u16(superblock, 56) == 0xEF53, f"{partition.name}: missing ext4 signature")
-        require(1024 << u32(superblock, 24) == self.block_size, f"{partition.name}: ext4 block size mismatch")
+        require(1024 << u32(superblock, 24) == self.block_size, f"{partition.name}: ext block size mismatch")
         self.inode_size = u16(superblock, 88)
         self.inodes_per_group = u32(superblock, 40)
         self.group_desc_size = max(32, u16(superblock, 254))
@@ -55,7 +55,8 @@ class Ext4Volume:
         return u16(inode, 0) & 0xF000 == 0x8000
 
     def extents_for_inode(self, inode: bytes) -> list[FileExtent]:
-        require(u32(inode, 32) & EXT4_EXTENTS_FL, f"{self.partition.name}: ext4 inode has no extents")
+        if not u32(inode, 32) & EXT4_EXTENTS_FL:
+            return self.legacy_extents_for_inode(inode)
         root = inode[40:100]
         require(u16(root, 0) == 0xF30A, f"{self.partition.name}: invalid ext4 extent header")
         require(u16(root, 6) == 0, f"{self.partition.name}: indexed ext4 extents are unsupported")
@@ -67,6 +68,31 @@ class Ext4Volume:
             physical = (u16(root, offset + 6) << 32) | u32(root, offset + 8)
             if block_count:
                 extents.append(FileExtent(file_block, self.partition.start_lba + physical, block_count))
+        return extents
+
+    def legacy_extents_for_inode(self, inode: bytes) -> list[FileExtent]:
+        needed = (self.inode_size_bytes(inode) + self.block_size - 1) // self.block_size
+        if needed == 0:
+            return []
+        if needed > 12 + self.block_size // 4:
+            raise VerifyError(f"{self.partition.name}: ext legacy block map is too large")
+        raw_blocks = inode[40:100]
+        blocks: list[int] = []
+        for index in range(min(needed, 12)):
+            blocks.append(u32(raw_blocks, index * 4))
+        if needed > 12:
+            indirect = u32(raw_blocks, 12 * 4)
+            require(indirect != 0, f"{self.partition.name}: missing ext indirect block")
+            indirect_block = self.read_block(indirect)
+            for index in range(needed - 12):
+                blocks.append(u32(indirect_block, index * 4))
+        extents: list[FileExtent] = []
+        for file_block, physical in enumerate(blocks):
+            require(physical != 0, f"{self.partition.name}: sparse ext files are unsupported")
+            if extents and extents[-1].physical_lba + extents[-1].block_count == self.partition.start_lba + physical:
+                extents[-1].block_count += 1
+            else:
+                extents.append(FileExtent(file_block, self.partition.start_lba + physical, 1))
         return extents
 
     def file_extents(self, record: FileRecord) -> list[FileExtent]:

@@ -7,7 +7,7 @@ workflows and which gaps are still worth pursuing.
 
 - Standard GPT split layout: a FAT32 ESP plus a data partition, avoiding a
   USB-only assumption and matching fixed SSD/NVMe deployments.
-- Data filesystems: FAT32, exFAT, ext4, NTFS, and UDF in image generation,
+- Data filesystems: FAT32, exFAT, ext2, ext3, ext4, NTFS, and UDF in image generation,
   boot-time scanning paths, and the real flash workflow where host tooling can
   safely format and populate the partition.
 - Storage buses in QEMU: virtio, NVMe, SATA, USB mass storage, and SDHCI SD.
@@ -30,8 +30,8 @@ workflows and which gaps are still worth pursuing.
 - Broader image types: VHD/VHDX/IMG scanning exists in the product direction,
   but boot coverage is still much thinner than ISO/WIM flows.
 - More filesystems: Ventoy covers a broader set of user storage formats. UDF
-  and ext4 are now covered in the QEMU data partition and flash paths; XFS and
-  other ext variants remain open.
+  and ext2/3/4 are now covered in the QEMU data partition and flash paths; XFS
+  remains open.
 - Cross-architecture boot: current build and QEMU scripts target x86_64 UEFI.
   AArch64 UEFI support would need its own build artifact, smoke EFI, and QEMU
   firmware path.

@@ -27,7 +27,7 @@ def make_volume(image: DiskImage, partition: Partition, expected_fs: str):
         return Fat32Volume(image, partition)
     if expected_fs == "exfat":
         return ExFatVolume(image, partition)
-    if expected_fs == "ext4":
+    if expected_fs in ("ext2", "ext3", "ext4"):
         return Ext4Volume(image, partition)
     if expected_fs == "ntfs":
         return NtfsVolume(image, partition)

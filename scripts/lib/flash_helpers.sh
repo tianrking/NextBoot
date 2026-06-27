@@ -32,13 +32,14 @@ find_ntfs_mkfs() {
     fi
 }
 
-find_ext4_mkfs() {
-    if command_exists mkfs.ext4; then
-        printf 'mkfs.ext4\n'
+find_ext_mkfs() {
+    local fs_type="$1"
+    if command_exists "mkfs.${fs_type}"; then
+        printf 'mkfs.%s\n' "$fs_type"
     elif command_exists mke2fs; then
         printf 'mke2fs\n'
-    elif command_exists brew && [ -x "$(brew --prefix e2fsprogs 2>/dev/null)/sbin/mkfs.ext4" ]; then
-        printf '%s/sbin/mkfs.ext4\n' "$(brew --prefix e2fsprogs)"
+    elif command_exists brew && [ -x "$(brew --prefix e2fsprogs 2>/dev/null)/sbin/mkfs.${fs_type}" ]; then
+        printf '%s/sbin/mkfs.%s\n' "$(brew --prefix e2fsprogs)" "$fs_type"
     else
         return 1
     fi
@@ -64,11 +65,25 @@ ntfs_mkfs_command() {
     fi
 }
 
-ext4_mkfs_command() {
+ext_mkfs_command() {
+    local fs_type="$1"
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf 'mkfs.ext4\n'
+        printf 'mkfs.%s\n' "$fs_type"
     else
-        find_ext4_mkfs
+        find_ext_mkfs "$fs_type"
+    fi
+}
+
+run_ext_mkfs() {
+    local fs_type="$1"
+    local device="$2"
+    local mkfs_cmd
+
+    mkfs_cmd="$(ext_mkfs_command "$fs_type")"
+    if [ "$(basename "$mkfs_cmd")" = "mke2fs" ]; then
+        run_sudo "$mkfs_cmd" -t "$fs_type" -F -L NEXTDATA "$device"
+    else
+        run_sudo "$mkfs_cmd" -F -L NEXTDATA "$device"
     fi
 }
 
@@ -173,8 +188,8 @@ require_linux_tools() {
     if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "exfat" ]; then
         find_linux_exfat_mkfs >/dev/null || die "mkfs.exfat or mkexfatfs is required for --data-fs exfat"
     fi
-    if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "ext4" ]; then
-        find_ext4_mkfs >/dev/null || die "mkfs.ext4 or mke2fs is required for --data-fs ext4"
+    if [ "$LAYOUT" = "split" ] && [[ "$DATA_FS" == ext* ]]; then
+        find_ext_mkfs "$DATA_FS" >/dev/null || die "mkfs.${DATA_FS} or mke2fs is required for --data-fs ${DATA_FS}"
     fi
     if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "ntfs" ]; then
         find_ntfs_mkfs >/dev/null || die "mkfs.ntfs or mkntfs is required for --data-fs ntfs"
@@ -185,9 +200,9 @@ require_linux_tools() {
 }
 
 require_macos_tools() {
-    if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "ext4" ]; then
-        find_ext4_mkfs >/dev/null || die "mkfs.ext4 or mke2fs is required for --data-fs ext4 on macOS"
-        warn "macOS cannot reliably write-mount ext4; the Data partition will be formatted but /ISO and /ventoy must be populated from Linux."
+    if [ "$LAYOUT" = "split" ] && [[ "$DATA_FS" == ext* ]]; then
+        find_ext_mkfs "$DATA_FS" >/dev/null || die "mkfs.${DATA_FS} or mke2fs is required for --data-fs ${DATA_FS} on macOS"
+        warn "macOS cannot reliably write-mount ext filesystems; the Data partition will be formatted but /ISO and /ventoy must be populated from Linux."
     fi
     if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "ntfs" ]; then
         find_ntfs_mkfs >/dev/null || die "mkfs.ntfs or mkntfs is required for --data-fs ntfs on macOS"

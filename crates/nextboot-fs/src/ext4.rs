@@ -1,7 +1,7 @@
-//! Minimal read-only ext4 support.
+//! Minimal read-only ext-family support.
 //!
-//! This implements the subset needed for NextBoot data partitions: 4K ext4
-//! block size, extent-backed regular files, and linear directory entries.
+//! This implements the subset needed for NextBoot data partitions: 4K ext2/3/4
+//! block size, extent or legacy direct-block files, and linear directories.
 
 use crate::{
     alloc_buffer, read_full_blocks, FileAttributes, FileExtent, FileInfo, FileSystem,
@@ -29,6 +29,8 @@ const INODE_SIZE_LO: usize = 4;
 const INODE_FLAGS: usize = 32;
 const INODE_BLOCKS: usize = 40;
 const INODE_SIZE_HIGH: usize = 108;
+const LEGACY_DIRECT_BLOCKS: usize = 12;
+const LEGACY_SINGLE_INDIRECT_INDEX: usize = 12;
 
 const EXTENT_HEADER_ENTRIES: usize = 2;
 const EXTENT_HEADER_DEPTH: usize = 6;
@@ -334,9 +336,14 @@ impl Ext4 {
     }
 
     fn extents(&self, node: &Ext4Node) -> Result<Vec<Ext4Extent>, FsError> {
-        if node.flags & EXT4_EXTENTS_FL == 0 {
-            return Err(FsError::UnsupportedFs);
+        if node.flags & EXT4_EXTENTS_FL != 0 {
+            return self.extent_tree_extents(node);
         }
+
+        self.legacy_block_extents(node)
+    }
+
+    fn extent_tree_extents(&self, node: &Ext4Node) -> Result<Vec<Ext4Extent>, FsError> {
         let root = &node.inode[INODE_BLOCKS..INODE_BLOCKS + 60];
         if read_u16(root, 0)? != EXT4_EXTENT_MAGIC || read_u16(root, EXTENT_HEADER_DEPTH)? != 0 {
             return Err(FsError::UnsupportedFs);
@@ -360,6 +367,65 @@ impl Ext4 {
             });
         }
         Ok(out)
+    }
+
+    fn legacy_block_extents(&self, node: &Ext4Node) -> Result<Vec<Ext4Extent>, FsError> {
+        let needed_blocks = node.size.div_ceil(u64::from(self.block_size));
+        if needed_blocks == 0 {
+            return Ok(Vec::new());
+        }
+        let max_single_indirect = u64::from(self.block_size / 4);
+        if needed_blocks > LEGACY_DIRECT_BLOCKS as u64 + max_single_indirect {
+            return Err(FsError::UnsupportedFs);
+        }
+
+        let blocks = &node.inode[INODE_BLOCKS..INODE_BLOCKS + 60];
+        let mut out = Vec::new();
+        let mut file_block = 0u64;
+        while file_block < needed_blocks && file_block < LEGACY_DIRECT_BLOCKS as u64 {
+            let physical = read_u32(blocks, file_block as usize * 4)?;
+            self.push_legacy_extent(&mut out, file_block, physical)?;
+            file_block += 1;
+        }
+
+        if file_block < needed_blocks {
+            let indirect = read_u32(blocks, LEGACY_SINGLE_INDIRECT_INDEX * 4)?;
+            if indirect == 0 {
+                return Err(FsError::Corrupted);
+            }
+            let block = self.read_block(u64::from(indirect))?;
+            while file_block < needed_blocks {
+                let index = file_block as usize - LEGACY_DIRECT_BLOCKS;
+                let physical = read_u32(&block, index * 4)?;
+                self.push_legacy_extent(&mut out, file_block, physical)?;
+                file_block += 1;
+            }
+        }
+        Ok(out)
+    }
+
+    fn push_legacy_extent(
+        &self,
+        out: &mut Vec<Ext4Extent>,
+        file_block: u64,
+        physical: u32,
+    ) -> Result<(), FsError> {
+        if physical == 0 || file_block > u64::from(u32::MAX) {
+            return Err(FsError::Corrupted);
+        }
+        if let Some(last) = out.last_mut() {
+            let expected = last.physical_block + u64::from(last.block_count);
+            if expected == u64::from(physical) && last.block_count < u16::MAX {
+                last.block_count += 1;
+                return Ok(());
+            }
+        }
+        out.push(Ext4Extent {
+            file_block: file_block as u32,
+            block_count: 1,
+            physical_block: u64::from(physical),
+        });
+        Ok(())
     }
 
     fn info_for_node(&self, name: String, node: &Ext4Node) -> FileInfo {

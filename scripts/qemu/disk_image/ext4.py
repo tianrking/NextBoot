@@ -35,7 +35,8 @@ def write_u32(data, offset, value):
 def write_ext4_volume(f, part, deps):
     block_size = deps["sector_size"]
     if block_size != 4096:
-        raise SystemExit("test ext4 volumes require 4096 byte sectors")
+        raise SystemExit("test ext-family volumes require 4096 byte sectors")
+    use_extents = part["fs_type"] == "ext4"
 
     efi_file = deps["efi_file"]
     smoke_vlnk_iso = deps["smoke_vlnk_iso"]
@@ -105,6 +106,10 @@ def write_ext4_volume(f, part, deps):
             node.blocks = 1
         else:
             node.blocks = math.ceil(node.size / block_size) if node.size else 0
+        node.indirect_block = 0
+        if not use_extents and node.blocks > 12:
+            node.indirect_block = next_data_block
+            next_data_block += 1
         if node.blocks:
             node.first_block = next_data_block
             next_data_block += node.blocks
@@ -159,6 +164,11 @@ def write_ext4_volume(f, part, deps):
     def write_file(node):
         if node.size == 0:
             return
+        if node.indirect_block:
+            indirect = bytearray(block_size)
+            for block_index in range(12, node.blocks):
+                write_u32(indirect, (block_index - 12) * 4, node.first_block + block_index)
+            write_block(node.indirect_block, indirect)
         f.seek(disk_offset(node.first_block))
         if node.source is not None:
             with open(node.source, "rb") as src:
@@ -184,18 +194,25 @@ def write_ext4_volume(f, part, deps):
         for offset in (8, 12, 16):
             write_u32(inode, offset, now)
         write_u16(inode, 26, 2 if node.is_dir else 1)
-        write_u32(inode, 28, node.blocks * (block_size // 512))
-        write_u32(inode, 32, EXT4_EXTENTS_FL)
+        allocated_blocks = node.blocks + (1 if node.indirect_block else 0)
+        write_u32(inode, 28, allocated_blocks * (block_size // 512))
+        write_u32(inode, 32, EXT4_EXTENTS_FL if use_extents else 0)
         write_u32(inode, 108, node.size >> 32)
-        write_u16(inode, 40, 0xF30A)
-        write_u16(inode, 42, 1 if node.blocks else 0)
-        write_u16(inode, 44, 4)
-        write_u16(inode, 46, 0)
-        if node.blocks:
-            write_u32(inode, 52, 0)
-            write_u16(inode, 56, node.blocks)
-            write_u16(inode, 58, (node.first_block >> 32) & 0xFFFF)
-            write_u32(inode, 60, node.first_block & 0xFFFFFFFF)
+        if use_extents:
+            write_u16(inode, 40, 0xF30A)
+            write_u16(inode, 42, 1 if node.blocks else 0)
+            write_u16(inode, 44, 4)
+            write_u16(inode, 46, 0)
+            if node.blocks:
+                write_u32(inode, 52, 0)
+                write_u16(inode, 56, node.blocks)
+                write_u16(inode, 58, (node.first_block >> 32) & 0xFFFF)
+                write_u32(inode, 60, node.first_block & 0xFFFFFFFF)
+        else:
+            for block_index in range(min(node.blocks, 12)):
+                write_u32(inode, 40 + block_index * 4, node.first_block + block_index)
+            if node.indirect_block:
+                write_u32(inode, 40 + 12 * 4, node.indirect_block)
         return bytes(inode)
 
     superblock = bytearray(1024)
@@ -210,7 +227,7 @@ def write_ext4_volume(f, part, deps):
     write_u32(superblock, 84, 11)
     write_u16(superblock, 88, inode_size)
     write_u32(superblock, 92, 0)
-    write_u32(superblock, 96, 0x40)
+    write_u32(superblock, 96, 0x40 if use_extents else 0)
     write_u32(superblock, 100, 0)
     write_u32(superblock, 104, 0)
     write_u16(superblock, 254, 32)
