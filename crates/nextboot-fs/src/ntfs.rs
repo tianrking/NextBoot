@@ -19,6 +19,7 @@ const MFT_RECORD_ROOT: u64 = 5;
 
 #[cfg(test)]
 const ATTR_TYPE_FILE_NAME: u32 = 0x30;
+const ATTR_TYPE_ATTRIBUTE_LIST: u32 = 0x20;
 const ATTR_TYPE_DATA: u32 = 0x80;
 const ATTR_TYPE_INDEX_ROOT: u32 = 0x90;
 const ATTR_TYPE_INDEX_ALLOCATION: u32 = 0xA0;
@@ -95,7 +96,7 @@ impl FileSystem for Ntfs {
         };
 
         let mft_record = fs.read_boot_mft_record()?;
-        let mft_record = fs.parse_file_record(mft_record)?;
+        let mft_record = fs.parse_file_record(0, mft_record)?;
         let mft_data = mft_record
             .unnamed_attribute(ATTR_TYPE_DATA)
             .ok_or(FsError::Corrupted)?;
@@ -127,10 +128,11 @@ impl FileSystem for Ntfs {
         }
 
         let record = self.read_file_record(info.start_cluster)?;
-        let data = record
-            .unnamed_attribute(ATTR_TYPE_DATA)
-            .ok_or(FsError::NotFile)?;
-        self.read_attribute(data, offset, info.size, buf)
+        let data_attributes = record.unnamed_attributes(ATTR_TYPE_DATA)?;
+        if data_attributes.is_empty() {
+            return Err(FsError::NotFile);
+        }
+        self.read_attributes(&data_attributes, offset, info.size, buf)
     }
 
     fn stat(&self, path: &str) -> Result<FileInfo, FsError> {
@@ -157,15 +159,18 @@ impl FileSystem for Ntfs {
         }
 
         let record = self.read_file_record(info.start_cluster)?;
-        let data = record
-            .unnamed_attribute(ATTR_TYPE_DATA)
-            .ok_or(FsError::NotFile)?;
-        match &data.data {
-            AttributeData::Resident { .. } => Ok(Vec::new()),
-            AttributeData::NonResident { runs, .. } => {
-                self.runs_to_extents(runs.as_slice(), info.size)
+        let data_attributes = record.unnamed_attributes(ATTR_TYPE_DATA)?;
+        if data_attributes.is_empty() {
+            return Err(FsError::NotFile);
+        }
+        if data_attributes.len() == 1 {
+            if matches!(&data_attributes[0].data, AttributeData::Resident { .. }) {
+                return Ok(Vec::new());
             }
         }
+
+        let runs = collect_nonresident_runs(&data_attributes)?;
+        self.runs_to_extents(&runs, info.size)
     }
 }
 
@@ -201,8 +206,9 @@ impl Ntfs {
         if let Some(index_root) = record.attribute(ATTR_TYPE_INDEX_ROOT) {
             self.parse_index_root(index_root, &mut entries)?;
         }
-        if let Some(index_allocation) = record.attribute(ATTR_TYPE_INDEX_ALLOCATION) {
-            self.parse_index_allocation(index_allocation, &mut entries)?;
+        let index_allocations = record.attributes(ATTR_TYPE_INDEX_ALLOCATION)?;
+        if !index_allocations.is_empty() {
+            self.parse_index_allocations(&index_allocations, &mut entries)?;
         }
 
         entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -221,15 +227,25 @@ impl Ntfs {
     }
 
     fn read_file_record(&self, record_number: u64) -> Result<FileRecord, FsError> {
+        let mut record = self.read_file_record_base(record_number)?;
+        self.expand_attribute_list(&mut record)?;
+        Ok(record)
+    }
+
+    fn read_file_record_base(&self, record_number: u64) -> Result<FileRecord, FsError> {
         let mut data = alloc_buffer(self.file_record_size as usize)?;
         let offset = record_number
             .checked_mul(u64::from(self.file_record_size))
             .ok_or(FsError::Corrupted)?;
         self.read_from_runs(&self.mft_runs, offset, &mut data, false)?;
-        self.parse_file_record(data)
+        self.parse_file_record(record_number, data)
     }
 
-    fn parse_file_record(&self, mut data: Vec<u8>) -> Result<FileRecord, FsError> {
+    fn parse_file_record(
+        &self,
+        record_number: u64,
+        mut data: Vec<u8>,
+    ) -> Result<FileRecord, FsError> {
         if data.len() < 0x30 || &data[0..4] != FILE_RECORD_MAGIC {
             return Err(FsError::Corrupted);
         }
@@ -272,7 +288,77 @@ impl Ntfs {
             offset += attr_len;
         }
 
-        Ok(FileRecord { flags, attributes })
+        Ok(FileRecord {
+            record_number,
+            flags,
+            attributes,
+        })
+    }
+
+    fn expand_attribute_list(&self, record: &mut FileRecord) -> Result<(), FsError> {
+        let entries = self.attribute_list_entries(record)?;
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut extension_records = Vec::new();
+        for entry in &entries {
+            if entry.record_number == record.record_number
+                || entry.attr_type == ATTR_TYPE_ATTRIBUTE_LIST
+                || extension_records.contains(&entry.record_number)
+            {
+                continue;
+            }
+            extension_records
+                .try_reserve_exact(1)
+                .map_err(|_| FsError::OutOfMemory)?;
+            extension_records.push(entry.record_number);
+        }
+
+        for record_number in extension_records {
+            let extension = self.read_file_record_base(record_number)?;
+            for attribute in extension.attributes {
+                if attribute.attr_type == ATTR_TYPE_ATTRIBUTE_LIST {
+                    continue;
+                }
+                if !entries.iter().any(|entry| {
+                    entry.record_number == record_number && entry.attr_type == attribute.attr_type
+                }) {
+                    continue;
+                }
+                record
+                    .attributes
+                    .try_reserve_exact(1)
+                    .map_err(|_| FsError::OutOfMemory)?;
+                record.attributes.push(attribute);
+            }
+        }
+
+        record.attributes.sort_by(|a, b| {
+            a.attr_type
+                .cmp(&b.attr_type)
+                .then_with(|| a.name_len.cmp(&b.name_len))
+                .then_with(|| a.lowest_vcn.cmp(&b.lowest_vcn))
+        });
+        Ok(())
+    }
+
+    fn attribute_list_entries(
+        &self,
+        record: &FileRecord,
+    ) -> Result<Vec<AttributeListEntry>, FsError> {
+        let mut entries = Vec::new();
+        for attribute in record.attributes(ATTR_TYPE_ATTRIBUTE_LIST)? {
+            let size = attribute.data_size()?;
+            if size == 0 {
+                continue;
+            }
+            let size = usize::try_from(size).map_err(|_| FsError::FileTooLarge)?;
+            let mut data = alloc_buffer(size)?;
+            self.read_attribute(attribute, 0, size as u64, &mut data)?;
+            parse_attribute_list_entries(&data, &mut entries)?;
+        }
+        Ok(entries)
     }
 
     fn parse_index_root(
@@ -308,21 +394,28 @@ impl Ntfs {
         Ok(())
     }
 
-    fn parse_index_allocation(
+    fn parse_index_allocations(
         &self,
-        attribute: &NtfsAttribute,
+        attributes: &[&NtfsAttribute],
         entries: &mut Vec<FileInfo>,
     ) -> Result<(), FsError> {
-        let AttributeData::NonResident { real_size, .. } = &attribute.data else {
-            return Err(FsError::UnsupportedFs);
-        };
-        if *real_size == 0 {
+        let runs = collect_nonresident_runs(attributes)?;
+        let size = runs
+            .iter()
+            .filter_map(|run| {
+                run.virtual_cluster_start
+                    .checked_add(run.cluster_count)
+                    .and_then(|cluster| cluster.checked_mul(self.cluster_size))
+            })
+            .max()
+            .unwrap_or(0);
+        if size == 0 {
             return Ok(());
         }
 
-        let size = usize::try_from(*real_size).map_err(|_| FsError::FileTooLarge)?;
+        let size = usize::try_from(size).map_err(|_| FsError::FileTooLarge)?;
         let mut data = alloc_buffer(size)?;
-        self.read_attribute(attribute, 0, *real_size, &mut data)?;
+        self.read_from_runs(&runs, 0, &mut data, true)?;
 
         let record_size = self.index_record_size as usize;
         if record_size == 0 {
@@ -384,6 +477,37 @@ impl Ntfs {
                 Ok(to_read)
             }
         }
+    }
+
+    fn read_attributes(
+        &self,
+        attributes: &[&NtfsAttribute],
+        offset: u64,
+        file_size: u64,
+        buf: &mut [u8],
+    ) -> Result<usize, FsError> {
+        if attributes.is_empty() {
+            return Err(FsError::NotFile);
+        }
+        if attributes.len() == 1 {
+            return self.read_attribute(attributes[0], offset, file_size, buf);
+        }
+        if attributes
+            .iter()
+            .any(|attribute| matches!(&attribute.data, AttributeData::Resident { .. }))
+        {
+            return Err(FsError::UnsupportedFs);
+        }
+        if offset >= file_size || buf.is_empty() {
+            return Ok(0);
+        }
+
+        let to_read = buf
+            .len()
+            .min(usize::try_from(file_size - offset).map_err(|_| FsError::FileTooLarge)?);
+        let runs = collect_nonresident_runs(attributes)?;
+        self.read_from_runs(&runs, offset, &mut buf[..to_read], true)?;
+        Ok(to_read)
     }
 
     fn read_from_runs(
@@ -540,6 +664,7 @@ struct DataRun {
 struct NtfsAttribute {
     attr_type: u32,
     name_len: u8,
+    lowest_vcn: u64,
     data: AttributeData,
 }
 
@@ -550,6 +675,15 @@ impl NtfsAttribute {
             AttributeData::NonResident { .. } => Err(FsError::UnsupportedFs),
         }
     }
+
+    fn data_size(&self) -> Result<u64, FsError> {
+        match &self.data {
+            AttributeData::Resident { value } => {
+                u64::try_from(value.len()).map_err(|_| FsError::FileTooLarge)
+            }
+            AttributeData::NonResident { real_size, .. } => Ok(*real_size),
+        }
+    }
 }
 
 enum AttributeData {
@@ -557,7 +691,13 @@ enum AttributeData {
     NonResident { real_size: u64, runs: Vec<DataRun> },
 }
 
+struct AttributeListEntry {
+    attr_type: u32,
+    record_number: u64,
+}
+
 struct FileRecord {
+    record_number: u64,
     flags: u16,
     attributes: Vec<NtfsAttribute>,
 }
@@ -578,6 +718,51 @@ impl FileRecord {
             .iter()
             .find(|attr| attr.attr_type == attr_type)
     }
+
+    fn attributes(&self, attr_type: u32) -> Result<Vec<&NtfsAttribute>, FsError> {
+        let mut out = Vec::new();
+        for attr in self
+            .attributes
+            .iter()
+            .filter(|attr| attr.attr_type == attr_type)
+        {
+            out.try_reserve_exact(1).map_err(|_| FsError::OutOfMemory)?;
+            out.push(attr);
+        }
+        Ok(out)
+    }
+
+    fn unnamed_attributes(&self, attr_type: u32) -> Result<Vec<&NtfsAttribute>, FsError> {
+        let mut out = Vec::new();
+        for attr in self
+            .attributes
+            .iter()
+            .filter(|attr| attr.attr_type == attr_type && attr.name_len == 0)
+        {
+            out.try_reserve_exact(1).map_err(|_| FsError::OutOfMemory)?;
+            out.push(attr);
+        }
+        Ok(out)
+    }
+}
+
+fn collect_nonresident_runs(attributes: &[&NtfsAttribute]) -> Result<Vec<DataRun>, FsError> {
+    let mut runs = Vec::new();
+    for attribute in attributes {
+        match &attribute.data {
+            AttributeData::Resident { .. } => return Err(FsError::UnsupportedFs),
+            AttributeData::NonResident {
+                runs: attr_runs, ..
+            } => {
+                runs.try_reserve_exact(attr_runs.len())
+                    .map_err(|_| FsError::OutOfMemory)?;
+                runs.extend(attr_runs.iter().cloned());
+            }
+        }
+    }
+
+    runs.sort_by_key(|run| run.virtual_cluster_start);
+    Ok(runs)
 }
 
 fn parse_attribute(attr_type: u32, data: &[u8]) -> Result<Option<NtfsAttribute>, FsError> {
@@ -607,6 +792,7 @@ fn parse_attribute(attr_type: u32, data: &[u8]) -> Result<Option<NtfsAttribute>,
         Ok(Some(NtfsAttribute {
             attr_type,
             name_len,
+            lowest_vcn,
             data: AttributeData::NonResident { real_size, runs },
         }))
     } else {
@@ -631,9 +817,42 @@ fn parse_attribute(attr_type: u32, data: &[u8]) -> Result<Option<NtfsAttribute>,
         Ok(Some(NtfsAttribute {
             attr_type,
             name_len,
+            lowest_vcn: 0,
             data: AttributeData::Resident { value },
         }))
     }
+}
+
+fn parse_attribute_list_entries(
+    data: &[u8],
+    out: &mut Vec<AttributeListEntry>,
+) -> Result<(), FsError> {
+    let mut offset = 0usize;
+    while offset + 26 <= data.len() {
+        let attr_type = read_u32(data, offset)?;
+        let entry_len = read_u16(data, offset + 4)? as usize;
+        if attr_type == 0 || entry_len == 0 {
+            break;
+        }
+        if entry_len < 26
+            || offset
+                .checked_add(entry_len)
+                .map_or(true, |end| end > data.len())
+        {
+            return Err(FsError::Corrupted);
+        }
+
+        let record_number = read_file_reference(data, offset + 16)?;
+        out.try_reserve_exact(1).map_err(|_| FsError::OutOfMemory)?;
+        out.push(AttributeListEntry {
+            attr_type,
+            record_number,
+        });
+
+        offset += entry_len;
+    }
+
+    Ok(())
 }
 
 fn parse_data_runs(data: &[u8], lowest_vcn: u64) -> Result<Vec<DataRun>, FsError> {
@@ -919,6 +1138,10 @@ fn read_u48(data: &[u8], offset: usize) -> Result<u64, FsError> {
     ]))
 }
 
+fn read_file_reference(data: &[u8], offset: usize) -> Result<u64, FsError> {
+    read_u48(data, offset)
+}
+
 fn read_le_uint(data: &[u8]) -> u64 {
     let mut value = 0u64;
     for (index, byte) in data.iter().enumerate() {
@@ -1062,6 +1285,62 @@ mod tests {
         assert!(is_ntfs(disk.block_mut(0)));
     }
 
+    #[test]
+    fn follows_attribute_list_for_split_data_runs() {
+        let mut disk = MemoryBlockIo::new(512, 96);
+        write_boot_sector(&mut disk);
+        disk.bytes_mut(50 * 512, 512)[..9].copy_from_slice(b"split-one");
+        disk.bytes_mut(60 * 512, 512)[..9].copy_from_slice(b"split-two");
+        disk.bytes_mut(60 * 512 + 387, 1)[0] = 0x7E;
+
+        write_mft_record(
+            &mut disk,
+            0,
+            false,
+            &[data_attr_nonresident(24 * 512, &[(4, 24)])],
+        );
+        write_mft_record(
+            &mut disk,
+            5,
+            true,
+            &[index_root_attr(&[index_entry(
+                7,
+                "SPLIT.ISO",
+                900,
+                FILE_ATTRIBUTE_ARCHIVE,
+            )])],
+        );
+        write_mft_record(
+            &mut disk,
+            7,
+            false,
+            &[
+                attribute_list_attr(&[(ATTR_TYPE_DATA, 0, 7), (ATTR_TYPE_DATA, 1, 8)]),
+                data_attr_nonresident_with_vcn(900, 0, &[(50, 1)]),
+            ],
+        );
+        write_mft_record(
+            &mut disk,
+            8,
+            false,
+            &[data_attr_nonresident_with_vcn(900, 1, &[(60, 1)])],
+        );
+
+        let fs = Ntfs::open(Rc::new(disk)).expect("open ntfs");
+        let extents = fs.file_extents("/split.iso").expect("file extents");
+        assert_eq!(
+            extents,
+            [FileExtent::new(0, 50, 1), FileExtent::new(1, 60, 1)]
+        );
+
+        let mut data = vec![0; 900];
+        let read = fs.read_file("/SPLIT.ISO", 0, &mut data).expect("read file");
+        assert_eq!(read, 900);
+        assert_eq!(&data[..9], b"split-one");
+        assert_eq!(&data[512..521], b"split-two");
+        assert_eq!(data[899], 0x7E);
+    }
+
     fn write_boot_sector(disk: &mut MemoryBlockIo) {
         let total_blocks = (disk.data.len() / disk.block_size as usize) as u64;
         let boot = disk.block_mut(0);
@@ -1122,11 +1401,21 @@ mod tests {
     }
 
     fn data_attr_nonresident(real_size: u64, runs: &[(i64, u64)]) -> Vec<u8> {
+        data_attr_nonresident_with_vcn(real_size, 0, runs)
+    }
+
+    fn data_attr_nonresident_with_vcn(
+        real_size: u64,
+        lowest_vcn: u64,
+        runs: &[(i64, u64)],
+    ) -> Vec<u8> {
         let mut runlist = Vec::new();
         let mut previous_lcn = 0i64;
+        let mut cluster_count = 0u64;
         for (lcn, len) in runs {
             let delta = *lcn - previous_lcn;
             previous_lcn = *lcn;
+            cluster_count += *len;
             runlist.push(0x11);
             runlist.push(*len as u8);
             runlist.push(delta as u8);
@@ -1139,11 +1428,42 @@ mod tests {
         attr[0..4].copy_from_slice(&ATTR_TYPE_DATA.to_le_bytes());
         attr[4..8].copy_from_slice(&(attr_len as u32).to_le_bytes());
         attr[8] = 1;
+        attr[0x10..0x18].copy_from_slice(&lowest_vcn.to_le_bytes());
+        let highest_vcn = lowest_vcn + cluster_count.saturating_sub(1);
+        attr[0x18..0x20].copy_from_slice(&highest_vcn.to_le_bytes());
         attr[0x20..0x22].copy_from_slice(&(runlist_offset as u16).to_le_bytes());
         attr[0x28..0x30].copy_from_slice(&real_size.to_le_bytes());
         attr[0x30..0x38].copy_from_slice(&real_size.to_le_bytes());
         attr[0x38..0x40].copy_from_slice(&real_size.to_le_bytes());
         attr[runlist_offset..runlist_offset + runlist.len()].copy_from_slice(&runlist);
+        attr
+    }
+
+    fn attribute_list_attr(entries: &[(u32, u64, u64)]) -> Vec<u8> {
+        let mut value = Vec::new();
+        for (attr_type, lowest_vcn, record_number) in entries {
+            let entry_len = 32usize;
+            let start = value.len();
+            value.resize(start + entry_len, 0);
+            value[start..start + 4].copy_from_slice(&attr_type.to_le_bytes());
+            value[start + 4..start + 6].copy_from_slice(&(entry_len as u16).to_le_bytes());
+            value[start + 8..start + 16].copy_from_slice(&lowest_vcn.to_le_bytes());
+            value[start + 16..start + 22].copy_from_slice(&(record_number.to_le_bytes()[0..6]));
+            value[start + 24..start + 26].copy_from_slice(&1u16.to_le_bytes());
+        }
+
+        resident_attr(ATTR_TYPE_ATTRIBUTE_LIST, &value)
+    }
+
+    fn resident_attr(attr_type: u32, value: &[u8]) -> Vec<u8> {
+        let value_offset = 0x18usize;
+        let attr_len = align_up(value_offset + value.len(), 8);
+        let mut attr = vec![0; attr_len];
+        attr[0..4].copy_from_slice(&attr_type.to_le_bytes());
+        attr[4..8].copy_from_slice(&(attr_len as u32).to_le_bytes());
+        attr[0x10..0x14].copy_from_slice(&(value.len() as u32).to_le_bytes());
+        attr[0x14..0x16].copy_from_slice(&(value_offset as u16).to_le_bytes());
+        attr[value_offset..value_offset + value.len()].copy_from_slice(value);
         attr
     }
 
