@@ -2,14 +2,18 @@
 //!
 //! 仅支持读取，用于 ESP 分区和 Data 分区
 
-use crate::{FileSystem, FileSystemType, FileInfo, FsError, BlockIoOps, FileAttributes, alloc_buffer};
+use crate::{
+    alloc_buffer, read_full_blocks, FileAttributes, FileInfo, FileSystem, FileSystemType, FsError,
+    SharedBlockIo,
+};
 use alloc::vec::Vec;
 use alloc::string::{String, ToString};
 use alloc::collections::BTreeMap;
-use byteorder::{LittleEndian, ByteOrder};
 
 /// FAT32 文件系统
 pub struct Fat32 {
+    /// 底层块设备
+    block_io: SharedBlockIo,
     /// 块大小
     block_size: u32,
     /// 每簇扇区数
@@ -100,13 +104,13 @@ struct LfnEntry {
 impl FileSystem for Fat32 {
     const FS_TYPE: FileSystemType = FileSystemType::Fat32;
 
-    fn init(block_io: &dyn BlockIoOps) -> Result<Self, FsError> {
+    fn init(block_io: SharedBlockIo) -> Result<Self, FsError> {
         let mut boot_buf = alloc_buffer(block_io.block_size() as usize)?;
-        block_io.read_blocks(0, &mut boot_buf)?;
+        read_full_blocks(block_io.as_ref(), 0, &mut boot_buf)?;
 
         // 安全转换
         let boot_sector: Fat32BootSector = unsafe {
-            core::mem::transmute_copy(&boot_buf[..core::mem::size_of::<Fat32BootSector>()])
+            core::ptr::read_unaligned(boot_buf.as_ptr() as *const Fat32BootSector)
         };
 
         // 验证 FAT32
@@ -115,6 +119,10 @@ impl FileSystem for Fat32 {
         }
 
         let block_size = boot_sector.bytes_per_sector as u32;
+        if block_size != block_io.block_size() {
+            return Err(FsError::BlockSizeMismatch);
+        }
+
         let sectors_per_cluster = boot_sector.sectors_per_cluster;
         let cluster_size = block_size * sectors_per_cluster as u32;
 
@@ -137,11 +145,12 @@ impl FileSystem for Fat32 {
         let total_clusters = (data_sectors / sectors_per_cluster as u64) as u32;
 
         // 解析卷标
-        let volume_label = String::from_utf8_lossy(
-            &boot_sector.volume_label[..11]
-        ).trim_end().to_string();
+        let volume_label = String::from_utf8_lossy(&boot_buf[71..82])
+            .trim_end()
+            .to_string();
 
         Ok(Self {
+            block_io,
             block_size,
             sectors_per_cluster,
             cluster_size,
@@ -238,6 +247,11 @@ impl FileSystem for Fat32 {
 }
 
 impl Fat32 {
+    /// Open a FAT32 filesystem from a shared block device.
+    pub fn open(block_io: SharedBlockIo) -> Result<Self, FsError> {
+        <Self as FileSystem>::init(block_io)
+    }
+
     /// 读取簇数据
     fn read_cluster(&self, cluster: u32) -> Result<Vec<u8>, FsError> {
         if cluster < 2 || cluster >= self.total_clusters + 2 {
@@ -246,8 +260,7 @@ impl Fat32 {
 
         let lba = self.cluster_to_lba(cluster);
         let mut buf = alloc_buffer(self.cluster_size as usize)?;
-        // 这里需要 block_io 引用，简化实现返回空数据
-        // 实际实现需要存储 block_io 引用或使用回调
+        read_full_blocks(self.block_io.as_ref(), lba, &mut buf)?;
         Ok(buf)
     }
 
@@ -268,9 +281,21 @@ impl Fat32 {
         let fat_sector = self.fat_start + fat_offset / self.block_size as u64;
         let fat_offset_in_sector = (fat_offset % self.block_size as u64) as usize;
 
-        // 这里需要读取 FAT 扇区
-        // 简化实现：返回 EOF
-        Ok(0x0FFFFFF8)
+        let mut sector = alloc_buffer(self.block_size as usize)?;
+        read_full_blocks(self.block_io.as_ref(), fat_sector, &mut sector)?;
+
+        if fat_offset_in_sector + 4 > sector.len() {
+            return Err(FsError::Corrupted);
+        }
+
+        let next = u32::from_le_bytes([
+            sector[fat_offset_in_sector],
+            sector[fat_offset_in_sector + 1],
+            sector[fat_offset_in_sector + 2],
+            sector[fat_offset_in_sector + 3],
+        ]) & 0x0FFFFFFF;
+
+        Ok(next)
     }
 
     /// 路径转簇号
@@ -368,11 +393,11 @@ impl Fat32 {
                 });
             }
 
-            // 获取下一个簇
-            if self.is_end_of_chain(current_cluster) {
+            let next_cluster = self.get_next_cluster(current_cluster)?;
+            if self.is_end_of_chain(next_cluster) {
                 break;
             }
-            current_cluster = self.get_next_cluster(current_cluster)?;
+            current_cluster = next_cluster;
         }
 
         Ok(entries)
@@ -396,7 +421,6 @@ impl Fat32 {
 
     /// 解析长文件名条目
     fn parse_lfn_entry(&self, chunk: &[u8], buffer: &mut String) {
-        let seq = chunk[0] & 0x1F;
         let is_last = chunk[0] & 0x40 != 0;
 
         // 读取 UTF-16 字符

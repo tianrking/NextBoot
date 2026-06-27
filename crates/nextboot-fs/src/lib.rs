@@ -13,7 +13,7 @@ extern crate alloc;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use alloc::boxed::Box;
+use alloc::rc::Rc;
 
 pub mod fat32;
 pub mod exfat;
@@ -162,6 +162,42 @@ pub trait BlockIoOps {
     fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError>;
 }
 
+/// Shared block device handle used by filesystem instances.
+pub type SharedBlockIo = Rc<dyn BlockIoOps>;
+
+impl<T: BlockIoOps + ?Sized> BlockIoOps for Rc<T> {
+    fn block_size(&self) -> u32 {
+        (**self).block_size()
+    }
+
+    fn total_blocks(&self) -> u64 {
+        (**self).total_blocks()
+    }
+
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        (**self).read_blocks(lba, buf)
+    }
+}
+
+/// Validate and read one or more full hardware blocks.
+pub fn read_full_blocks(
+    block_io: &dyn BlockIoOps,
+    lba: u64,
+    buf: &mut [u8],
+) -> Result<(), FsError> {
+    let block_size = block_io.block_size() as usize;
+    if block_size == 0 || buf.is_empty() || buf.len() % block_size != 0 {
+        return Err(FsError::InvalidArgument);
+    }
+
+    let block_count = (buf.len() / block_size) as u64;
+    if lba.checked_add(block_count).map_or(true, |end| end > block_io.total_blocks()) {
+        return Err(FsError::ReadError);
+    }
+
+    block_io.read_blocks(lba, buf)
+}
+
 /// 动态分发的 Block IO
 pub struct DynBlockIo {
     block_size: u32,
@@ -199,7 +235,7 @@ pub trait FileSystem: Sized {
     const FS_TYPE: FileSystemType;
 
     /// 从 Block IO 初始化文件系统
-    fn init(block_io: &dyn BlockIoOps) -> Result<Self, FsError>;
+    fn init(block_io: SharedBlockIo) -> Result<Self, FsError>;
 
     /// 读取目录内容
     fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>, FsError>;
@@ -358,4 +394,130 @@ pub fn alloc_buffer(size: usize) -> Result<Vec<u8>, FsError> {
     buf.try_reserve(size).map_err(|_| FsError::OutOfMemory)?;
     buf.resize(size, 0);
     Ok(buf)
+}
+
+#[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::rc::Rc;
+    use alloc::vec;
+    use crate::iso9660::Iso9660;
+
+    struct MemoryBlockIo {
+        block_size: u32,
+        data: Vec<u8>,
+    }
+
+    impl MemoryBlockIo {
+        fn new(block_size: u32, blocks: usize) -> Self {
+            Self {
+                block_size,
+                data: vec![0; block_size as usize * blocks],
+            }
+        }
+
+        fn block_mut(&mut self, lba: usize) -> &mut [u8] {
+            let block_size = self.block_size as usize;
+            let start = lba * block_size;
+            &mut self.data[start..start + block_size]
+        }
+    }
+
+    impl BlockIoOps for MemoryBlockIo {
+        fn block_size(&self) -> u32 {
+            self.block_size
+        }
+
+        fn total_blocks(&self) -> u64 {
+            (self.data.len() / self.block_size as usize) as u64
+        }
+
+        fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
+            let block_size = self.block_size as usize;
+            let start = lba as usize * block_size;
+            let end = start + buf.len();
+            if end > self.data.len() {
+                return Err(FsError::ReadError);
+            }
+            buf.copy_from_slice(&self.data[start..end]);
+            Ok(())
+        }
+    }
+
+    fn write_iso_record(
+        block: &mut [u8],
+        offset: usize,
+        lba: u32,
+        size: u32,
+        flags: u8,
+        name: &[u8],
+    ) {
+        let len = 33 + name.len();
+        block[offset] = len as u8;
+        block[offset + 2..offset + 6].copy_from_slice(&lba.to_le_bytes());
+        block[offset + 10..offset + 14].copy_from_slice(&size.to_le_bytes());
+        block[offset + 25] = flags;
+        block[offset + 28..offset + 30].copy_from_slice(&1u16.to_le_bytes());
+        block[offset + 32] = name.len() as u8;
+        block[offset + 33..offset + 33 + name.len()].copy_from_slice(name);
+    }
+
+    #[test]
+    fn read_full_blocks_checks_bounds_and_alignment() {
+        let io = MemoryBlockIo::new(512, 2);
+        let mut one_block = vec![0u8; 512];
+        assert!(read_full_blocks(&io, 0, &mut one_block).is_ok());
+
+        let mut partial = vec![0u8; 128];
+        assert!(matches!(
+            read_full_blocks(&io, 0, &mut partial),
+            Err(FsError::InvalidArgument)
+        ));
+
+        let mut too_far = vec![0u8; 512];
+        assert!(matches!(
+            read_full_blocks(&io, 2, &mut too_far),
+            Err(FsError::ReadError)
+        ));
+    }
+
+    #[test]
+    fn iso9660_reads_directory_entries_and_file_data() {
+        let mut io = MemoryBlockIo::new(2048, 32);
+
+        {
+            let pvd = io.block_mut(16);
+            pvd[0] = 1;
+            pvd[1..6].copy_from_slice(b"CD001");
+            pvd[6] = 1;
+            pvd[40..48].copy_from_slice(b"NEXTBOOT");
+            pvd[84..88].copy_from_slice(&32u32.to_le_bytes());
+            pvd[128..130].copy_from_slice(&2048u16.to_le_bytes());
+            write_iso_record(pvd, 156, 20, 2048, 0x02, &[0]);
+        }
+
+        {
+            let end = io.block_mut(17);
+            end[0] = 255;
+            end[1..6].copy_from_slice(b"CD001");
+            end[6] = 1;
+        }
+
+        write_iso_record(io.block_mut(20), 0, 21, 11, 0x00, b"KERNEL.;1");
+        io.block_mut(21)[..11].copy_from_slice(b"hello world");
+
+        let fs = Iso9660::open(Rc::new(io)).expect("valid ISO9660 filesystem");
+        let entries = fs.read_dir("/").expect("root directory");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "kernel");
+        assert_eq!(entries[0].size, 11);
+
+        let mut data = [0u8; 11];
+        let read = fs.read_file("/kernel", 0, &mut data).expect("file read");
+        assert_eq!(read, 11);
+        assert_eq!(&data, b"hello world");
+    }
 }

@@ -2,14 +2,18 @@
 //!
 //! 用于 Data 分区，支持 >4GB 文件
 
-use crate::{FileSystem, FileSystemType, FileInfo, FsError, BlockIoOps, FileAttributes, alloc_buffer};
+use crate::{
+    alloc_buffer, read_full_blocks, FileAttributes, FileInfo, FileSystem, FileSystemType, FsError,
+    SharedBlockIo,
+};
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
-use byteorder::{LittleEndian, ByteOrder};
 
 /// exFAT 文件系统
 pub struct ExFat {
+    /// 底层块设备
+    block_io: SharedBlockIo,
     /// 扇区大小 (字节)
     sector_size: u32,
     /// 簇大小 (字节)
@@ -135,16 +139,16 @@ impl TryFrom<u8> for EntryType {
 impl FileSystem for ExFat {
     const FS_TYPE: FileSystemType = FileSystemType::ExFat;
 
-    fn init(block_io: &dyn BlockIoOps) -> Result<Self, FsError> {
+    fn init(block_io: SharedBlockIo) -> Result<Self, FsError> {
         let mut boot_buf = alloc_buffer(block_io.block_size() as usize)?;
-        block_io.read_blocks(0, &mut boot_buf)?;
+        read_full_blocks(block_io.as_ref(), 0, &mut boot_buf)?;
 
         let boot: ExFatBootSector = unsafe {
-            core::mem::transmute_copy(&boot_buf[..core::mem::size_of::<ExFatBootSector>()])
+            core::ptr::read_unaligned(boot_buf.as_ptr() as *const ExFatBootSector)
         };
 
         // 验证 exFAT 签名
-        if &boot.fs_name != b"EXFAT   " {
+        if &boot_buf[3..11] != b"EXFAT   " {
             return Err(FsError::InvalidSignature);
         }
 
@@ -154,9 +158,14 @@ impl FileSystem for ExFat {
         }
 
         let sector_size = 1u32 << boot.bytes_per_sector_shift;
+        if sector_size != block_io.block_size() {
+            return Err(FsError::BlockSizeMismatch);
+        }
+
         let cluster_size = (sector_size as u64) << boot.sectors_per_cluster_shift;
 
         Ok(Self {
+            block_io,
             sector_size,
             cluster_size,
             total_clusters: boot.cluster_count,
@@ -251,6 +260,11 @@ impl FileSystem for ExFat {
 }
 
 impl ExFat {
+    /// Open an exFAT filesystem from a shared block device.
+    pub fn open(block_io: SharedBlockIo) -> Result<Self, FsError> {
+        <Self as FileSystem>::init(block_io)
+    }
+
     /// 簇号转扇区号
     fn cluster_to_sector(&self, cluster: u32) -> u64 {
         self.cluster_heap_offset as u64 + ((cluster - 2) as u64) * (self.cluster_size / self.sector_size as u64)
@@ -262,9 +276,8 @@ impl ExFat {
             return Err(FsError::InvalidArgument);
         }
 
-        let sectors_per_cluster = (self.cluster_size / self.sector_size as u64) as usize;
         let mut buf = alloc_buffer(self.cluster_size as usize)?;
-        // 简化实现：需要 block_io 引用
+        read_full_blocks(self.block_io.as_ref(), self.cluster_to_sector(cluster), &mut buf)?;
         Ok(buf)
     }
 
@@ -275,11 +288,23 @@ impl ExFat {
         }
 
         // exFAT FAT 条目是 32 位
-        let fat_offset = self.fat_offset * self.sector_size as u64;
-        let entry_offset = fat_offset + (cluster as u64) * 4;
+        let entry_offset = (cluster as u64) * 4;
+        let fat_sector = self.fat_offset + entry_offset / self.sector_size as u64;
+        let fat_offset_in_sector = (entry_offset % self.sector_size as u64) as usize;
 
-        // 简化实现：返回 EOF
-        Ok(0xFFFFFFFF)
+        let mut sector = alloc_buffer(self.sector_size as usize)?;
+        read_full_blocks(self.block_io.as_ref(), fat_sector, &mut sector)?;
+
+        if fat_offset_in_sector + 4 > sector.len() {
+            return Err(FsError::Corrupted);
+        }
+
+        Ok(u32::from_le_bytes([
+            sector[fat_offset_in_sector],
+            sector[fat_offset_in_sector + 1],
+            sector[fat_offset_in_sector + 2],
+            sector[fat_offset_in_sector + 3],
+        ]))
     }
 
     /// 检查是否为链结束
@@ -354,10 +379,11 @@ impl ExFat {
                 offset += 32;
             }
 
-            if self.is_end_of_chain(current_cluster) {
+            let next_cluster = self.get_next_cluster(current_cluster)?;
+            if self.is_end_of_chain(next_cluster) {
                 break;
             }
-            current_cluster = self.get_next_cluster(current_cluster)?;
+            current_cluster = next_cluster;
         }
 
         Ok(entries)
@@ -380,6 +406,7 @@ impl ExFat {
         // 查找流扩展条目和文件名条目
         let mut first_cluster = 0u32;
         let mut data_length = 0u64;
+        let mut name_length = 0usize;
         let mut name = String::new();
 
         let mut offset = 32;
@@ -392,30 +419,31 @@ impl ExFat {
 
             // 流扩展条目
             if entry_type == EntryType::StreamExt as u8 || entry_type == 0xC0 {
+                name_length = data[offset + 3] as usize;
                 first_cluster = u32::from_le_bytes([
+                    data[offset + 20],
+                    data[offset + 21],
+                    data[offset + 22],
+                    data[offset + 23],
+                ]);
+                data_length = u64::from_le_bytes([
                     data[offset + 24],
                     data[offset + 25],
                     data[offset + 26],
                     data[offset + 27],
-                ]);
-                data_length = u64::from_le_bytes([
-                    data[offset + 32],
-                    data[offset + 33],
-                    data[offset + 34],
-                    data[offset + 35],
-                    data[offset + 36],
-                    data[offset + 37],
-                    data[offset + 38],
-                    data[offset + 39],
+                    data[offset + 28],
+                    data[offset + 29],
+                    data[offset + 30],
+                    data[offset + 31],
                 ]);
             }
 
             // 文件名条目
             if entry_type == EntryType::Name as u8 || entry_type == 0xC1 {
-                let name_length = data[offset + 3] as usize;
-                // 文件名是 UTF-16LE，从偏移 4 开始
-                for i in 0..name_length.min(15) {
-                    let char_offset = offset + 4 + i * 2;
+                // 文件名是 UTF-16LE，从偏移 2 开始，每个名称项最多 15 个字符
+                let remaining = name_length.saturating_sub(name.chars().count());
+                for i in 0..remaining.min(15) {
+                    let char_offset = offset + 2 + i * 2;
                     if char_offset + 2 > data.len() {
                         break;
                     }

@@ -10,6 +10,7 @@ use alloc::format;
 
 /// GPT 头
 #[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
 pub struct GptHeader {
     pub signature: [u8; 8],
     pub revision: u32,
@@ -206,7 +207,7 @@ impl GptDisk {
         }
 
         let header: GptHeader = unsafe {
-            core::mem::transmute_copy(&data[header_offset..])
+            core::ptr::read_unaligned(data[header_offset..].as_ptr() as *const GptHeader)
         };
 
         if !header.is_valid() {

@@ -2,13 +2,17 @@
 //!
 //! 用于解析 ISO 镜像内部结构
 
-use crate::{FileSystem, FileSystemType, FileInfo, FsError, BlockIoOps, FileAttributes, alloc_buffer};
+use crate::{
+    alloc_buffer, read_full_blocks, FileAttributes, FileInfo, FileSystem, FileSystemType, FsError,
+    SharedBlockIo,
+};
 use alloc::vec::Vec;
 use alloc::string::{String, ToString};
-use byteorder::{LittleEndian, ByteOrder};
 
 /// ISO9660 文件系统
 pub struct Iso9660 {
+    /// 底层块设备
+    block_io: SharedBlockIo,
     /// 逻辑块大小
     block_size: u32,
     /// 卷大小 (块数)
@@ -73,13 +77,16 @@ struct DirectoryRecordHeader {
 impl FileSystem for Iso9660 {
     const FS_TYPE: FileSystemType = FileSystemType::Iso9660;
 
-    fn init(block_io: &dyn BlockIoOps) -> Result<Self, FsError> {
+    fn init(block_io: SharedBlockIo) -> Result<Self, FsError> {
         // ISO9660 卷描述符从 LBA 16 开始
         let mut vd_buf = alloc_buffer(2048)?;
+        if block_io.block_size() != 2048 {
+            return Err(FsError::BlockSizeMismatch);
+        }
 
         // 扫描卷描述符
         for lba in 16..100 {
-            block_io.read_blocks(lba, &mut vd_buf)?;
+            read_full_blocks(block_io.as_ref(), lba, &mut vd_buf)?;
 
             // 检查标准 ID
             if &vd_buf[1..6] != b"CD001" {
@@ -113,6 +120,7 @@ impl FileSystem for Iso9660 {
                 ]);
 
                 return Ok(Self {
+                    block_io,
                     block_size: logical_block_size,
                     volume_size: volume_space_size,
                     root_lba,
@@ -131,13 +139,22 @@ impl FileSystem for Iso9660 {
     }
 
     fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>, FsError> {
-        let lba = if path == "/" || path.is_empty() {
-            self.root_lba
+        let info = if path == "/" || path.is_empty() {
+            FileInfo::new(
+                String::from("/"),
+                self.root_size as u64,
+                true,
+                self.root_lba as u64,
+            )
         } else {
-            self.path_to_lba(path)?
+            self.stat(path)?
         };
 
-        self.read_directory(lba)
+        if !info.is_dir {
+            return Err(FsError::NotDirectory);
+        }
+
+        self.read_directory(info.start_cluster as u32, info.size)
     }
 
     fn read_file(&self, path: &str, offset: u64, buf: &mut [u8]) -> Result<usize, FsError> {
@@ -167,8 +184,7 @@ impl FileSystem for Iso9660 {
 
         while bytes_read < to_read {
             let lba = start_lba + current_block;
-            // 这里需要 block_io 引用来读取
-            // block_io.read_blocks(lba, &mut block_buf)?;
+            read_full_blocks(self.block_io.as_ref(), lba, &mut block_buf)?;
 
             let available = block_buf.len() - if bytes_read == 0 { in_block_offset } else { 0 };
             let needed = to_read - bytes_read;
@@ -219,27 +235,29 @@ impl FileSystem for Iso9660 {
 }
 
 impl Iso9660 {
+    /// Open an ISO9660 filesystem from a shared 2048-byte block device.
+    pub fn open(block_io: SharedBlockIo) -> Result<Self, FsError> {
+        <Self as FileSystem>::init(block_io)
+    }
+
     /// 读取目录
-    fn read_directory(&self, lba: u32) -> Result<Vec<FileInfo>, FsError> {
+    fn read_directory(&self, lba: u32, size: u64) -> Result<Vec<FileInfo>, FsError> {
         let mut entries = Vec::new();
         let mut current_lba = lba;
+        let total_blocks = ((size + self.block_size as u64 - 1) / self.block_size as u64).max(1);
 
         // 读取目录数据
         let mut dir_data = alloc_buffer(self.block_size as usize)?;
-        let mut offset = 0;
-        let mut need_more_blocks = true;
 
-        while need_more_blocks {
-            // 这里需要 block_io 引用
-            // block_io.read_blocks(current_lba, &mut dir_data)?;
+        for _ in 0..total_blocks {
+            read_full_blocks(self.block_io.as_ref(), current_lba as u64, &mut dir_data)?;
 
-            offset = 0;
+            let mut offset = 0;
             while offset < dir_data.len() {
                 let len = dir_data[offset] as usize;
 
-                // 目录结束
+                // Zero-length records pad to the next logical block.
                 if len == 0 {
-                    need_more_blocks = false;
                     break;
                 }
 
@@ -355,9 +373,10 @@ impl Iso9660 {
     fn path_to_lba(&self, path: &str) -> Result<u32, FsError> {
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         let mut current_lba = self.root_lba;
+        let mut current_size = self.root_size as u64;
 
         for part in parts {
-            let entries = self.read_directory(current_lba)?;
+            let entries = self.read_directory(current_lba, current_size)?;
             let mut found = false;
 
             for entry in entries {
@@ -366,6 +385,7 @@ impl Iso9660 {
                         return Err(FsError::NotDirectory);
                     }
                     current_lba = entry.start_cluster as u32;
+                    current_size = entry.size;
                     found = true;
                     break;
                 }
