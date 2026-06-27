@@ -5,6 +5,7 @@
 mod block_io;
 mod model;
 mod partitions;
+mod paths;
 
 use crate::source_disk::{
     build_source_disk_identity, parent_device_path_bytes, parse_last_hard_drive_device_path,
@@ -15,7 +16,6 @@ use crate::ventoy_config::{VentoyConfig, VentoyConfigError};
 use crate::vhdx;
 use crate::vlnk::{self, VentoyVlnk};
 use crate::wim;
-use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -30,6 +30,11 @@ use nextboot_fs::udf::Udf;
 use nextboot_fs::{detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError};
 use nextboot_virtio::{VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
 use partitions::discover_partition_candidates;
+use paths::{
+    cstr16_to_string, has_supported_extension, is_default_uefi_bootloader_path,
+    is_dot_underscore_file, is_hidden_tree, is_ventoy_plugin_tree_path, join_display_path,
+    normalize_scan_path, open_directory, to_uefi_relative_path,
+};
 use uefi::data_types::CString16;
 use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
@@ -2039,27 +2044,6 @@ fn has_mbr_signature(block: &[u8]) -> bool {
     block.get(510) == Some(&0x55) && block.get(511) == Some(&0xaa)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn treats_ventoy_plugin_directory_as_non_image_tree() {
-        assert!(is_ventoy_plugin_tree_path("/ventoy"));
-        assert!(is_ventoy_plugin_tree_path("/Ventoy/dud/dd.iso"));
-        assert!(!is_ventoy_plugin_tree_path("/ISO/ventoy-linux.iso"));
-        assert!(!is_ventoy_plugin_tree_path("/persistence/ventoy.dat"));
-    }
-
-    #[test]
-    fn treats_default_uefi_bootloader_paths_as_non_images() {
-        assert!(is_default_uefi_bootloader_path("/EFI/BOOT/BOOTX64.EFI"));
-        assert!(is_default_uefi_bootloader_path("/efi/boot/bootaa64.efi"));
-        assert!(!is_default_uefi_bootloader_path("/ISO/tools.efi"));
-        assert!(!is_default_uefi_bootloader_path("/EFI/tools.efi"));
-    }
-}
-
 fn partition_source_disk_identity(
     first_block: &[u8],
     volume_info: VolumeBlockInfo,
@@ -2286,68 +2270,6 @@ unsafe fn device_path_byte_len(ptr: *const u8) -> Option<usize> {
     }
 }
 
-fn open_directory(parent: &mut Directory, path: &str) -> uefi::Result<Directory> {
-    let uefi_path = to_uefi_relative_path(path);
-    let c_path =
-        CString16::try_from(uefi_path.as_str()).map_err(|_| uefi::Status::INVALID_PARAMETER)?;
-    let handle = parent.open(c_path.as_ref(), FileMode::Read, FileAttribute::empty())?;
-    handle
-        .into_directory()
-        .ok_or_else(|| uefi::Error::new(uefi::Status::NOT_FOUND, ()))
-}
-
-fn normalize_scan_path(path: &str) -> String {
-    let trimmed = path.trim();
-    if trimmed.is_empty() || trimmed == "." || trimmed == "/" {
-        return String::from("/");
-    }
-
-    let mut normalized = String::from("/");
-    normalized.push_str(trimmed.trim_matches('/'));
-    normalized
-}
-
-fn to_uefi_relative_path(path: &str) -> String {
-    let mut out = String::new();
-    for (index, part) in path
-        .trim_matches('/')
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .enumerate()
-    {
-        if index > 0 {
-            out.push('\\');
-        }
-        out.push_str(part);
-    }
-    out
-}
-
-fn join_display_path(parent: &str, name: &str) -> String {
-    if parent == "/" || parent.is_empty() {
-        format!("/{}", name)
-    } else {
-        format!("{}/{}", parent.trim_end_matches('/'), name)
-    }
-}
-
-fn cstr16_to_string(name: &uefi::CStr16) -> String {
-    let mut out = String::new();
-    for ch in name.as_slice() {
-        let c = char::from(*ch);
-        if c == '\0' {
-            break;
-        }
-        out.push(c);
-    }
-    out
-}
-
-fn has_supported_extension(name: &str, extensions: &[&str]) -> bool {
-    let lower = name.to_lowercase();
-    extensions.iter().any(|ext| lower.ends_with(ext))
-}
-
 #[derive(Debug, Clone, Copy)]
 struct VhdFooterInfo {
     image_format: ImageFormat,
@@ -2377,46 +2299,4 @@ fn default_virtual_block_size(image_format: ImageFormat) -> Option<u32> {
     } else {
         None
     }
-}
-
-fn is_hidden_tree(name: &str) -> bool {
-    matches!(
-        name,
-        "$RECYCLE.BIN" | "System Volume Information" | ".Trash" | ".Spotlight-V100" | ".fseventsd"
-    )
-}
-
-fn is_ventoy_plugin_tree_path(path: &str) -> bool {
-    path.trim_matches('/')
-        .split('/')
-        .next()
-        .is_some_and(|part| part.eq_ignore_ascii_case("ventoy"))
-}
-
-fn is_default_uefi_bootloader_path(path: &str) -> bool {
-    let mut parts = path.trim_matches('/').split('/');
-    let Some(first) = parts.next() else {
-        return false;
-    };
-    let Some(second) = parts.next() else {
-        return false;
-    };
-    let Some(filename) = parts.next() else {
-        return false;
-    };
-    if parts.next().is_some() {
-        return false;
-    }
-    if !first.eq_ignore_ascii_case("efi") || !second.eq_ignore_ascii_case("boot") {
-        return false;
-    }
-
-    filename.eq_ignore_ascii_case("bootx64.efi")
-        || filename.eq_ignore_ascii_case("bootaa64.efi")
-        || filename.eq_ignore_ascii_case("bootia32.efi")
-        || filename.eq_ignore_ascii_case("bootarm.efi")
-}
-
-fn is_dot_underscore_file(name: &str) -> bool {
-    name.starts_with("._")
 }
