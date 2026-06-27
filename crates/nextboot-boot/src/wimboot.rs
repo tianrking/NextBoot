@@ -5,6 +5,8 @@
 //! `pfread=`.  This module builds those load options without depending on UEFI
 //! APIs so it can be tested independently.
 
+extern crate alloc;
+
 use alloc::format;
 use alloc::string::String;
 use core::fmt::Write;
@@ -79,6 +81,47 @@ pub fn build_wimboot_command_line(
     Ok(command)
 }
 
+pub fn patch_bcd_for_efi(data: &mut [u8]) -> usize {
+    const SEARCH: &[u8; 4] = b".exe";
+    const REPLACE: &[u8; 4] = b".efi";
+    const UTF16_SEARCH_LEN: usize = SEARCH.len() * 2;
+
+    let mut patched = 0usize;
+    if data.len() < UTF16_SEARCH_LEN {
+        return 0;
+    }
+
+    for offset in 0..=data.len() - UTF16_SEARCH_LEN {
+        if !utf16le_ascii_eq_ignore_case(&data[offset..offset + UTF16_SEARCH_LEN], SEARCH) {
+            continue;
+        }
+
+        for (index, byte) in REPLACE.iter().copied().enumerate() {
+            data[offset + index * 2] = byte;
+            data[offset + index * 2 + 1] = 0;
+        }
+        patched += 1;
+    }
+
+    patched
+}
+
+fn utf16le_ascii_eq_ignore_case(candidate: &[u8], expected: &[u8]) -> bool {
+    if candidate.len() != expected.len() * 2 {
+        return false;
+    }
+
+    for (index, expected) in expected.iter().copied().enumerate() {
+        let low = candidate[index * 2];
+        let high = candidate[index * 2 + 1];
+        if high != 0 || !low.eq_ignore_ascii_case(&expected) {
+            return false;
+        }
+    }
+
+    true
+}
+
 fn pointer_arg(value: usize) -> String {
     format!("0x{:x}", value)
 }
@@ -122,6 +165,7 @@ fn validate_virtual_file_argument_len(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     #[test]
     fn builds_wimboot_command_line_with_virtual_files_and_callbacks() {
@@ -196,5 +240,48 @@ mod tests {
             WimbootVirtualFile::new("boot.wim", long_source),
             Err(WimbootCommandLineError::VirtualFileArgumentTooLong)
         );
+    }
+
+    #[test]
+    fn patches_utf16_bcd_exe_paths_for_efi_boot() {
+        let mut bcd = Vec::new();
+        bcd.extend_from_slice(b"regf");
+        push_utf16le(&mut bcd, "\\Windows\\System32\\bootmgr.exe");
+        bcd.extend_from_slice(b".exe");
+        push_utf16le(&mut bcd, "\\BOOT\\BOOTSECT.EXE");
+
+        let patched = patch_bcd_for_efi(&mut bcd);
+
+        assert_eq!(patched, 2);
+        assert!(contains_utf16le(&bcd, "\\Windows\\System32\\bootmgr.efi"));
+        assert!(contains_utf16le(&bcd, "\\BOOT\\BOOTSECT.efi"));
+        assert!(bcd.windows(4).any(|window| window == b".exe"));
+    }
+
+    #[test]
+    fn leaves_bcd_without_utf16_exe_paths_unchanged() {
+        let mut bcd = b"regf plain ascii .exe".to_vec();
+        let original = bcd.clone();
+
+        assert_eq!(patch_bcd_for_efi(&mut bcd), 0);
+        assert_eq!(bcd, original);
+    }
+
+    fn push_utf16le(out: &mut Vec<u8>, value: &str) {
+        for byte in value.bytes() {
+            out.push(byte);
+            out.push(0);
+        }
+        out.extend_from_slice(&0u16.to_le_bytes());
+    }
+
+    fn contains_utf16le(data: &[u8], needle: &str) -> bool {
+        let mut encoded = Vec::new();
+        for byte in needle.bytes() {
+            encoded.push(byte);
+            encoded.push(0);
+        }
+        data.windows(encoded.len())
+            .any(|window| window == encoded.as_slice())
     }
 }

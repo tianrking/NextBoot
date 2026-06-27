@@ -551,8 +551,15 @@ impl<'a> BootManager<'a> {
             helper.data.clone(),
         ));
 
-        let bcd = self
+        let mut bcd = self
             .find_source_volume_file(WIMBOOT_BCD_CANDIDATES, WIMBOOT_COMPRESSED_BCD_CANDIDATES)?;
+        let patched = wimboot::patch_bcd_for_efi(&mut bcd.data);
+        if patched != 0 {
+            info!(
+                "Patched {} UTF-16 BCD .exe reference(s) for UEFI WIMBOOT",
+                patched
+            );
+        }
         runtime_files.push(WimbootRuntimeFile::from_memory(
             WIMBOOT_BCD_CALLBACK_PATH,
             bcd.data,
@@ -647,7 +654,7 @@ impl<'a> BootManager<'a> {
         &self,
         helper: &SourceVolumeFile,
     ) -> uefi::Result<WimbootRuntimeInputs> {
-        let (boot_wim, bcd, boot_sdi) = {
+        let (boot_wim, mut bcd, boot_sdi) = {
             let source_block_io = self
                 .bt
                 .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
@@ -659,6 +666,13 @@ impl<'a> BootManager<'a> {
                 self.find_optional_iso_file_data(&fs, WINDOWS_ISO_BOOT_SDI_CANDIDATES)?;
             (boot_wim, bcd, boot_sdi)
         };
+        let patched = wimboot::patch_bcd_for_efi(&mut bcd.data);
+        if patched != 0 {
+            info!(
+                "Patched {} UTF-16 Windows ISO BCD .exe reference(s) for UEFI WIMBOOT",
+                patched
+            );
+        }
 
         let mut runtime_files = Vec::new();
         runtime_files
