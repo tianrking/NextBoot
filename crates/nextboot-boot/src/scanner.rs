@@ -109,6 +109,7 @@ pub enum ImageFormat {
     Iso,
     Wim,
     Esd,
+    EfiExecutable,
     RawDisk,
     Vhd,
     FixedVhd,
@@ -128,6 +129,8 @@ impl ImageFormat {
             Self::Wim
         } else if lower.ends_with(".esd") {
             Self::Esd
+        } else if lower.ends_with(".efi") {
+            Self::EfiExecutable
         } else if lower.ends_with(".img") {
             Self::RawDisk
         } else if lower.ends_with(".vhd") {
@@ -154,6 +157,10 @@ impl ImageFormat {
         self == Self::Iso
     }
 
+    pub fn is_efi_executable(self) -> bool {
+        self == Self::EfiExecutable
+    }
+
     pub fn supports_virtual_disk_boot(self) -> bool {
         matches!(
             self,
@@ -175,6 +182,7 @@ impl core::fmt::Display for ImageFormat {
             ImageFormat::Iso => "ISO",
             ImageFormat::Wim => "WIM",
             ImageFormat::Esd => "ESD",
+            ImageFormat::EfiExecutable => "EFI",
             ImageFormat::RawDisk => "RAW",
             ImageFormat::Vhd => "VHD",
             ImageFormat::FixedVhd => "Fixed VHD",
@@ -249,7 +257,9 @@ impl<'a> IsoScanner<'a> {
         let mut iso_files = Vec::new();
 
         // 支持的文件扩展名
-        let extensions = [".iso", ".wim", ".img", ".vhd", ".vhdx", ".vdi", ".esd"];
+        let extensions = [
+            ".iso", ".wim", ".img", ".vhd", ".vhdx", ".vdi", ".esd", ".efi",
+        ];
 
         // 扫描常见目录
         let search_paths = [

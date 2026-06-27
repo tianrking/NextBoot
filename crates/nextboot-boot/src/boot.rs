@@ -200,6 +200,10 @@ impl<'a> BootManager<'a> {
     /// 准备并执行引导
     pub fn prepare_and_boot(&self) -> uefi::Result<()> {
         info!("Preparing to boot: {}", self.iso.path);
+        if self.iso.image_format.is_efi_executable() {
+            return self.boot_efi_executable();
+        }
+
         if !self.iso.image_format.supports_virtual_disk_boot() {
             warn!(
                 "Image format {} is recognized but not bootable yet: {}",
@@ -244,6 +248,17 @@ impl<'a> BootManager<'a> {
                 }
             }
         }
+    }
+
+    fn boot_efi_executable(&self) -> uefi::Result<()> {
+        info!("Booting selected EFI executable: {}", self.iso.path);
+        let device_path = self.handle_device_path_bytes(self.iso.volume_handle)?;
+        self.load_image_from_device_path(
+            self.iso.volume_handle,
+            &device_path,
+            &self.iso.path,
+            "selected EFI file",
+        )
     }
 
     /// 引导 Linux ISO
