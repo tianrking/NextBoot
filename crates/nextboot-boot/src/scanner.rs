@@ -33,7 +33,6 @@ use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::table::boot::{BootServices, SearchType};
 use uefi::{Handle, Identify};
 
-const MAX_SCAN_DEPTH: usize = 4;
 const VENTOY_CONFIG_PATH: &str = "/ventoy/ventoy.json";
 const VENTOY_CONFIG_MAX_SIZE: usize = 256 * 1024;
 
@@ -530,6 +529,7 @@ impl<'a> IsoScanner<'a> {
             &normalized,
             extensions,
             config,
+            config.max_search_level,
             0,
             &mut files,
         )?;
@@ -689,6 +689,7 @@ impl<'a> IsoScanner<'a> {
                 search_path,
                 extensions,
                 &config,
+                config.max_search_level,
                 0,
                 files,
             );
@@ -706,6 +707,7 @@ impl<'a> IsoScanner<'a> {
         display_path: &str,
         extensions: &[&str],
         config: &VentoyConfig,
+        max_search_level: Option<usize>,
         depth: usize,
         files: &mut Vec<IsoFile>,
     ) -> Result<(), FsError> {
@@ -719,7 +721,9 @@ impl<'a> IsoScanner<'a> {
 
             let full_path = join_display_path(&normalized, &entry.name);
             if entry.is_dir {
-                if depth >= MAX_SCAN_DEPTH || is_hidden_tree(&entry.name) {
+                if !should_descend_into_directory(depth, max_search_level)
+                    || is_hidden_tree(&entry.name)
+                {
                     continue;
                 }
                 let _ = self.scan_block_filesystem_path(
@@ -732,6 +736,7 @@ impl<'a> IsoScanner<'a> {
                     &full_path,
                     extensions,
                     config,
+                    max_search_level,
                     depth + 1,
                     files,
                 );
@@ -821,6 +826,7 @@ impl<'a> IsoScanner<'a> {
         display_path: &str,
         extensions: &[&str],
         config: &VentoyConfig,
+        max_search_level: Option<usize>,
         depth: usize,
         files: &mut Vec<IsoFile>,
     ) -> uefi::Result<()> {
@@ -834,7 +840,8 @@ impl<'a> IsoScanner<'a> {
             let full_path = join_display_path(display_path, &name);
 
             if entry.is_directory() {
-                if depth >= MAX_SCAN_DEPTH || is_hidden_tree(&name) {
+                if !should_descend_into_directory(depth, max_search_level) || is_hidden_tree(&name)
+                {
                     continue;
                 }
 
@@ -849,6 +856,7 @@ impl<'a> IsoScanner<'a> {
                         &full_path,
                         extensions,
                         config,
+                        max_search_level,
                         depth + 1,
                         files,
                     );
@@ -1472,6 +1480,10 @@ fn handle_list_contains(handles: &[Handle], needle: Handle) -> bool {
     handles
         .iter()
         .any(|handle| handle.as_ptr() == needle.as_ptr())
+}
+
+fn should_descend_into_directory(depth: usize, max_search_level: Option<usize>) -> bool {
+    max_search_level.map_or(true, |max_depth| depth < max_depth)
 }
 
 fn device_path_to_vec(device_path: &DevicePath) -> Option<Vec<u8>> {

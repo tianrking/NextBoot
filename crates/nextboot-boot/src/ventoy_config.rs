@@ -225,6 +225,7 @@ pub struct VentoyConfig {
     pub filters: VentoyFileFilters,
     pub filter_dot_underscore: bool,
     pub default_search_root: Option<String>,
+    pub max_search_level: Option<usize>,
     pub menu_timeout: Option<u32>,
     pub default_image: Option<String>,
     pub default_menu_mode: Option<u32>,
@@ -849,6 +850,10 @@ impl<'a> JsonParser<'a> {
                     match key.as_str() {
                         "VTOY_DEFAULT_SEARCH_ROOT" if !value.is_empty() => {
                             config.default_search_root = Some(value);
+                        }
+                        "VTOY_MAX_SEARCH_LEVEL" => {
+                            config.max_search_level = parse_u32_text(&value)
+                                .and_then(|level| usize::try_from(level).ok());
                         }
                         "VTOY_MENU_TIMEOUT" => {
                             config.menu_timeout = parse_u32_text(&value);
@@ -1778,6 +1783,7 @@ mod tests {
             "control": [
                 { "VTOY_FILE_FLT_WIM": "1" },
                 { "VTOY_DEFAULT_SEARCH_ROOT": "/ISO" },
+                { "VTOY_MAX_SEARCH_LEVEL": "2" },
                 { "VTOY_FILT_DOT_UNDERSCORE_FILE": "1" }
             ],
             "menu_alias": [
@@ -1791,11 +1797,25 @@ mod tests {
         assert!(config.filters.wim);
         assert!(config.filter_dot_underscore);
         assert_eq!(config.default_search_root.as_deref(), Some("/ISO"));
+        assert_eq!(config.max_search_level, Some(2));
         assert_eq!(config.image_list_mode, VentoyImageListMode::Deny);
         assert!(!config.allows_image_path("/iso/old.iso"));
         assert!(config.allows_image_path("/iso/win11.iso"));
         assert_eq!(config.menu_alias_for("/iso/WIN11.ISO"), Some("Windows 11"));
         assert!(!config.supports_image_name("boot.wim"));
+    }
+
+    #[test]
+    fn treats_max_search_level_max_as_unlimited() {
+        let json = br#"{
+            "control": [
+                { "VTOY_MAX_SEARCH_LEVEL": "max" }
+            ]
+        }"#;
+
+        let config = VentoyConfig::parse(json).expect("config");
+
+        assert_eq!(config.max_search_level, None);
     }
 
     #[test]
