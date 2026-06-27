@@ -21,6 +21,10 @@ HOST_OS="${NEXTBOOT_OSTYPE:-$OSTYPE}"
 LAYOUT="split"
 DATA_FS="exfat"
 ESP_SIZE_MB=260
+INSTALL_VENTOY_ASSETS=1
+VENTOY_ASSETS_DIR=""
+VENTOY_ASSETS_EXPLICIT=0
+VENTOY_ASSETS_RESOLVED=""
 DRY_RUN=0
 ASSUME_YES=0
 
@@ -36,6 +40,10 @@ Options:
   --layout LAYOUT   Disk layout: split or single (default: split)
   --data-fs FS      Data partition filesystem for split layout: exfat, fat32, or ntfs (default: exfat)
   --esp-size MB     ESP size for split layout in MiB (default: 260)
+  --ventoy-assets DIR
+                    Install WIMBOOT assets from DIR into /ventoy
+  --no-ventoy-assets
+                    Do not auto-install Ventoy WIMBOOT assets
   --dry-run         Print the commands without writing to the device
   -y, --yes         Skip the confirmation prompt
   -h, --help        Show this help
@@ -44,6 +52,7 @@ Examples:
   $0 list
   $0 --layout split --data-fs exfat /dev/diskX
   $0 --layout split --data-fs ntfs /dev/diskX
+  $0 --layout split --ventoy-assets ../Ventoy/INSTALL/ventoy /dev/diskX
   $0 --layout split --data-fs fat32 /dev/sdX
   $0 --layout single /dev/sdX
 USAGE
@@ -145,6 +154,61 @@ ntfs_mkfs_command() {
     fi
 }
 
+detect_ventoy_assets_dir() {
+    local candidate
+    for candidate in \
+        "${PROJECT_DIR}/../Ventoy/INSTALL/ventoy" \
+        "${PROJECT_DIR}/Ventoy/INSTALL/ventoy"
+    do
+        if [ -f "${candidate}/wimboot.x86_64.xz" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+resolve_ventoy_assets_dir() {
+    if [ "$INSTALL_VENTOY_ASSETS" -eq 0 ]; then
+        return 1
+    fi
+
+    if [ -n "$VENTOY_ASSETS_DIR" ]; then
+        [ -d "$VENTOY_ASSETS_DIR" ] || return 1
+        [ -f "${VENTOY_ASSETS_DIR}/wimboot.x86_64.xz" ] || return 1
+        printf '%s\n' "$VENTOY_ASSETS_DIR"
+        return 0
+    fi
+
+    detect_ventoy_assets_dir
+}
+
+copy_ventoy_assets() {
+    local mount_point="$1"
+    [ -n "$VENTOY_ASSETS_RESOLVED" ] || return 0
+
+    run_cmd mkdir -p "${mount_point}/ventoy"
+    run_cmd cp "${VENTOY_ASSETS_RESOLVED}/wimboot.x86_64.xz" "${mount_point}/ventoy/wimboot.x86_64.xz"
+    if [ -f "${VENTOY_ASSETS_RESOLVED}/common_bcd.xz" ]; then
+        run_cmd cp "${VENTOY_ASSETS_RESOLVED}/common_bcd.xz" "${mount_point}/ventoy/common_bcd.xz"
+    else
+        warn "common_bcd.xz was not found in ${VENTOY_ASSETS_RESOLVED}; WIMBOOT will rely on image-provided BCD files."
+    fi
+}
+
+copy_ventoy_assets_sudo() {
+    local mount_point="$1"
+    [ -n "$VENTOY_ASSETS_RESOLVED" ] || return 0
+
+    run_sudo mkdir -p "${mount_point}/ventoy"
+    run_sudo cp "${VENTOY_ASSETS_RESOLVED}/wimboot.x86_64.xz" "${mount_point}/ventoy/wimboot.x86_64.xz"
+    if [ -f "${VENTOY_ASSETS_RESOLVED}/common_bcd.xz" ]; then
+        run_sudo cp "${VENTOY_ASSETS_RESOLVED}/common_bcd.xz" "${mount_point}/ventoy/common_bcd.xz"
+    else
+        warn "common_bcd.xz was not found in ${VENTOY_ASSETS_RESOLVED}; WIMBOOT will rely on image-provided BCD files."
+    fi
+}
+
 require_linux_tools() {
     command_exists parted || die "parted is required"
     command_exists mkfs.vfat || die "mkfs.vfat is required"
@@ -225,6 +289,17 @@ parse_args() {
                 ESP_SIZE_MB="$2"
                 shift 2
                 ;;
+            --ventoy-assets)
+                [ $# -ge 2 ] || die "--ventoy-assets requires a directory"
+                VENTOY_ASSETS_DIR="$2"
+                VENTOY_ASSETS_EXPLICIT=1
+                INSTALL_VENTOY_ASSETS=1
+                shift 2
+                ;;
+            --no-ventoy-assets)
+                INSTALL_VENTOY_ASSETS=0
+                shift
+                ;;
             --dry-run)
                 DRY_RUN=1
                 shift
@@ -284,6 +359,17 @@ fi
 
 [ -f "$EFI_FILE" ] || die "EFI file not found. Run ./scripts/build.sh first."
 
+if [ "$INSTALL_VENTOY_ASSETS" -eq 1 ]; then
+    if VENTOY_ASSETS_RESOLVED="$(resolve_ventoy_assets_dir)"; then
+        :
+    elif [ "$VENTOY_ASSETS_EXPLICIT" -eq 1 ]; then
+        [ -d "$VENTOY_ASSETS_DIR" ] || die "Ventoy assets directory not found: ${VENTOY_ASSETS_DIR}"
+        die "Missing ${VENTOY_ASSETS_DIR}/wimboot.x86_64.xz"
+    else
+        warn "Ventoy WIMBOOT assets were not found; Windows WIMBOOT fallback will need /ventoy/wimboot.x86_64.xz copied later."
+    fi
+fi
+
 if [ "$DRY_RUN" -eq 0 ] && [ ! -e "$DEVICE" ]; then
     die "Device not found: ${DEVICE}"
 fi
@@ -296,6 +382,11 @@ warn "Layout: ${LAYOUT}"
 if [ "$LAYOUT" = "split" ]; then
     warn "ESP size: ${ESP_SIZE_MB} MiB"
     warn "Data filesystem: ${DATA_FS}"
+fi
+if [ -n "$VENTOY_ASSETS_RESOLVED" ]; then
+    warn "Ventoy assets: ${VENTOY_ASSETS_RESOLVED}"
+elif [ "$INSTALL_VENTOY_ASSETS" -eq 0 ]; then
+    warn "Ventoy assets: disabled"
 fi
 if [ "$DRY_RUN" -eq 1 ]; then
     note "Dry run: no commands will be executed"
@@ -404,10 +495,13 @@ if [[ "$HOST_OS" == "darwin"* ]]; then
             DATA_MOUNT="/tmp/nextboot_flash_data"
             run_sudo mkdir -p "$DATA_MOUNT"
             run_sudo ntfs-3g "$DATA_PART" "$DATA_MOUNT"
+            run_sudo mkdir -p "${DATA_MOUNT}/ISO"
+            copy_ventoy_assets_sudo "$DATA_MOUNT"
         else
             DATA_MOUNT="$(ensure_macos_mounted "$DATA_PART")"
+            run_cmd mkdir -p "${DATA_MOUNT}/ISO"
+            copy_ventoy_assets "$DATA_MOUNT"
         fi
-        run_cmd mkdir -p "${DATA_MOUNT}/ISO"
         sync
         if [ "$DATA_FS" = "ntfs" ] && command_exists ntfs-3g; then
             run_sudo umount "$DATA_MOUNT"
@@ -416,6 +510,7 @@ if [[ "$HOST_OS" == "darwin"* ]]; then
         fi
     else
         run_cmd mkdir -p "${ESP_MOUNT}/ISO"
+        copy_ventoy_assets "$ESP_MOUNT"
         sync
     fi
     run_cmd diskutil unmount "$ESP_PART"
@@ -433,10 +528,12 @@ else
         run_sudo mkdir -p "$DATA_MOUNT"
         run_sudo mount "$DATA_PART" "$DATA_MOUNT"
         run_sudo mkdir -p "${DATA_MOUNT}/ISO"
+        copy_ventoy_assets_sudo "$DATA_MOUNT"
         sync
         run_sudo umount "$DATA_MOUNT"
     else
         run_sudo mkdir -p "${ESP_MOUNT}/ISO"
+        copy_ventoy_assets_sudo "$ESP_MOUNT"
         sync
     fi
     run_sudo umount "$ESP_MOUNT"
