@@ -2,15 +2,13 @@
 //!
 //! 负责准备和执行 ISO 引导
 
-use alloc::string::String;
-use alloc::vec::Vec;
-use alloc::format;
-use alloc::boxed::Box;
-use log::{info, warn, error};
-use uefi::table::boot::BootServices;
-use uefi::Status;
 use crate::init::StorageDevice;
 use crate::scanner::{IsoFile, OsType};
+use alloc::string::String;
+use alloc::vec::Vec;
+use log::{info, warn};
+use uefi::table::boot::BootServices;
+use uefi::Status;
 
 /// 引导管理器
 pub struct BootManager<'a> {
@@ -28,6 +26,7 @@ impl<'a> BootManager<'a> {
     /// 准备并执行引导
     pub fn prepare_and_boot(&self) -> uefi::Result<()> {
         info!("Preparing to boot: {}", self.iso.path);
+        self.create_virtual_block_io()?;
 
         match self.iso.os_type {
             OsType::Windows | OsType::WinPE => self.boot_windows(),
@@ -43,7 +42,7 @@ impl<'a> BootManager<'a> {
 
     /// 引导 Linux ISO
     fn boot_linux(&self) -> uefi::Result<()> {
-        use nextboot_linux::{LinuxBootloader, LinuxBootConfig, LinuxDistro};
+        use nextboot_linux::{LinuxBootConfig, LinuxBootloader, LinuxDistro};
 
         info!("Booting Linux ISO...");
 
@@ -68,11 +67,15 @@ impl<'a> BootManager<'a> {
 
         // 加载 Kernel
         let kernel_data = self.load_file(&bootloader.config().kernel_path)?;
-        bootloader.load_kernel(kernel_data).map_err(|_| Status::LOAD_ERROR)?;
+        bootloader
+            .load_kernel(kernel_data)
+            .map_err(|_| Status::LOAD_ERROR)?;
 
         // 加载 Initrd
         let initrd_data = self.load_file(&bootloader.config().initrd_path)?;
-        bootloader.load_initrd(initrd_data).map_err(|_| Status::LOAD_ERROR)?;
+        bootloader
+            .load_initrd(initrd_data)
+            .map_err(|_| Status::LOAD_ERROR)?;
 
         // 执行引导
         info!("Starting Linux kernel...");
@@ -86,7 +89,7 @@ impl<'a> BootManager<'a> {
 
     /// 引导 Windows ISO
     fn boot_windows(&self) -> uefi::Result<()> {
-        use nextboot_windows::{WindowsBootloader, WindowsBootConfig};
+        use nextboot_windows::{WindowsBootConfig, WindowsBootloader};
 
         info!("Booting Windows ISO...");
 
@@ -103,7 +106,9 @@ impl<'a> BootManager<'a> {
 
         // 加载 bootmgfw.efi
         let bootmgfw_data = self.load_file(&bootloader.config().bootmgfw_path)?;
-        bootloader.load_bootmgfw(bootmgfw_data).map_err(|_| Status::LOAD_ERROR)?;
+        bootloader
+            .load_bootmgfw(bootmgfw_data)
+            .map_err(|_| Status::LOAD_ERROR)?;
 
         // 执行引导
         info!("Starting Windows Boot Manager...");
@@ -177,22 +182,52 @@ impl<'a> BootManager<'a> {
             OsType::Windows | OsType::WinPE => VirtualDeviceType::DvdRom,
             _ => VirtualDeviceType::HardDisk,
         };
+        let virtual_block_size = match device_type {
+            VirtualDeviceType::DvdRom => 2048,
+            _ => self.iso.block_size,
+        };
 
         // 创建配置
         let config = VirtualDeviceConfig::new(
             device_type,
             self.iso.start_lba,
             self.iso.size,
-            self.device.block_size,
-        );
+            virtual_block_size,
+        )
+        .with_physical_block_size(self.iso.block_size)
+        .with_name(&self.iso.path);
 
         // 创建虚拟 Block IO
-        let mut vbio = VirtualBlockIo::new(config);
+        let vbio = if self.iso.extents.is_empty() {
+            warn!(
+                "No extent map for {}, falling back to contiguous LBA {}",
+                self.iso.path, self.iso.start_lba
+            );
+            VirtualBlockIo::new(config)
+        } else {
+            let extents: Vec<(u64, u64, u64)> = self
+                .iso
+                .extents
+                .iter()
+                .map(|extent| {
+                    (
+                        extent.virtual_block_start,
+                        extent.physical_lba,
+                        extent.block_count,
+                    )
+                })
+                .collect();
+            VirtualBlockIo::from_file_extents(config, &extents)
+        };
 
         // 设置物理读取函数
         // vbio.set_physical_read(self.physical_read_fn());
 
-        info!("Virtual device created: {:?}", vbio.device_info());
+        info!(
+            "Virtual device created: {:?}, source extents: {}",
+            vbio.device_info(),
+            self.iso.extents.len()
+        );
 
         // TODO: 注册到 UEFI
 
@@ -264,7 +299,8 @@ pub fn allocate_boot_memory(bt: &BootServices, size: usize) -> uefi::Result<*mut
         uefi::table::boot::AllocateType::AnyPages,
         MemoryType::LOADER_DATA,
         pages,
-    ).map(|addr| addr as *mut u8)
+    )
+    .map(|addr| addr as *mut u8)
 }
 
 /// 释放引导内存
