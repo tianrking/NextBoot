@@ -10,7 +10,7 @@ use log::{info, warn};
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::udf::Udf;
 use nextboot_fs::{
-    FileAttributes as FsFileAttributes, FileInfo as FsFileInfo, FileSystem, FsError,
+    FileAttributes as FsFileAttributes, FileExtent, FileInfo as FsFileInfo, FileSystem, FsError,
 };
 use uefi::proto::unsafe_protocol;
 use uefi::table::boot::BootServices;
@@ -144,6 +144,13 @@ impl VirtualIsoFilesystem {
         match self {
             Self::Iso9660(fs) => fs.stat(path),
             Self::Udf(fs) => fs.stat(path),
+        }
+    }
+
+    pub fn file_extents(&self, path: &str) -> Result<Vec<FileExtent>, FsError> {
+        match self {
+            Self::Iso9660(fs) => fs.file_extents(path),
+            Self::Udf(fs) => fs.file_extents(path),
         }
     }
 }

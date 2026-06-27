@@ -241,6 +241,29 @@ const WIMBOOT_BOOT_SDI_CANDIDATES: &[&str] = &[
     "/ISYL/boot.sdi",
     "/WEPE/WEPE.SDI",
 ];
+const WINDOWS_ISO_BOOT_WIM_CANDIDATES: &[&str] = &[
+    "/sources/boot.wim",
+    "/boot/boot.wim",
+    "/x64/sources/boot.wim",
+    "/x86/sources/boot.wim",
+];
+const WINDOWS_ISO_BCD_CANDIDATES: &[&str] = &[
+    "/boot/bcd",
+    "/efi/microsoft/boot/bcd",
+    "/x64/boot/bcd",
+    "/x86/boot/bcd",
+];
+const WINDOWS_ISO_BOOT_SDI_CANDIDATES: &[&str] = &[
+    "/boot/boot.sdi",
+    "/x64/boot/boot.sdi",
+    "/x86/boot/boot.sdi",
+    "/2K10/FONTS/boot.sdi",
+    "/SSTR/boot.sdi",
+    "/ISPE/BOOT.SDI",
+    "/boot/uqi.sdi",
+    "/ISYL/boot.sdi",
+    "/WEPE/WEPE.SDI",
+];
 
 static WIMBOOT_RUNTIME_CONTEXT: AtomicPtr<WimbootRuntimeContext> = AtomicPtr::new(ptr::null_mut());
 
@@ -570,6 +593,110 @@ impl<'a> BootManager<'a> {
                 .map_err(|_| Status::INVALID_PARAMETER)?,
         );
         if boot_sdi {
+            virtual_files.push(
+                WimbootVirtualFile::new("boot.sdi", WIMBOOT_BOOT_SDI_CALLBACK_PATH)
+                    .map_err(|_| Status::INVALID_PARAMETER)?,
+            );
+        }
+
+        Ok(WimbootRuntimeInputs {
+            runtime_files,
+            virtual_files,
+        })
+    }
+
+    fn prepare_windows_iso_wimboot(&self) -> uefi::Result<()> {
+        if !self.iso.image_format.is_iso() {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let helper = self.load_wimboot_helper()?;
+        let inputs = self.prepare_windows_iso_wimboot_runtime_inputs(&helper)?;
+        let runtime = self.register_wimboot_runtime_files(inputs.runtime_files)?;
+        let callbacks = runtime.callbacks();
+        let load_options =
+            wimboot::build_wimboot_command_line(&inputs.virtual_files, Some(callbacks), None)
+                .map_err(|_| Status::INVALID_PARAMETER)?;
+
+        info!(
+            "Prepared Windows ISO WIMBOOT fallback for {}: {}",
+            self.iso.path, load_options
+        );
+
+        let source_device = VirtualBootDevice {
+            handle: self.iso.volume_handle,
+            device_path: self.handle_device_path_bytes(self.iso.volume_handle)?,
+        };
+
+        self.chain_load_with_options(
+            &source_device,
+            &helper.path,
+            &helper.data,
+            Some(&load_options),
+        )
+    }
+
+    fn prepare_windows_iso_wimboot_runtime_inputs(
+        &self,
+        helper: &SourceVolumeFile,
+    ) -> uefi::Result<WimbootRuntimeInputs> {
+        let (boot_wim, bcd, boot_sdi) = {
+            let source_block_io = self
+                .bt
+                .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+            let fs = self.open_virtual_iso_filesystem(&source_block_io)?;
+
+            let boot_wim = self.find_iso_file_metadata(&fs, WINDOWS_ISO_BOOT_WIM_CANDIDATES)?;
+            let bcd = self.find_iso_file_data(&fs, WINDOWS_ISO_BCD_CANDIDATES)?;
+            let boot_sdi =
+                self.find_optional_iso_file_data(&fs, WINDOWS_ISO_BOOT_SDI_CANDIDATES)?;
+            (boot_wim, bcd, boot_sdi)
+        };
+
+        let mut runtime_files = Vec::new();
+        runtime_files
+            .try_reserve_exact(if boot_sdi.is_some() { 4 } else { 3 })
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        runtime_files.push(WimbootRuntimeFile::from_mapped_segments(
+            WIMBOOT_BOOT_WIM_CALLBACK_PATH,
+            boot_wim.size,
+            boot_wim.segments,
+        )?);
+        runtime_files.push(WimbootRuntimeFile::from_memory(
+            WIMBOOT_SELF_CALLBACK_PATH,
+            helper.data.clone(),
+        ));
+        runtime_files.push(WimbootRuntimeFile::from_memory(
+            WIMBOOT_BCD_CALLBACK_PATH,
+            bcd.data,
+        ));
+        if let Some(boot_sdi) = boot_sdi {
+            runtime_files.push(WimbootRuntimeFile::from_memory(
+                WIMBOOT_BOOT_SDI_CALLBACK_PATH,
+                boot_sdi.data,
+            ));
+        }
+
+        let include_boot_sdi = runtime_files
+            .iter()
+            .any(|file| file.callback_path == WIMBOOT_BOOT_SDI_CALLBACK_PATH);
+        let mut virtual_files = Vec::new();
+        virtual_files
+            .try_reserve_exact(if include_boot_sdi { 4 } else { 3 })
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        virtual_files.push(
+            WimbootVirtualFile::new("boot.wim", WIMBOOT_BOOT_WIM_CALLBACK_PATH)
+                .map_err(|_| Status::INVALID_PARAMETER)?,
+        );
+        virtual_files.push(
+            WimbootVirtualFile::new("vtoy_wimboot", WIMBOOT_SELF_CALLBACK_PATH)
+                .map_err(|_| Status::INVALID_PARAMETER)?,
+        );
+        virtual_files.push(
+            WimbootVirtualFile::new("bcd", WIMBOOT_BCD_CALLBACK_PATH)
+                .map_err(|_| Status::INVALID_PARAMETER)?,
+        );
+        if include_boot_sdi {
             virtual_files.push(
                 WimbootVirtualFile::new("boot.sdi", WIMBOOT_BOOT_SDI_CALLBACK_PATH)
                     .map_err(|_| Status::INVALID_PARAMETER)?,
@@ -1201,7 +1328,25 @@ impl<'a> BootManager<'a> {
             ),
         }
 
-        self.try_chain_load_paths(device, generic_efi_boot_paths())
+        match self.try_chain_load_paths(device, generic_efi_boot_paths()) {
+            Ok(()) => Ok(()),
+            Err(chain_err) => {
+                warn!(
+                    "Windows default EFI chain-load paths failed with {:?}; trying WIMBOOT fallback",
+                    chain_err.status()
+                );
+                match self.prepare_windows_iso_wimboot() {
+                    Ok(()) => Ok(()),
+                    Err(wimboot_err) => {
+                        warn!(
+                            "Windows ISO WIMBOOT fallback failed with {:?}",
+                            wimboot_err.status()
+                        );
+                        Err(chain_err)
+                    }
+                }
+            }
+        }
     }
 
     /// 通用引导 (尝试链式加载)
@@ -1420,25 +1565,14 @@ impl<'a> BootManager<'a> {
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
         let fs = self.open_virtual_iso_filesystem(&source_block_io)?;
 
-        let path = normalize_iso_path(path);
-        let info = fs.stat(&path).map_err(fs_error_to_uefi_status)?;
-        if info.is_dir {
-            return Err(Status::UNSUPPORTED.into());
-        }
+        let file = self.load_iso_file_from_fs(&fs, path)?;
+        info!(
+            "Loaded {} bytes from ISO path {}",
+            file.data.len(),
+            file.path
+        );
 
-        let file_size = usize::try_from(info.size).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        let mut data = Vec::new();
-        data.try_reserve_exact(file_size)
-            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        data.resize(file_size, 0);
-
-        let read = fs
-            .read_file(&path, 0, &mut data)
-            .map_err(fs_error_to_uefi_status)?;
-        data.truncate(read);
-        info!("Loaded {} bytes from ISO path {}", read, path);
-
-        Ok(data)
+        Ok(file.data)
     }
 
     fn load_iso_text_file(&self, path: &str, max_size: usize) -> uefi::Result<String> {
@@ -1489,6 +1623,147 @@ impl<'a> BootManager<'a> {
         }
 
         Ok(None)
+    }
+
+    fn find_iso_file_metadata(
+        &self,
+        fs: &VirtualIsoFilesystem,
+        candidates: &[&str],
+    ) -> uefi::Result<IsoMappedFileMetadata> {
+        let mut last_status = Status::NOT_FOUND;
+        for path in candidates {
+            match self.iso_file_metadata(fs, path) {
+                Ok(file) => {
+                    info!(
+                        "Found ISO file {} ({} bytes, {} mapped segment(s))",
+                        file.path,
+                        file.size,
+                        file.segments.len()
+                    );
+                    return Ok(file);
+                }
+                Err(err) if err.status() == Status::NOT_FOUND => {
+                    last_status = Status::NOT_FOUND;
+                }
+                Err(err) => {
+                    last_status = err.status();
+                    warn!("ISO file candidate {} failed: {:?}", path, err.status());
+                }
+            }
+        }
+
+        Err(last_status.into())
+    }
+
+    fn find_iso_file_data(
+        &self,
+        fs: &VirtualIsoFilesystem,
+        candidates: &[&str],
+    ) -> uefi::Result<SourceVolumeFile> {
+        let mut last_status = Status::NOT_FOUND;
+        for path in candidates {
+            match self.load_iso_file_from_fs(fs, path) {
+                Ok(file) => {
+                    info!("Loaded ISO file {} ({} bytes)", file.path, file.data.len());
+                    return Ok(file);
+                }
+                Err(err) if err.status() == Status::NOT_FOUND => {
+                    last_status = Status::NOT_FOUND;
+                }
+                Err(err) => {
+                    last_status = err.status();
+                    warn!("ISO file candidate {} failed: {:?}", path, err.status());
+                }
+            }
+        }
+
+        Err(last_status.into())
+    }
+
+    fn find_optional_iso_file_data(
+        &self,
+        fs: &VirtualIsoFilesystem,
+        candidates: &[&str],
+    ) -> uefi::Result<Option<SourceVolumeFile>> {
+        let mut last_status = Status::NOT_FOUND;
+        for path in candidates {
+            match self.load_iso_file_from_fs(fs, path) {
+                Ok(file) => {
+                    info!(
+                        "Loaded optional ISO file {} ({} bytes)",
+                        file.path,
+                        file.data.len()
+                    );
+                    return Ok(Some(file));
+                }
+                Err(err) if err.status() == Status::NOT_FOUND => {
+                    last_status = Status::NOT_FOUND;
+                }
+                Err(err) => {
+                    last_status = err.status();
+                    warn!(
+                        "Optional ISO file candidate {} failed: {:?}",
+                        path,
+                        err.status()
+                    );
+                }
+            }
+        }
+
+        if last_status == Status::NOT_FOUND {
+            Ok(None)
+        } else {
+            Err(last_status.into())
+        }
+    }
+
+    fn load_iso_file_from_fs(
+        &self,
+        fs: &VirtualIsoFilesystem,
+        path: &str,
+    ) -> uefi::Result<SourceVolumeFile> {
+        let path = normalize_iso_path(path);
+        let info = fs.stat(&path).map_err(fs_error_to_uefi_status)?;
+        if info.is_dir {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let file_size = usize::try_from(info.size).map_err(|_| Status::OUT_OF_RESOURCES)?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(file_size)
+            .map_err(|_| Status::OUT_OF_RESOURCES)?;
+        data.resize(file_size, 0);
+
+        let read = fs
+            .read_file(&path, 0, &mut data)
+            .map_err(fs_error_to_uefi_status)?;
+        data.truncate(read);
+        Ok(SourceVolumeFile { path, data })
+    }
+
+    fn iso_file_metadata(
+        &self,
+        fs: &VirtualIsoFilesystem,
+        path: &str,
+    ) -> uefi::Result<IsoMappedFileMetadata> {
+        let path = normalize_iso_path(path);
+        let info = fs.stat(&path).map_err(fs_error_to_uefi_status)?;
+        if info.is_dir {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let file_extents = fs.file_extents(&path).map_err(fs_error_to_uefi_status)?;
+        let segments = self.map_iso_file_extents_to_source_segments(
+            fs.block_size(),
+            info.size,
+            &file_extents,
+        )?;
+
+        Ok(IsoMappedFileMetadata {
+            path,
+            size: info.size,
+            segments,
+        })
     }
 
     fn load_source_volume_file(&self, path: &str) -> uefi::Result<SourceVolumeFile> {
@@ -2813,6 +3088,152 @@ impl<'a> BootManager<'a> {
         Ok(vbio)
     }
 
+    fn map_iso_file_extents_to_source_segments(
+        &self,
+        iso_block_size: u32,
+        file_size: u64,
+        extents: &[FileExtent],
+    ) -> uefi::Result<Vec<WimbootMappedSegment>> {
+        if iso_block_size == 0 {
+            return Err(Status::INVALID_PARAMETER.into());
+        }
+        if file_size == 0 {
+            return Ok(Vec::new());
+        }
+        if extents.is_empty() {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let iso_block_size = u64::from(iso_block_size);
+        let mut segments = Vec::new();
+        segments
+            .try_reserve_exact(extents.len())
+            .map_err(|_| Status::OUT_OF_RESOURCES)?;
+
+        for extent in extents {
+            let file_virtual_start = extent
+                .virtual_block_start
+                .checked_mul(iso_block_size)
+                .ok_or(Status::LOAD_ERROR)?;
+            if file_virtual_start >= file_size {
+                continue;
+            }
+
+            let extent_bytes = extent
+                .block_count
+                .checked_mul(iso_block_size)
+                .ok_or(Status::LOAD_ERROR)?;
+            let byte_count = extent_bytes.min(file_size - file_virtual_start);
+            let iso_file_offset = extent
+                .physical_lba
+                .checked_mul(iso_block_size)
+                .ok_or(Status::LOAD_ERROR)?;
+
+            self.append_iso_file_range_to_source_segments(
+                &mut segments,
+                file_virtual_start,
+                iso_file_offset,
+                byte_count,
+            )?;
+        }
+
+        if segments.is_empty() {
+            Err(Status::DEVICE_ERROR.into())
+        } else {
+            Ok(segments)
+        }
+    }
+
+    fn append_iso_file_range_to_source_segments(
+        &self,
+        segments: &mut Vec<WimbootMappedSegment>,
+        virtual_start: u64,
+        iso_file_offset: u64,
+        byte_count: u64,
+    ) -> uefi::Result<()> {
+        if byte_count == 0 {
+            return Ok(());
+        }
+
+        let source_block_size = u64::from(self.iso.block_size);
+        if source_block_size == 0 {
+            return Err(Status::INVALID_PARAMETER.into());
+        }
+
+        if self.iso.extents.is_empty() {
+            let physical_offset = self
+                .iso
+                .start_lba
+                .checked_mul(source_block_size)
+                .and_then(|start| start.checked_add(iso_file_offset))
+                .ok_or(Status::LOAD_ERROR)?;
+            segments
+                .try_reserve_exact(1)
+                .map_err(|_| Status::OUT_OF_RESOURCES)?;
+            segments.push(WimbootMappedSegment {
+                virtual_offset: virtual_start,
+                physical_offset,
+                byte_count,
+            });
+            return Ok(());
+        }
+
+        let file_end = iso_file_offset
+            .checked_add(byte_count)
+            .ok_or(Status::LOAD_ERROR)?;
+        let mut cursor = iso_file_offset;
+
+        while cursor < file_end {
+            let mut mapped = false;
+            for extent in &self.iso.extents {
+                let extent_file_start = extent
+                    .virtual_block_start
+                    .checked_mul(source_block_size)
+                    .ok_or(Status::LOAD_ERROR)?;
+                let extent_bytes = extent
+                    .block_count
+                    .checked_mul(source_block_size)
+                    .ok_or(Status::LOAD_ERROR)?;
+                let extent_file_end = extent_file_start
+                    .checked_add(extent_bytes)
+                    .ok_or(Status::LOAD_ERROR)?;
+
+                if cursor < extent_file_start || cursor >= extent_file_end {
+                    continue;
+                }
+
+                let overlap_end = file_end.min(extent_file_end);
+                let overlap_len = overlap_end - cursor;
+                let segment_virtual_start = virtual_start
+                    .checked_add(cursor - iso_file_offset)
+                    .ok_or(Status::LOAD_ERROR)?;
+                let physical_offset = extent
+                    .physical_lba
+                    .checked_mul(source_block_size)
+                    .and_then(|start| start.checked_add(cursor - extent_file_start))
+                    .ok_or(Status::LOAD_ERROR)?;
+
+                segments
+                    .try_reserve_exact(1)
+                    .map_err(|_| Status::OUT_OF_RESOURCES)?;
+                segments.push(WimbootMappedSegment {
+                    virtual_offset: segment_virtual_start,
+                    physical_offset,
+                    byte_count: overlap_len,
+                });
+                cursor = overlap_end;
+                mapped = true;
+                break;
+            }
+
+            if !mapped {
+                return Err(Status::DEVICE_ERROR.into());
+            }
+        }
+
+        Ok(())
+    }
+
     fn map_image_file_range_to_physical(
         &self,
         table: &mut ByteMappingTable,
@@ -3254,6 +3675,12 @@ struct SourceVolumeFile {
     data: Vec<u8>,
 }
 
+struct IsoMappedFileMetadata {
+    path: String,
+    size: u64,
+    segments: Vec<WimbootMappedSegment>,
+}
+
 struct SourceVolumeFileMetadata {
     path: String,
     size: u64,
@@ -3391,11 +3818,19 @@ struct WimbootRuntimeFile {
     storage: WimbootRuntimeFileStorage,
 }
 
+#[derive(Clone)]
+struct WimbootMappedSegment {
+    virtual_offset: u64,
+    physical_offset: u64,
+    byte_count: u64,
+}
+
 enum WimbootRuntimeFileStorage {
     Disk {
         block_size: u32,
         extents: Vec<IsoExtent>,
     },
+    MappedBytes(Vec<WimbootMappedSegment>),
     Memory(Vec<u8>),
 }
 
@@ -3406,6 +3841,7 @@ impl WimbootRuntimeFileStorage {
                 block_size,
                 extents,
             } => read_extent_range(reader, *block_size, extents, offset, buf),
+            Self::MappedBytes(segments) => read_mapped_byte_range(reader, segments, offset, buf),
             Self::Memory(data) => {
                 let start = usize::try_from(offset).ok()?;
                 let end = start.checked_add(buf.len())?;
@@ -3447,6 +3883,22 @@ impl WimbootRuntimeFile {
                 block_size: file.block_size,
                 extents: file.extents.clone(),
             },
+        })
+    }
+
+    fn from_mapped_segments(
+        callback_path: &str,
+        size: u64,
+        segments: Vec<WimbootMappedSegment>,
+    ) -> uefi::Result<Self> {
+        if size != 0 && segments.is_empty() {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        Ok(Self {
+            callback_path: String::from(callback_path),
+            size,
+            storage: WimbootRuntimeFileStorage::MappedBytes(segments),
         })
     }
 
@@ -3511,6 +3963,45 @@ fn read_extent_range(
         read_physical_bytes(
             reader,
             block_size,
+            physical_byte,
+            &mut buf[copied..copied + read_len],
+        )?;
+
+        cursor = read_end;
+        copied += read_len;
+    }
+
+    Some(())
+}
+
+fn read_mapped_byte_range(
+    reader: &UefiPhysicalReader,
+    segments: &[WimbootMappedSegment],
+    offset: u64,
+    buf: &mut [u8],
+) -> Option<()> {
+    let end = offset.checked_add(buf.len() as u64)?;
+    let mut cursor = offset;
+    let mut copied = 0usize;
+
+    while copied < buf.len() {
+        let segment = segments.iter().find(|segment| {
+            let Some(segment_end) = segment.virtual_offset.checked_add(segment.byte_count) else {
+                return false;
+            };
+            cursor >= segment.virtual_offset && cursor < segment_end
+        })?;
+
+        let segment_end = segment.virtual_offset.checked_add(segment.byte_count)?;
+        let read_end = end.min(segment_end);
+        let read_len = usize::try_from(read_end.checked_sub(cursor)?).ok()?;
+        let physical_byte = segment
+            .physical_offset
+            .checked_add(cursor.checked_sub(segment.virtual_offset)?)?;
+
+        read_physical_bytes(
+            reader,
+            reader.block_size(),
             physical_byte,
             &mut buf[copied..copied + read_len],
         )?;
