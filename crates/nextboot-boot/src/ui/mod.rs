@@ -1,5 +1,7 @@
+mod auth;
 mod console;
 mod menu;
+mod plugin_choices;
 
 use alloc::format;
 use alloc::string::{String, ToString};
