@@ -200,6 +200,11 @@ NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B�
 `sdhci-pci` 启动，所以 SD 启动 smoke 需要显式设置 `NEXTBOOT_QEMU_SD_BOOT_SMOKE=1`
 作为实验项。
 
+真实硬件测试用 `./scripts/hardware-report.sh` 生成统一报告，并可追加
+`docs/hardware/hardware-matrix.csv`。推荐覆盖项见
+`docs/hardware-compatibility-matrix.md`，包括内置 NVMe SSD、USB SSD 盒、传统 U 盘、
+SATA SSD、SD 读卡器、512B/4K 扇区和 exFAT/NTFS/ext/UDF/XFS Data 分区组合。
+
 ### 写入 U 盘
 
 ```bash

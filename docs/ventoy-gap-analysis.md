@@ -47,9 +47,11 @@ workflows and which gaps are still worth pursuing.
 - Cross-architecture boot: current build and QEMU scripts target x86_64 UEFI.
   AArch64 UEFI support would need its own build artifact, smoke EFI, and QEMU
   firmware path.
-- Compatibility database: Ventoy has years of device reports. NextBoot needs a
-  structured hardware matrix for real SSD, NVMe enclosure, USB stick, SD reader,
-  and motherboard firmware combinations.
+- Compatibility database: Ventoy has years of device reports. NextBoot now has
+  `scripts/hardware-report.sh` and `docs/hardware-compatibility-matrix.md` to
+  collect structured rows for real SSD, NVMe enclosure, USB stick, SD reader,
+  and motherboard firmware combinations, but the matrix still needs real-world
+  entries before it can be considered mature.
 
 ## Current Priority
 
