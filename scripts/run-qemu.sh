@@ -10,6 +10,7 @@
 #   ./scripts/run-qemu.sh
 #   ./scripts/run-qemu.sh release
 #   ./scripts/run-qemu.sh --bus nvme --image ~/Downloads/ubuntu.iso
+#   ./scripts/run-qemu.sh --bus nvme --sector-size 4096 --no-run
 #   ./scripts/run-qemu.sh --bus usb --mode release --no-run
 
 set -eo pipefail
@@ -26,6 +27,8 @@ TARGET="x86_64-unknown-uefi"
 BUILD_MODE="debug"
 BUS="virtio"
 DISK_SIZE_MB=256
+DISK_SIZE_SET=0
+SECTOR_SIZE=512
 DISK_IMG=""
 NO_RUN=0
 MEMORY="1024M"
@@ -42,7 +45,9 @@ Options:
   --mode MODE        Build mode: debug or release
   --bus BUS          Storage bus: virtio, nvme, sata, usb
   --image PATH       Copy an ISO/WIM/VHD image into /ISO (repeatable)
-  --disk-size MB     GPT disk image size in MiB (default: 256)
+  --disk-size MB     GPT disk image size in MiB (default: 256, or 512 for 4K)
+  --sector-size BYTES
+                     Logical and physical disk sector size: 512 or 4096
   --disk-image PATH  Output disk image path
   --memory SIZE      QEMU guest memory (default: 1024M)
   --no-run           Create the disk image and print the QEMU command only
@@ -51,6 +56,7 @@ Options:
 Examples:
   $0 --bus nvme --image ~/Downloads/Win11.iso
   $0 release --bus sata --disk-size 4096
+  $0 --bus nvme --sector-size 4096 --no-run
   $0 --bus usb --no-run
 USAGE
 }
@@ -96,6 +102,12 @@ while [ $# -gt 0 ]; do
         --disk-size)
             [ $# -ge 2 ] || die "--disk-size requires a value"
             DISK_SIZE_MB="$2"
+            DISK_SIZE_SET=1
+            shift 2
+            ;;
+        --sector-size)
+            [ $# -ge 2 ] || die "--sector-size requires a value"
+            SECTOR_SIZE="$2"
             shift 2
             ;;
         --disk-image)
@@ -136,8 +148,21 @@ case "$DISK_SIZE_MB" in
     ''|*[!0-9]*) die "--disk-size must be an integer MiB value" ;;
 esac
 
+case "$SECTOR_SIZE" in
+    512|4096) ;;
+    *) die "--sector-size must be 512 or 4096" ;;
+esac
+
+if [ "$SECTOR_SIZE" -eq 4096 ] && [ "$DISK_SIZE_SET" -eq 0 ]; then
+    DISK_SIZE_MB=512
+fi
+
 if [ "$DISK_SIZE_MB" -lt 64 ]; then
     die "--disk-size must be at least 64 MiB"
+fi
+
+if [ "$SECTOR_SIZE" -eq 4096 ] && [ "$DISK_SIZE_MB" -lt 260 ]; then
+    die "--disk-size must be at least 260 MiB when --sector-size is 4096"
 fi
 
 EFI_FILE="${PROJECT_DIR}/target/${TARGET}/${BUILD_MODE}/nextboot-boot.efi"
@@ -159,21 +184,23 @@ echo -e "${GREEN}NextBoot QEMU Test${NC}"
 echo "=================="
 info "EFI file: ${EFI_FILE}"
 info "Storage bus: ${BUS}"
+info "Sector size: ${SECTOR_SIZE}"
 info "Disk image: ${DISK_IMG}"
 
 require_command python3 "python3 is required to create the GPT disk image"
 
-SECTOR_SIZE=512
-PART_START_LBA=2048
+PART_START_LBA=$((1024 * 1024 / SECTOR_SIZE))
+GPT_ENTRY_ARRAY_BYTES=$((128 * 128))
+GPT_ENTRY_SECTORS=$(((GPT_ENTRY_ARRAY_BYTES + SECTOR_SIZE - 1) / SECTOR_SIZE))
 TOTAL_SECTORS=$((DISK_SIZE_MB * 1024 * 1024 / SECTOR_SIZE))
-PART_SECTORS=$((TOTAL_SECTORS - PART_START_LBA - 33))
+PART_SECTORS=$((TOTAL_SECTORS - PART_START_LBA - GPT_ENTRY_SECTORS - 1))
 
 if [ "$PART_SECTORS" -le 0 ]; then
     die "Disk image is too small for GPT and FAT32 partition"
 fi
 
 warn "Creating GPT/FAT32 test disk image..."
-PY_ARGS=("$DISK_IMG" "$DISK_SIZE_MB" "$PART_START_LBA" "$EFI_FILE")
+PY_ARGS=("$DISK_IMG" "$DISK_SIZE_MB" "$PART_START_LBA" "$SECTOR_SIZE" "$EFI_FILE")
 if [ "${#IMAGES[@]}" -gt 0 ]; then
     PY_ARGS+=("${IMAGES[@]}")
 fi
@@ -189,16 +216,27 @@ import zlib
 path = sys.argv[1]
 size_mb = int(sys.argv[2])
 part_start_lba = int(sys.argv[3])
-efi_file = sys.argv[4]
-image_files = sys.argv[5:]
-sector_size = 512
-total_sectors = size_mb * 1024 * 1024 // sector_size
+sector_size = int(sys.argv[4])
+efi_file = sys.argv[5]
+image_files = sys.argv[6:]
+if sector_size not in (512, 4096):
+    raise SystemExit("sector size must be 512 or 4096")
+total_bytes = size_mb * 1024 * 1024
+if total_bytes % sector_size != 0:
+    raise SystemExit("disk size must be aligned to the sector size")
+total_sectors = total_bytes // sector_size
 last_lba = total_sectors - 1
-part_end_lba = last_lba - 33
+entry_count = 128
+entry_size = 128
+entry_array_sectors = math.ceil(entry_count * entry_size / sector_size)
+primary_entries_lba = 2
+first_usable_lba = primary_entries_lba + entry_array_sectors
+backup_entries_lba = last_lba - entry_array_sectors
+part_end_lba = backup_entries_lba - 1
 part_sectors = part_end_lba - part_start_lba + 1
 partition_offset = part_start_lba * sector_size
 
-if part_start_lba >= part_end_lba:
+if part_start_lba < first_usable_lba or part_start_lba >= part_end_lba:
     raise SystemExit("disk image is too small")
 
 def short_name_checksum(name11):
@@ -379,8 +417,6 @@ with open(path, "wb") as f:
     f.seek(0)
     f.write(mbr)
 
-    entry_count = 128
-    entry_size = 128
     entries = bytearray(entry_count * entry_size)
     name = "NEXBOOT".encode("utf-16le")
     entry = bytearray(entry_size)
@@ -399,7 +435,7 @@ with open(path, "wb") as f:
         header[12:16] = struct.pack("<I", 92)
         header[24:32] = struct.pack("<Q", current_lba)
         header[32:40] = struct.pack("<Q", backup_lba)
-        header[40:48] = struct.pack("<Q", 34)
+        header[40:48] = struct.pack("<Q", first_usable_lba)
         header[48:56] = struct.pack("<Q", part_end_lba)
         header[56:72] = disk_guid
         header[72:80] = struct.pack("<Q", entries_lba)
@@ -410,8 +446,6 @@ with open(path, "wb") as f:
         header[16:20] = struct.pack("<I", crc)
         return header
 
-    primary_entries_lba = 2
-    backup_entries_lba = last_lba - 32
     f.seek(primary_entries_lba * sector_size)
     f.write(entries)
     f.seek(backup_entries_lba * sector_size)
@@ -510,6 +544,11 @@ PY
 
 info "Disk image created: ${DISK_IMG}"
 
+DEVICE_BLOCK_OPTS=""
+if [ "$SECTOR_SIZE" -ne 512 ]; then
+    DEVICE_BLOCK_OPTS=",logical_block_size=${SECTOR_SIZE},physical_block_size=${SECTOR_SIZE}"
+fi
+
 QEMU_OPTS=(
     -machine q35,accel=tcg
     -m "$MEMORY"
@@ -544,27 +583,27 @@ case "$BUS" in
     virtio)
         QEMU_OPTS+=(
             -drive "if=none,id=nextboot_disk,format=raw,file=${DISK_IMG}"
-            -device "virtio-blk-pci,drive=nextboot_disk,bootindex=1"
+            -device "virtio-blk-pci,drive=nextboot_disk,bootindex=1${DEVICE_BLOCK_OPTS}"
         )
         ;;
     nvme)
         QEMU_OPTS+=(
             -drive "if=none,id=nextboot_disk,format=raw,file=${DISK_IMG}"
-            -device "nvme,drive=nextboot_disk,serial=NEXTBOOT0,bootindex=1"
+            -device "nvme,drive=nextboot_disk,serial=NEXTBOOT0,bootindex=1${DEVICE_BLOCK_OPTS}"
         )
         ;;
     sata)
         QEMU_OPTS+=(
             -device "ahci,id=ahci0"
             -drive "if=none,id=nextboot_disk,format=raw,file=${DISK_IMG}"
-            -device "ide-hd,drive=nextboot_disk,bus=ahci0.0,bootindex=1"
+            -device "ide-hd,drive=nextboot_disk,bus=ahci0.0,bootindex=1${DEVICE_BLOCK_OPTS}"
         )
         ;;
     usb)
         QEMU_OPTS+=(
             -device "qemu-xhci,id=xhci"
             -drive "if=none,id=nextboot_disk,format=raw,file=${DISK_IMG}"
-            -device "usb-storage,drive=nextboot_disk,bootindex=1"
+            -device "usb-storage,drive=nextboot_disk,bootindex=1${DEVICE_BLOCK_OPTS}"
         )
         ;;
 esac

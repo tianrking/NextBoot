@@ -98,12 +98,17 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 # 用 NVMe 固定盘路径测试，并把 ISO 复制进 /ISO
 ./scripts/run-qemu.sh --bus nvme --image ~/Downloads/ubuntu.iso
 
+# 用 4K Native NVMe 固定盘路径测试
+./scripts/run-qemu.sh --bus nvme --sector-size 4096 --no-run
+
 # 只生成 GPT/FAT32 测试盘，不启动虚拟机
 ./scripts/run-qemu.sh --bus sata --no-run
 ```
 
 `run-qemu.sh` 会直接创建 GPT/FAT32 磁盘镜像，并支持 `virtio`、`nvme`、`sata`、
-`usb` 四种 QEMU 存储路径，用来覆盖固定盘和可移动盘的启动差异。
+`usb` 四种 QEMU 存储路径，用来覆盖固定盘和可移动盘的启动差异。`--sector-size
+4096` 会生成 4K Native 测试盘，并让 QEMU 设备暴露 4096B logical/physical block
+size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异。
 
 ### 写入 U 盘
 
