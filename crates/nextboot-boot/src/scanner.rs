@@ -19,7 +19,6 @@ use alloc::vec::Vec;
 use core::ptr::{self, NonNull};
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::fat32::Fat32;
-use nextboot_fs::gpt::parse_mbr;
 use nextboot_fs::iso9660::{detect_udf_volume, read_efi_eltorito_boot_info, ElToritoBootInfo};
 use nextboot_fs::ntfs::Ntfs;
 use nextboot_fs::{detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError};
@@ -37,6 +36,11 @@ use uefi::{Handle, Identify};
 const VENTOY_CONFIG_PATH: &str = "/ventoy/ventoy.json";
 const VENTOY_CONFIG_MAX_SIZE: usize = 256 * 1024;
 const PARTITION_TABLE_SCAN_BYTES: usize = 256 * 1024;
+const MBR_PARTITION_TABLE_OFFSET: usize = 0x1be;
+const MBR_PARTITION_ENTRY_SIZE: usize = 16;
+const MBR_PRIMARY_PARTITION_COUNT: usize = 4;
+const MBR_LOGICAL_PARTITION_NUMBER_BASE: u32 = 5;
+const MBR_MAX_LOGICAL_PARTITIONS: usize = 128;
 
 /// ISO 文件信息
 #[derive(Debug, Clone)]
@@ -229,6 +233,13 @@ impl PartitionRange {
     fn matches(self, start_lba: u64, block_count: u64) -> bool {
         self.start_lba == start_lba && self.block_count == block_count
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MbrPartitionEntry {
+    partition_type: u8,
+    start_lba: u32,
+    total_sectors: u32,
 }
 
 /// 可启动镜像格式。
@@ -1715,7 +1726,7 @@ fn discover_partition_candidates(
     if let Some(partitions) = discover_gpt_partitions(shared.clone(), first_block) {
         return partitions;
     }
-    discover_mbr_partitions(first_block)
+    discover_mbr_partitions(shared, first_block)
 }
 
 fn discover_gpt_partitions(
@@ -1789,12 +1800,116 @@ fn discover_gpt_partitions(
     Some(out)
 }
 
-fn discover_mbr_partitions(first_block: &[u8]) -> Vec<PartitionCandidate> {
+fn discover_mbr_partitions(
+    shared: nextboot_fs::SharedBlockIo,
+    first_block: &[u8],
+) -> Vec<PartitionCandidate> {
     let mut out = Vec::new();
-    let Some(partitions) = parse_mbr(first_block) else {
+    if !has_mbr_signature(first_block) {
         return out;
-    };
-    for (index, partition) in partitions.iter().enumerate() {
+    }
+
+    let mut extended_ranges = Vec::new();
+    for index in 0..MBR_PRIMARY_PARTITION_COUNT {
+        let Some(partition) = parse_mbr_partition(first_block, index) else {
+            continue;
+        };
+        if partition.partition_type == 0xee
+            || partition.start_lba == 0
+            || partition.total_sectors == 0
+        {
+            continue;
+        }
+
+        if is_extended_mbr_partition(partition.partition_type) {
+            if extended_ranges.try_reserve_exact(1).is_err() {
+                continue;
+            }
+            extended_ranges.push(PartitionRange {
+                start_lba: u64::from(partition.start_lba),
+                block_count: u64::from(partition.total_sectors),
+            });
+            continue;
+        }
+
+        if !push_mbr_partition_candidate(
+            &mut out,
+            u32::try_from(index + 1).unwrap_or(u32::MAX),
+            u64::from(partition.start_lba),
+            u64::from(partition.total_sectors),
+        ) {
+            break;
+        }
+    }
+
+    let mut logical_number = MBR_LOGICAL_PARTITION_NUMBER_BASE;
+    for extended in extended_ranges {
+        discover_mbr_logical_partitions(&shared, extended, &mut out, &mut logical_number);
+    }
+
+    out
+}
+
+fn discover_mbr_logical_partitions(
+    shared: &nextboot_fs::SharedBlockIo,
+    extended: PartitionRange,
+    out: &mut Vec<PartitionCandidate>,
+    logical_number: &mut u32,
+) {
+    if extended.block_count == 0 || !range_contains_lba(extended, extended.start_lba) {
+        return;
+    }
+
+    let mut visited = Vec::new();
+    let mut current_ebr_lba = extended.start_lba;
+
+    for _ in 0..MBR_MAX_LOGICAL_PARTITIONS {
+        if current_ebr_lba >= shared.total_blocks()
+            || !range_contains_lba(extended, current_ebr_lba)
+            || visited.iter().any(|lba| *lba == current_ebr_lba)
+        {
+            break;
+        }
+        if visited.try_reserve_exact(1).is_err() {
+            break;
+        }
+        visited.push(current_ebr_lba);
+
+        let Some(ebr) = read_one_block(shared, current_ebr_lba) else {
+            break;
+        };
+        if !has_mbr_signature(&ebr) {
+            break;
+        }
+
+        if let Some(logical) = find_logical_mbr_partition(&ebr) {
+            if let Some(start_lba) = current_ebr_lba.checked_add(u64::from(logical.start_lba)) {
+                let block_count = u64::from(logical.total_sectors);
+                if range_contains_extent(extended, start_lba, block_count)
+                    && range_fits_disk(start_lba, block_count, shared.total_blocks())
+                {
+                    if !push_mbr_partition_candidate(out, *logical_number, start_lba, block_count) {
+                        return;
+                    }
+                    *logical_number = (*logical_number).saturating_add(1);
+                }
+            }
+        }
+
+        let Some(next_ebr_lba) =
+            find_next_ebr_lba(&ebr, extended, current_ebr_lba, shared.total_blocks())
+        else {
+            break;
+        };
+        current_ebr_lba = next_ebr_lba;
+    }
+}
+
+fn find_logical_mbr_partition(block: &[u8]) -> Option<MbrPartitionEntry> {
+    for index in 0..MBR_PRIMARY_PARTITION_COUNT {
+        let Some(partition) = parse_mbr_partition(block, index) else {
+            continue;
+        };
         if partition.partition_type == 0xee
             || is_extended_mbr_partition(partition.partition_type)
             || partition.start_lba == 0
@@ -1802,21 +1917,193 @@ fn discover_mbr_partitions(first_block: &[u8]) -> Vec<PartitionCandidate> {
         {
             continue;
         }
-        if out.try_reserve_exact(1).is_err() {
-            break;
-        }
-        out.push(PartitionCandidate {
-            number: u32::try_from(index + 1).unwrap_or(u32::MAX),
-            start_lba: u64::from(partition.start_lba),
-            block_count: u64::from(partition.total_sectors),
-            format: PartitionFormat::Mbr,
-        });
+        return Some(partition);
     }
-    out
+    None
+}
+
+fn find_next_ebr_lba(
+    block: &[u8],
+    extended: PartitionRange,
+    current_ebr_lba: u64,
+    total_blocks: u64,
+) -> Option<u64> {
+    for index in 0..MBR_PRIMARY_PARTITION_COUNT {
+        let Some(partition) = parse_mbr_partition(block, index) else {
+            continue;
+        };
+        if !is_extended_mbr_partition(partition.partition_type)
+            || partition.start_lba == 0
+            || partition.total_sectors == 0
+        {
+            continue;
+        }
+        let next_ebr_lba = extended
+            .start_lba
+            .checked_add(u64::from(partition.start_lba))?;
+        if next_ebr_lba == current_ebr_lba
+            || next_ebr_lba >= total_blocks
+            || !range_contains_lba(extended, next_ebr_lba)
+        {
+            continue;
+        }
+        return Some(next_ebr_lba);
+    }
+    None
+}
+
+fn parse_mbr_partition(block: &[u8], index: usize) -> Option<MbrPartitionEntry> {
+    if index >= MBR_PRIMARY_PARTITION_COUNT || !has_mbr_signature(block) {
+        return None;
+    }
+    let offset =
+        MBR_PARTITION_TABLE_OFFSET.checked_add(index.checked_mul(MBR_PARTITION_ENTRY_SIZE)?)?;
+    let partition_type = block.get(offset + 4).copied()?;
+    if partition_type == 0 {
+        return None;
+    }
+    Some(MbrPartitionEntry {
+        partition_type,
+        start_lba: read_le_u32(block, offset + 8)?,
+        total_sectors: read_le_u32(block, offset + 12)?,
+    })
+}
+
+fn push_mbr_partition_candidate(
+    out: &mut Vec<PartitionCandidate>,
+    number: u32,
+    start_lba: u64,
+    block_count: u64,
+) -> bool {
+    if out.try_reserve_exact(1).is_err() {
+        return false;
+    }
+    out.push(PartitionCandidate {
+        number,
+        start_lba,
+        block_count,
+        format: PartitionFormat::Mbr,
+    });
+    true
+}
+
+fn read_one_block(shared: &nextboot_fs::SharedBlockIo, lba: u64) -> Option<Vec<u8>> {
+    if lba >= shared.total_blocks() {
+        return None;
+    }
+    let mut bytes = alloc_buffer_for_block(shared.block_size()).ok()?;
+    shared.read_blocks(lba, &mut bytes).ok()?;
+    Some(bytes)
 }
 
 fn is_extended_mbr_partition(partition_type: u8) -> bool {
     matches!(partition_type, 0x05 | 0x0f | 0x85)
+}
+
+fn range_contains_lba(range: PartitionRange, lba: u64) -> bool {
+    range.block_count != 0 && lba >= range.start_lba && lba - range.start_lba < range.block_count
+}
+
+fn range_contains_extent(range: PartitionRange, start_lba: u64, block_count: u64) -> bool {
+    if block_count == 0 || start_lba < range.start_lba {
+        return false;
+    }
+    let Some(end_lba) = start_lba.checked_add(block_count) else {
+        return false;
+    };
+    let Some(range_end_lba) = range.start_lba.checked_add(range.block_count) else {
+        return false;
+    };
+    end_lba <= range_end_lba
+}
+
+fn range_fits_disk(start_lba: u64, block_count: u64, total_blocks: u64) -> bool {
+    block_count != 0
+        && start_lba
+            .checked_add(block_count)
+            .map_or(false, |end_lba| end_lba <= total_blocks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MemoryBlockIo {
+        blocks: Vec<[u8; 512]>,
+    }
+
+    impl MemoryBlockIo {
+        fn new(block_count: usize) -> Self {
+            let mut blocks = Vec::new();
+            blocks.resize(block_count, [0; 512]);
+            Self { blocks }
+        }
+    }
+
+    impl BlockIoOps for MemoryBlockIo {
+        fn block_size(&self) -> u32 {
+            512
+        }
+
+        fn total_blocks(&self) -> u64 {
+            self.blocks.len() as u64
+        }
+
+        fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
+            if buf.is_empty() || buf.len() % 512 != 0 {
+                return Err(FsError::InvalidArgument);
+            }
+            let start = usize::try_from(lba).map_err(|_| FsError::ReadError)?;
+            let block_count = buf.len() / 512;
+            let end = start.checked_add(block_count).ok_or(FsError::ReadError)?;
+            let blocks = self.blocks.get(start..end).ok_or(FsError::ReadError)?;
+            for (chunk, block) in buf.chunks_exact_mut(512).zip(blocks.iter()) {
+                chunk.copy_from_slice(block);
+            }
+            Ok(())
+        }
+    }
+
+    fn write_mbr_entry(
+        block: &mut [u8; 512],
+        index: usize,
+        partition_type: u8,
+        start_lba: u32,
+        total_sectors: u32,
+    ) {
+        block[510] = 0x55;
+        block[511] = 0xaa;
+        let offset = MBR_PARTITION_TABLE_OFFSET + index * MBR_PARTITION_ENTRY_SIZE;
+        block[offset + 4] = partition_type;
+        block[offset + 8..offset + 12].copy_from_slice(&start_lba.to_le_bytes());
+        block[offset + 12..offset + 16].copy_from_slice(&total_sectors.to_le_bytes());
+    }
+
+    #[test]
+    fn discovers_mbr_logical_partitions_from_ebr_chain() {
+        let mut disk = MemoryBlockIo::new(32_000);
+        write_mbr_entry(&mut disk.blocks[0], 1, 0x07, 2048, 4096);
+        write_mbr_entry(&mut disk.blocks[0], 2, 0x0f, 10_000, 10_000);
+        write_mbr_entry(&mut disk.blocks[10_000], 0, 0x07, 63, 1000);
+        write_mbr_entry(&mut disk.blocks[10_000], 1, 0x05, 2000, 8000);
+        write_mbr_entry(&mut disk.blocks[12_000], 0, 0x0b, 128, 500);
+
+        let first_block = disk.blocks[0];
+        let shared: nextboot_fs::SharedBlockIo = Rc::new(disk);
+        let partitions = discover_mbr_partitions(shared, &first_block);
+
+        assert_eq!(partitions.len(), 3);
+        assert_eq!(partitions[0].number, 2);
+        assert_eq!(partitions[0].start_lba, 2048);
+        assert_eq!(partitions[0].block_count, 4096);
+        assert_eq!(partitions[0].format, PartitionFormat::Mbr);
+        assert_eq!(partitions[1].number, 5);
+        assert_eq!(partitions[1].start_lba, 10_063);
+        assert_eq!(partitions[1].block_count, 1000);
+        assert_eq!(partitions[2].number, 6);
+        assert_eq!(partitions[2].start_lba, 12_128);
+        assert_eq!(partitions[2].block_count, 500);
+    }
 }
 
 fn has_mbr_signature(block: &[u8]) -> bool {
