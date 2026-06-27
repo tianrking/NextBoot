@@ -122,6 +122,9 @@ impl VentoyImagePlugin {
 pub struct VentoyConfig {
     pub filters: VentoyFileFilters,
     pub default_search_root: Option<String>,
+    pub menu_timeout: Option<u32>,
+    pub default_image: Option<String>,
+    pub default_menu_mode: Option<u32>,
     pub image_list_mode: VentoyImageListMode,
     pub image_list: Vec<String>,
     pub menu_aliases: Vec<VentoyMenuAlias>,
@@ -215,6 +218,12 @@ impl VentoyConfig {
             .iter()
             .find(|entry| path_pattern_eq(entry.image.as_str(), path))
             .map(|entry| entry.alias.as_str())
+    }
+
+    pub fn default_image_matches(&self, path: &str) -> bool {
+        self.default_image
+            .as_ref()
+            .is_some_and(|default| path_pattern_eq(default.as_str(), path))
     }
 
     pub fn image_plugin_for(&self, path: &str) -> Option<VentoyImagePlugin> {
@@ -341,8 +350,43 @@ fn clean_plugin_path(path: String) -> Option<String> {
     is_absolute_config_path(&path).then(|| normalize_config_path(&path))
 }
 
+fn clean_default_image_path(path: &str) -> Option<String> {
+    let path = strip_default_image_hotkey(path).trim();
+    clean_plugin_path(path.to_string())
+}
+
+fn strip_default_image_hotkey(path: &str) -> &str {
+    let trimmed = path.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() > 3
+        && matches!(bytes[0], b'F' | b'f')
+        && matches!(bytes[1], b'2'..=b'9')
+        && bytes[2] == b'>'
+    {
+        &trimmed[3..]
+    } else {
+        trimmed
+    }
+}
+
 fn is_absolute_config_path(path: &str) -> bool {
     path.starts_with('/') || path.starts_with('\\')
+}
+
+fn parse_u32_text(text: &str) -> Option<u32> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut value = 0u32;
+    for byte in trimmed.bytes() {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add(u32::from(byte - b'0'))?;
+    }
+    Some(value)
 }
 
 struct JsonParser<'a> {
@@ -433,8 +477,20 @@ impl<'a> JsonParser<'a> {
                 self.expect(b':')?;
                 if let Some(value) = self.parse_optional_string()? {
                     config.filters.set_flag(key.as_str(), value == "1");
-                    if key == "VTOY_DEFAULT_SEARCH_ROOT" && !value.is_empty() {
-                        config.default_search_root = Some(value);
+                    match key.as_str() {
+                        "VTOY_DEFAULT_SEARCH_ROOT" if !value.is_empty() => {
+                            config.default_search_root = Some(value);
+                        }
+                        "VTOY_MENU_TIMEOUT" => {
+                            config.menu_timeout = parse_u32_text(&value);
+                        }
+                        "VTOY_DEFAULT_IMAGE" => {
+                            config.default_image = clean_default_image_path(&value);
+                        }
+                        "VTOY_DEFAULT_MENU_MODE" => {
+                            config.default_menu_mode = parse_u32_text(&value);
+                        }
+                        _ => {}
                     }
                 } else {
                     self.skip_value()?;
@@ -1094,6 +1150,25 @@ mod tests {
         assert!(config.allows_image_path("/iso/win11.iso"));
         assert_eq!(config.menu_alias_for("/iso/WIN11.ISO"), Some("Windows 11"));
         assert!(!config.supports_image_name("boot.wim"));
+    }
+
+    #[test]
+    fn parses_menu_default_controls() {
+        let json = br#"{
+            "control": [
+                { "VTOY_MENU_TIMEOUT": "8" },
+                { "VTOY_DEFAULT_IMAGE": "F4>\\ISO\\Win11.iso" },
+                { "VTOY_DEFAULT_MENU_MODE": "1" }
+            ]
+        }"#;
+
+        let config = VentoyConfig::parse(json).expect("config");
+
+        assert_eq!(config.menu_timeout, Some(8));
+        assert_eq!(config.default_image.as_deref(), Some("/ISO/Win11.iso"));
+        assert_eq!(config.default_menu_mode, Some(1));
+        assert!(config.default_image_matches("/iso/win11.iso"));
+        assert!(!config.default_image_matches("/iso/ubuntu.iso"));
     }
 
     #[test]

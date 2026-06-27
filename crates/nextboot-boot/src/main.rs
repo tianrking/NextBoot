@@ -217,25 +217,37 @@ fn show_menu<'a>(
         })
         .collect();
 
+    let default_selection = default_menu_selection(iso_files);
+    let menu_timeout = menu_timeout_for_selection(iso_files, default_selection);
     let mut state = MenuState::new(items);
+    state.selected = default_selection.min(state.items.len().saturating_sub(1));
     let config = MenuConfig {
         title: String::from("NextBoot"),
+        timeout: menu_timeout.map(u64::from),
+        default_selection,
         ..Default::default()
     };
 
     // 简化的菜单循环
+    let mut active_timeout = config.timeout;
     loop {
         // 显示菜单
-        display_menu(st, &state, &config)?;
+        display_menu(st, &state, &config, active_timeout)?;
 
         // 等待输入
-        let input = wait_for_key(st);
+        let input = match wait_for_key_or_timeout(st, active_timeout) {
+            Some(input) => input,
+            None => {
+                return Ok(state.selected_item().map(|_| &iso_files[state.selected]));
+            }
+        };
+        active_timeout = None;
 
         match input {
             Input::Up => state.move_up(),
             Input::Down => state.move_down(),
             Input::Enter => {
-                if let Some(item) = state.selected_item() {
+                if state.selected_item().is_some() {
                     // 查找对应的 ISO 文件
                     let idx = state.selected;
                     return Ok(Some(&iso_files[idx]));
@@ -245,6 +257,23 @@ fn show_menu<'a>(
             _ => {}
         }
     }
+}
+
+fn default_menu_selection(iso_files: &[scanner::IsoFile]) -> usize {
+    iso_files
+        .iter()
+        .position(|iso| iso.ventoy_default_image)
+        .unwrap_or(0)
+}
+
+fn menu_timeout_for_selection(
+    iso_files: &[scanner::IsoFile],
+    default_selection: usize,
+) -> Option<u32> {
+    iso_files
+        .get(default_selection)
+        .and_then(|iso| iso.ventoy_menu_timeout)
+        .or_else(|| iso_files.iter().find_map(|iso| iso.ventoy_menu_timeout))
 }
 
 fn has_duplicate_filename(iso_files: &[scanner::IsoFile], filename: &str) -> bool {
@@ -260,6 +289,7 @@ fn display_menu(
     st: &mut SystemTable<Boot>,
     state: &MenuState,
     config: &MenuConfig,
+    active_timeout: Option<u64>,
 ) -> uefi::Result<()> {
     let stdout = st.stdout();
 
@@ -291,7 +321,17 @@ fn display_menu(
 
     // 显示帮助
     output_text(stdout, "\r\n  ════════════════════════════════════════\r\n")?;
-    output_text(stdout, "  ↑↓: Select  Enter: Boot  Esc: Exit\r\n")?;
+    if let Some(timeout) = active_timeout {
+        output_text(
+            stdout,
+            &format!(
+                "  ↑↓: Select  Enter: Boot  Esc: Exit  Auto boot in {}s\r\n",
+                timeout
+            ),
+        )?;
+    } else {
+        output_text(stdout, "  ↑↓: Select  Enter: Boot  Esc: Exit\r\n")?;
+    }
 
     Ok(())
 }
@@ -321,8 +361,6 @@ fn show_error(st: &mut SystemTable<Boot>, msg: &str) {
 
 /// 等待按键
 fn wait_for_key(st: &mut SystemTable<Boot>) -> nextboot_menu::Input {
-    use nextboot_menu::Input;
-
     loop {
         if let Some(event) = st.stdin().wait_for_key_event() {
             let mut events = [event];
@@ -334,16 +372,79 @@ fn wait_for_key(st: &mut SystemTable<Boot>) -> nextboot_menu::Input {
             {
                 continue;
             }
-            if let Ok(Some(key)) = st.stdin().read_key() {
-                match key {
-                    uefi::proto::console::text::Key::Special(sc) => {
-                        return Input::from_uefi_key(sc.0, None);
-                    }
-                    uefi::proto::console::text::Key::Printable(c) => {
-                        return Input::from_uefi_key(0, Some(char::from(c)));
-                    }
-                }
+            if let Some(input) = read_input_key(st) {
+                return input;
             }
+        }
+    }
+}
+
+fn wait_for_key_or_timeout(
+    st: &mut SystemTable<Boot>,
+    timeout_seconds: Option<u64>,
+) -> Option<nextboot_menu::Input> {
+    use uefi::table::boot::{EventType, TimerTrigger, Tpl};
+
+    let Some(seconds) = timeout_seconds else {
+        return Some(wait_for_key(st));
+    };
+    if seconds == 0 {
+        return None;
+    }
+
+    let Some(key_event) = st.stdin().wait_for_key_event() else {
+        return Some(wait_for_key(st));
+    };
+    let timer_event = match unsafe {
+        st.boot_services()
+            .create_event(EventType::TIMER, Tpl::APPLICATION, None, None)
+    } {
+        Ok(event) => event,
+        Err(_) => return Some(wait_for_key(st)),
+    };
+
+    let timer_ticks = seconds.saturating_mul(10_000_000);
+    if st
+        .boot_services()
+        .set_timer(&timer_event, TimerTrigger::Relative(timer_ticks))
+        .is_err()
+    {
+        let _ = st.boot_services().close_event(timer_event);
+        return Some(wait_for_key(st));
+    }
+
+    let mut events = [key_event, timer_event];
+    let signaled = st
+        .boot_services()
+        .wait_for_event(&mut events)
+        .discard_errdata()
+        .ok();
+    let (input, fallback_to_key_wait) = match signaled {
+        Some(0) => {
+            let input = read_input_key(st);
+            let fallback = input.is_none();
+            (input, fallback)
+        }
+        Some(1) => (None, false),
+        _ => (None, true),
+    };
+    let [_, timer_event] = events;
+    let _ = st.boot_services().close_event(timer_event);
+    if fallback_to_key_wait {
+        Some(wait_for_key(st))
+    } else {
+        input
+    }
+}
+
+fn read_input_key(st: &mut SystemTable<Boot>) -> Option<nextboot_menu::Input> {
+    use nextboot_menu::Input;
+
+    let key = st.stdin().read_key().ok().flatten()?;
+    match key {
+        uefi::proto::console::text::Key::Special(sc) => Some(Input::from_uefi_key(sc.0, None)),
+        uefi::proto::console::text::Key::Printable(c) => {
+            Some(Input::from_uefi_key(0, Some(char::from(c))))
         }
     }
 }

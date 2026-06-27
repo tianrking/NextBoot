@@ -43,6 +43,10 @@ pub struct IsoFile {
     pub path: String,
     /// Ventoy menu_alias 插件提供的显示名。
     pub menu_alias: Option<String>,
+    /// Ventoy control.VTOY_DEFAULT_IMAGE 是否指向该镜像。
+    pub ventoy_default_image: bool,
+    /// Ventoy control.VTOY_MENU_TIMEOUT 为该卷菜单设置的自动启动超时。
+    pub ventoy_menu_timeout: Option<u32>,
     /// Ventoy 启动相关插件为该镜像匹配出的配置。
     pub ventoy_plugin: Option<VentoyImagePlugin>,
     /// 文件大小 (字节)
@@ -658,6 +662,8 @@ impl<'a> IsoScanner<'a> {
                 files.push(IsoFile {
                     path: full_path.clone(),
                     menu_alias: config.menu_alias_for(&full_path).map(ToString::to_string),
+                    ventoy_default_image: config.default_image_matches(&full_path),
+                    ventoy_menu_timeout: config.menu_timeout,
                     ventoy_plugin: config.image_plugin_for(&full_path),
                     size: entry.size,
                     virtual_size: metadata.virtual_size,
@@ -759,6 +765,8 @@ impl<'a> IsoScanner<'a> {
                 files.push(IsoFile {
                     path: full_path.clone(),
                     menu_alias: config.menu_alias_for(&full_path).map(ToString::to_string),
+                    ventoy_default_image: config.default_image_matches(&full_path),
+                    ventoy_menu_timeout: config.menu_timeout,
                     ventoy_plugin: config.image_plugin_for(&full_path),
                     size: entry.file_size(),
                     virtual_size,
