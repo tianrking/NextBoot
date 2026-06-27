@@ -16,11 +16,10 @@
 
 extern crate alloc;
 
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use alloc::format;
-use alloc::boxed::Box;
-use log::{info, warn, error};
+use log::{info, warn};
 
 /// Linux 发行版类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,68 +126,58 @@ impl LinuxBootConfig {
             LinuxDistro::Ubuntu => (
                 "/casper/vmlinuz",
                 "/casper/initrd",
-                "boot=casper quiet splash maybe-ubiquity"
+                "boot=casper quiet splash maybe-ubiquity",
             ),
             LinuxDistro::LinuxMint => (
                 "/casper/vmlinuz",
                 "/casper/initrd",
-                "boot=casper quiet splash"
+                "boot=casper quiet splash",
             ),
             LinuxDistro::PopOs => (
                 "/casper/vmlinuz",
                 "/casper/initrd",
-                "boot=casper quiet splash"
+                "boot=casper quiet splash",
             ),
             LinuxDistro::Debian => (
                 "/install.amd/vmlinuz",
                 "/install.amd/initrd.gz",
-                "vga=788 -- quiet"
+                "vga=788 -- quiet",
             ),
             LinuxDistro::Fedora => (
                 "/images/pxeboot/vmlinuz",
                 "/images/pxeboot/initrd.img",
-                "root=live:CDLABEL=Fedora quiet rhgb"
+                "root=live:CDLABEL=Fedora quiet rhgb",
             ),
             LinuxDistro::Arch => (
                 "/arch/boot/x86_64/vmlinuz-linux",
                 "/arch/boot/x86_64/initramfs-linux.img",
-                "archisobasedir=arch archisolabel=ARCH_$(date +%Y%m)"
+                "archisobasedir=arch archisolabel=ARCH_$(date +%Y%m)",
             ),
             LinuxDistro::Manjaro => (
                 "/boot/vmlinuz-x86_64",
                 "/boot/initramfs-x86_64.img",
-                "driver=free tz=utc lang=en_US keytable=us"
+                "driver=free tz=utc lang=en_US keytable=us",
             ),
             LinuxDistro::OpenSuse => (
                 "/boot/x86_64/loader/linux",
                 "/boot/x86_64/loader/initrd",
-                "install=cd:/ quiet"
+                "install=cd:/ quiet",
             ),
             LinuxDistro::CentOS => (
                 "/images/pxeboot/vmlinuz",
                 "/images/pxeboot/initrd.img",
-                "inst.stage2=hd:LABEL=CentOS quiet"
+                "inst.stage2=hd:LABEL=CentOS quiet",
             ),
-            LinuxDistro::Generic => (
-                "/boot/vmlinuz",
-                "/boot/initrd.img",
-                ""
-            ),
+            LinuxDistro::Generic => ("/boot/vmlinuz", "/boot/initrd.img", ""),
         };
 
         // 构建完整的命令行
         let cmdline = match distro {
             LinuxDistro::Ubuntu | LinuxDistro::LinuxMint | LinuxDistro::PopOs => {
-                format!(
-                    "{} iso-scan/filename={} --",
-                    extra_cmdline, iso_path
-                )
+                format!("{} iso-scan/filename={} --", extra_cmdline, iso_path)
             }
             LinuxDistro::Debian => {
-                format!(
-                    "{} findiso={}",
-                    extra_cmdline, iso_path
-                )
+                format!("{} findiso={}", extra_cmdline, iso_path)
             }
             LinuxDistro::Arch => {
                 // Arch 需要特殊处理
@@ -279,7 +268,10 @@ impl LinuxBootloader {
         let is_zstd = data.len() >= 4 && &data[0..4] == b"\x28\xb5\x2f\xfd";
 
         if !is_gzip && !is_cpio_newc && !is_cpio_odc && !is_xz && !is_zstd {
-            warn!("Unknown initrd format, first bytes: {:02X?}", &data[0..8.min(data.len())]);
+            warn!(
+                "Unknown initrd format, first bytes: {:02X?}",
+                &data[0..8.min(data.len())]
+            );
         }
 
         info!("Loaded initrd: {} bytes", data.len());
@@ -339,6 +331,11 @@ impl LinuxBootloader {
     /// 获取配置
     pub fn config(&self) -> &LinuxBootConfig {
         &self.config
+    }
+
+    /// 拆回已验证的启动输入
+    pub fn into_parts(self) -> (LinuxBootConfig, Vec<u8>, Vec<u8>) {
+        (self.config, self.kernel_data, self.initrd_data)
     }
 }
 
@@ -409,7 +406,8 @@ pub fn parse_grub_cfg(cfg: &str) -> Option<(String, String, String)> {
     for line in cfg.lines() {
         let line = line.trim();
 
-        if line.starts_with("linux") || line.starts_with("linux16") || line.starts_with("linuxefi") {
+        if line.starts_with("linux") || line.starts_with("linux16") || line.starts_with("linuxefi")
+        {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2 {
                 kernel = Some(parts[1].to_string());
@@ -417,7 +415,10 @@ pub fn parse_grub_cfg(cfg: &str) -> Option<(String, String, String)> {
                     cmdline = parts[2..].join(" ");
                 }
             }
-        } else if line.starts_with("initrd") || line.starts_with("initrd16") || line.starts_with("initrdefi") {
+        } else if line.starts_with("initrd")
+            || line.starts_with("initrd16")
+            || line.starts_with("initrdefi")
+        {
             initrd = line.split_whitespace().nth(1).map(|s| s.to_string());
         }
     }
@@ -474,7 +475,6 @@ pub struct BootParams {
     pub vesa_attributes: u16,
     pub capabilities: u32,
     pub ext_lfb_base: u32,
-
     // 其他字段...
     // 这个结构很长，这里只定义必要的部分
 }
@@ -557,14 +557,20 @@ impl EfiStubOptions {
     }
 
     /// 转换为 EFI 加载选项格式
+    pub fn to_load_option_string(&self) -> String {
+        let initrd_path = normalize_efi_stub_path(&self.initrd_path);
+
+        match (initrd_path.is_empty(), self.cmdline.is_empty()) {
+            (true, true) => String::new(),
+            (true, false) => self.cmdline.clone(),
+            (false, true) => format!("initrd={}", initrd_path),
+            (false, false) => format!("initrd={} {}", initrd_path, self.cmdline),
+        }
+    }
+
+    /// 转换为 EFI UTF-16 加载选项格式
     pub fn to_load_options(&self) -> Vec<u16> {
-        // EFI 加载选项格式:
-        // initrd=PATH cmdline
-        let mut options = String::new();
-        options.push_str("initrd=");
-        options.push_str(&self.initrd_path);
-        options.push(' ');
-        options.push_str(&self.cmdline);
+        let options = self.to_load_option_string();
 
         // 转换为 UTF-16LE
         let mut result = Vec::new();
@@ -573,5 +579,45 @@ impl EfiStubOptions {
         }
         result.push(0); // null terminator
         result
+    }
+}
+
+fn normalize_efi_stub_path(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+
+    let mut normalized = String::new();
+    if !path.starts_with('/') && !path.starts_with('\\') {
+        normalized.push('\\');
+    }
+
+    for ch in path.chars() {
+        normalized.push(if ch == '/' { '\\' } else { ch });
+    }
+
+    normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EfiStubOptions;
+
+    #[test]
+    fn efi_stub_load_options_normalize_initrd_path() {
+        let options = EfiStubOptions::new("boot=casper quiet", "/casper/initrd");
+        assert_eq!(
+            options.to_load_option_string(),
+            "initrd=\\casper\\initrd boot=casper quiet"
+        );
+    }
+
+    #[test]
+    fn efi_stub_load_options_add_leading_separator() {
+        let options = EfiStubOptions::new("", "images/pxeboot/initrd.img");
+        assert_eq!(
+            options.to_load_option_string(),
+            "initrd=\\images\\pxeboot\\initrd.img"
+        );
     }
 }

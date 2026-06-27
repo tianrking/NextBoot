@@ -28,7 +28,9 @@ use nextboot_fs::{
     detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError, SharedBlockIo,
 };
 use nextboot_virtio::mapping::ByteMappingTable;
-use nextboot_virtio::protocol::append_file_path_device_path;
+use nextboot_virtio::protocol::{
+    append_file_path_device_path, DevicePathHeader, DevicePathType, EndDevicePath, MediaSubtype,
+};
 use nextboot_virtio::{
     PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
 };
@@ -108,6 +110,9 @@ const WINDOWS_BOOTMGFW_PATH: &str = "/efi/microsoft/boot/bootmgfw.efi";
 const NEXTBOOT_OS_PARAM_NAME: &str = "NextBootOsParam";
 const NEXTBOOT_OS_PARAM_VENDOR_GUID: Guid = uefi::guid!("c1775af2-4211-4f55-9f6f-2cc5ef5667f0");
 const VENTOY_OS_PARAM_VENDOR_GUID: Guid = uefi::guid!("77772020-2e77-6576-6e74-6f792e6e6574");
+const LINUX_EFI_INITRD_MEDIA_GUID: [u8; 16] = [
+    0x27, 0xe4, 0x68, 0x55, 0xfc, 0x68, 0x3d, 0x4f, 0xac, 0x74, 0xca, 0x55, 0x52, 0x31, 0xcc, 0x68,
+];
 const NEXTBOOT_OS_PARAM_MAGIC: &[u8; 8] = b"NBOSPARM";
 const NEXTBOOT_OS_PARAM_VERSION: u16 = 1;
 const NEXTBOOT_OS_PARAM_HEADER_SIZE: usize = 80;
@@ -558,7 +563,7 @@ impl<'a> BootManager<'a> {
 
     /// 引导 Linux ISO
     fn boot_linux(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
-        use nextboot_linux::{LinuxBootConfig, LinuxBootloader, LinuxDistro};
+        use nextboot_linux::{EfiStubOptions, LinuxBootConfig, LinuxBootloader, LinuxDistro};
 
         info!("Booting Linux ISO...");
         if let Ok(()) = self.try_chain_load_paths(device, generic_efi_boot_paths()) {
@@ -603,12 +608,39 @@ impl<'a> BootManager<'a> {
             .load_initrd(initrd_data)
             .map_err(|_| Status::LOAD_ERROR)?;
 
-        warn!(
-            "Direct Linux EFI handover is not implemented yet; loaded kernel={} bytes initrd={} bytes",
-            bootloader.kernel_size(),
-            bootloader.initrd_size()
+        let kernel_size = bootloader.kernel_size();
+        let initrd_size = bootloader.initrd_size();
+        let (config, kernel_data, initrd_data) = bootloader.into_parts();
+        drop(kernel_data);
+
+        let load_options =
+            EfiStubOptions::new(&config.cmdline, &config.initrd_path).to_load_option_string();
+        info!(
+            "Prepared Linux EFI stub: kernel={} bytes initrd={} bytes options={}",
+            kernel_size, initrd_size, load_options
         );
-        Err(Status::UNSUPPORTED.into())
+
+        match LinuxInitrdLoadFile2Protocol::install(self.bt, initrd_data) {
+            Ok(provider) => {
+                info!(
+                    "Registered Linux EFI initrd LoadFile2 provider: {} bytes",
+                    initrd_size
+                );
+                provider.leak();
+            }
+            Err(err) => warn!(
+                "Failed to register Linux EFI initrd LoadFile2 provider: {:?}; falling back to initrd path load option",
+                err.status()
+            ),
+        }
+
+        self.load_image_from_device_path_with_options(
+            device.handle,
+            &device.device_path,
+            &config.kernel_path,
+            "Linux EFI stub",
+            Some(&load_options),
+        )
     }
 
     fn append_ventoy_linux_initrd_overlay(&self, initrd_data: &mut Vec<u8>) -> uefi::Result<()> {
@@ -3098,6 +3130,135 @@ impl RegisteredPreloadedLoadFile {
     fn leak(self) {
         let _ = alloc::boxed::Box::leak(self.protocol);
     }
+}
+
+#[repr(C, packed)]
+struct VendorMediaDevicePath {
+    header: DevicePathHeader,
+    guid: [u8; 16],
+}
+
+impl VendorMediaDevicePath {
+    fn new(guid: [u8; 16]) -> Self {
+        Self {
+            header: DevicePathHeader::new(DevicePathType::MEDIA, MediaSubtype::Vendor as u8, 20),
+            guid,
+        }
+    }
+}
+
+#[repr(C)]
+struct LinuxInitrdLoadFile2Protocol {
+    load_file_2: LoadFile2Protocol,
+    data: Vec<u8>,
+}
+
+impl LinuxInitrdLoadFile2Protocol {
+    fn install(bt: &BootServices, data: Vec<u8>) -> uefi::Result<RegisteredLinuxInitrdLoadFile2> {
+        let mut protocol = alloc::boxed::Box::new(Self {
+            load_file_2: LoadFile2Protocol {
+                load_file: Self::load_file_2_handler,
+            },
+            data,
+        });
+        let load_file_2_interface = protocol.load_file_2_ptr().cast::<c_void>();
+        let handle = unsafe {
+            bt.install_protocol_interface(None, &LoadFile2::GUID, load_file_2_interface)
+        }?;
+
+        let mut device_path = linux_initrd_media_device_path_bytes().into_boxed_slice();
+        let device_path_interface = device_path.as_mut_ptr().cast::<c_void>();
+        if let Err(err) = unsafe {
+            bt.install_protocol_interface(Some(handle), &DevicePath::GUID, device_path_interface)
+        } {
+            let _ = unsafe {
+                bt.uninstall_protocol_interface(handle, &LoadFile2::GUID, load_file_2_interface)
+            };
+            return Err(err);
+        }
+
+        Ok(RegisteredLinuxInitrdLoadFile2 {
+            protocol,
+            device_path,
+        })
+    }
+
+    fn load_file_2_ptr(&mut self) -> *mut LoadFile2Protocol {
+        &mut self.load_file_2
+    }
+
+    extern "efiapi" fn load_file_2_handler(
+        this: *mut LoadFile2Protocol,
+        _file_path: *const FfiDevicePath,
+        _boot_policy: bool,
+        buffer_size: *mut usize,
+        buffer: *mut c_void,
+    ) -> Status {
+        let Some(protocol) = Self::from_load_file_2(this) else {
+            return Status::INVALID_PARAMETER;
+        };
+
+        protocol.load_file(buffer_size, buffer)
+    }
+
+    fn load_file(&self, buffer_size: *mut usize, buffer: *mut c_void) -> Status {
+        if buffer_size.is_null() {
+            return Status::INVALID_PARAMETER;
+        }
+
+        let required_size = self.data.len();
+        let provided_size = unsafe { *buffer_size };
+        unsafe {
+            *buffer_size = required_size;
+        }
+
+        if buffer.is_null() || provided_size < required_size {
+            return Status::BUFFER_TOO_SMALL;
+        }
+
+        unsafe {
+            ptr::copy_nonoverlapping(self.data.as_ptr(), buffer.cast::<u8>(), required_size);
+        }
+
+        Status::SUCCESS
+    }
+
+    fn from_load_file_2(this: *mut LoadFile2Protocol) -> Option<&'static mut Self> {
+        if this.is_null() {
+            return None;
+        }
+
+        Some(unsafe { &mut *(this.cast::<Self>()) })
+    }
+}
+
+struct RegisteredLinuxInitrdLoadFile2 {
+    protocol: alloc::boxed::Box<LinuxInitrdLoadFile2Protocol>,
+    device_path: alloc::boxed::Box<[u8]>,
+}
+
+impl RegisteredLinuxInitrdLoadFile2 {
+    fn leak(self) {
+        let _ = alloc::boxed::Box::leak(self.protocol);
+        let _ = alloc::boxed::Box::leak(self.device_path);
+    }
+}
+
+fn linux_initrd_media_device_path_bytes() -> Vec<u8> {
+    let vendor = VendorMediaDevicePath::new(LINUX_EFI_INITRD_MEDIA_GUID);
+    let end = EndDevicePath::new();
+    let mut data = Vec::new();
+
+    unsafe {
+        let vendor_bytes = core::slice::from_raw_parts(
+            &vendor as *const VendorMediaDevicePath as *const u8,
+            core::mem::size_of::<VendorMediaDevicePath>(),
+        );
+        data.extend_from_slice(vendor_bytes);
+    }
+
+    data.extend_from_slice(&end.to_bytes());
+    data
 }
 
 struct VirtualIsoBlockIo {
