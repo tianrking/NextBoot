@@ -21,8 +21,12 @@ use nextboot_virtio::{
 };
 use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
+use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::unsafe_protocol;
-use uefi::table::boot::{BootServices, LoadImageSource, MemoryType};
+use uefi::table::boot::{
+    BootServices, LoadImageSource, MemoryType, OpenProtocolAttributes, OpenProtocolParams,
+    SearchType,
+};
 use uefi::table::runtime::{RuntimeServices, VariableAttributes, VariableVendor};
 use uefi::{CString16, Guid, Handle, Identify, Status};
 
@@ -325,6 +329,33 @@ impl<'a> BootManager<'a> {
         Err(last_status.into())
     }
 
+    fn try_load_image_paths(
+        &self,
+        device_handle: Handle,
+        device_path: &[u8],
+        paths: &[&str],
+        label: &str,
+    ) -> uefi::Result<()> {
+        let mut last_status = Status::NOT_FOUND;
+
+        for path in paths {
+            match self.load_image_from_device_path(device_handle, device_path, path, label) {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    last_status = err.status();
+                    warn!(
+                        "LoadImage path {} on {} failed with {:?}",
+                        path,
+                        label,
+                        err.status()
+                    );
+                }
+            }
+        }
+
+        Err(last_status.into())
+    }
+
     fn chain_load_path(&self, device: &VirtualBootDevice, path: &str) -> uefi::Result<()> {
         let data = self.load_file(path)?;
         if data.is_empty() {
@@ -374,6 +405,56 @@ impl<'a> BootManager<'a> {
                 warn!(
                     "StartImage failed for chained image {}: {:?}",
                     path,
+                    err.status()
+                );
+                let _ = self.bt.unload_image(image);
+                Err(err)
+            }
+        }
+    }
+
+    fn load_image_from_device_path(
+        &self,
+        device_handle: Handle,
+        device_path: &[u8],
+        path: &str,
+        label: &str,
+    ) -> uefi::Result<()> {
+        let full_path =
+            append_file_path_device_path(device_path, path).ok_or(Status::INVALID_PARAMETER)?;
+        let full_device_path =
+            unsafe { DevicePath::from_ffi_ptr(full_path.as_ptr().cast::<FfiDevicePath>()) };
+
+        info!("Trying {} EFI loader path: {}", label, path);
+        let image = self.bt.load_image(
+            self.parent_image,
+            LoadImageSource::FromDevicePath {
+                device_path: full_device_path,
+                from_boot_manager: true,
+            },
+        )?;
+
+        if let Err(err) = self.patch_loaded_image_source(
+            image,
+            device_handle,
+            full_path.as_ptr().cast::<FfiDevicePath>(),
+        ) {
+            warn!(
+                "Failed to rebind LoadedImage source for {} on {}: {:?}",
+                path,
+                label,
+                err.status()
+            );
+        }
+
+        info!("Loaded EFI image {:?} from {} path {}", image, label, path);
+        match self.bt.start_image(image) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                warn!(
+                    "StartImage failed for {} on {} with {:?}",
+                    path,
+                    label,
                     err.status()
                 );
                 let _ = self.bt.unload_image(image);
@@ -1114,40 +1195,94 @@ impl<'a> BootManager<'a> {
             );
         }
 
-        let mut last_status = Status::NOT_FOUND;
-        for path in default_efi_boot_paths() {
-            let full_path = append_file_path_device_path(&device.device_path, path)
-                .ok_or(Status::INVALID_PARAMETER)?;
-            let device_path =
-                unsafe { DevicePath::from_ffi_ptr(full_path.as_ptr().cast::<FfiDevicePath>()) };
-
-            info!("Trying virtual EFI loader path: {}", path);
-            match self.bt.load_image(
-                self.parent_image,
-                LoadImageSource::FromDevicePath {
-                    device_path,
-                    from_boot_manager: true,
-                },
-            ) {
-                Ok(image) => {
-                    info!("Loaded EFI image {:?} from virtual device", image);
-                    match self.bt.start_image(image) {
-                        Ok(()) => return Ok(()),
-                        Err(err) => {
-                            last_status = err.status();
-                            warn!("StartImage failed for {} with {:?}", path, err.status());
-                            let _ = self.bt.unload_image(image);
-                        }
-                    }
-                }
-                Err(err) => {
-                    last_status = err.status();
-                    warn!("LoadImage failed for {} with {:?}", path, err.status());
-                }
+        if !self.iso.image_format.is_iso() {
+            match self.boot_virtual_disk_partitions(device) {
+                Ok(()) => return Ok(()),
+                Err(err) => warn!(
+                    "Virtual disk partition boot failed for {}: {:?}",
+                    self.iso.path,
+                    err.status()
+                ),
             }
         }
 
+        self.try_load_image_paths(
+            device.handle,
+            &device.device_path,
+            default_efi_boot_paths(),
+            "virtual device",
+        )
+    }
+
+    fn boot_virtual_disk_partitions(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
+        let mut last_status = Status::NOT_FOUND;
+        for attempt in 0..3 {
+            let fs_handles = self
+                .bt
+                .locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))?;
+            let mut matched_partitions = 0usize;
+
+            for handle in fs_handles.iter().copied() {
+                let Ok(partition_path) = self.handle_device_path_bytes(handle) else {
+                    continue;
+                };
+
+                if !is_child_device_path(&device.device_path, &partition_path) {
+                    continue;
+                }
+
+                matched_partitions += 1;
+                info!(
+                    "Found virtual disk filesystem partition {:?} for {}",
+                    handle, self.iso.path
+                );
+
+                match self.try_load_image_paths(
+                    handle,
+                    &partition_path,
+                    default_efi_boot_paths(),
+                    "virtual disk partition",
+                ) {
+                    Ok(()) => return Ok(()),
+                    Err(err) => {
+                        last_status = err.status();
+                        warn!(
+                            "No bootable EFI path on virtual partition {:?}: {:?}",
+                            handle,
+                            err.status()
+                        );
+                    }
+                }
+            }
+
+            if matched_partitions > 0 {
+                return Err(last_status.into());
+            }
+
+            warn!(
+                "No SimpleFileSystem partitions found under {} (attempt {}/3)",
+                self.iso.path,
+                attempt + 1
+            );
+            self.bt.stall(2_000_000);
+        }
+
         Err(last_status.into())
+    }
+
+    fn handle_device_path_bytes(&self, handle: Handle) -> uefi::Result<Vec<u8>> {
+        let device_path = unsafe {
+            self.bt.open_protocol::<DevicePath>(
+                OpenProtocolParams {
+                    handle,
+                    agent: self.parent_image,
+                    controller: None,
+                },
+                OpenProtocolAttributes::GetProtocol,
+            )
+        }?;
+
+        device_path_to_vec(&device_path)
     }
 }
 
@@ -1532,6 +1667,68 @@ fn runtime_extent_count(iso: &IsoFile) -> usize {
     } else {
         iso.extents.len()
     }
+}
+
+fn device_path_to_vec(device_path: &DevicePath) -> uefi::Result<Vec<u8>> {
+    let ptr = device_path.as_ffi_ptr().cast::<u8>();
+    let len = unsafe { device_path_byte_len(ptr) }.ok_or(uefi::Status::INVALID_PARAMETER)?;
+    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+    Ok(bytes.to_vec())
+}
+
+unsafe fn device_path_byte_len(ptr: *const u8) -> Option<usize> {
+    if ptr.is_null() {
+        return None;
+    }
+
+    let mut offset = 0usize;
+    loop {
+        let node = ptr.add(offset);
+        let node_type = ptr::read_unaligned(node);
+        let node_subtype = ptr::read_unaligned(node.add(1));
+        let len_lo = ptr::read_unaligned(node.add(2));
+        let len_hi = ptr::read_unaligned(node.add(3));
+        let node_len = u16::from_le_bytes([len_lo, len_hi]) as usize;
+        if node_len < 4 {
+            return None;
+        }
+
+        offset = offset.checked_add(node_len)?;
+        if node_type == 0x7F && node_subtype == 0xFF {
+            return Some(offset);
+        }
+    }
+}
+
+fn is_child_device_path(parent: &[u8], child: &[u8]) -> bool {
+    let parent_prefix_len = parent_without_end_len(parent).unwrap_or(parent.len());
+    child.len() >= parent_prefix_len
+        && child.get(..parent_prefix_len) == parent.get(..parent_prefix_len)
+}
+
+fn parent_without_end_len(path: &[u8]) -> Option<usize> {
+    if path.len() < 4 {
+        return None;
+    }
+
+    let mut offset = 0usize;
+    while offset.checked_add(4)? <= path.len() {
+        let node_type = *path.get(offset)?;
+        let node_subtype = *path.get(offset + 1)?;
+        let node_len =
+            u16::from_le_bytes([*path.get(offset + 2)?, *path.get(offset + 3)?]) as usize;
+        if node_len < 4 || offset.checked_add(node_len)? > path.len() {
+            return None;
+        }
+
+        if node_type == 0x7F && node_subtype == 0xFF {
+            return Some(offset);
+        }
+
+        offset += node_len;
+    }
+
+    None
 }
 
 fn align_up(value: usize, align: usize) -> Option<usize> {
