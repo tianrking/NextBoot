@@ -39,6 +39,7 @@ VERIFY_IMAGE=1
 SMOKE=0
 SMOKE_BOOT=0
 SMOKE_EFI_ISO=0
+SMOKE_WINDOWS_ISO=0
 SMOKE_TIMEOUT=20
 MEMORY="1024M"
 IMAGES=()
@@ -65,6 +66,8 @@ Options:
   --smoke            Run QEMU until NextBoot scan/menu log markers appear
   --smoke-boot       With --smoke, press Enter and verify boot preparation starts
   --smoke-efi-iso    Generate a minimal UEFI ISO and verify its loader starts
+  --smoke-windows-iso
+                     Generate a Windows-style smoke ISO and verify bootmgfw starts
   --smoke-timeout S  Seconds to wait for --smoke markers (default: 20)
   --no-run           Create the disk image and print the QEMU command only
   -h, --help         Show this help
@@ -167,6 +170,13 @@ while [ $# -gt 0 ]; do
             SMOKE_EFI_ISO=1
             shift
             ;;
+        --smoke-windows-iso)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_EFI_ISO=1
+            SMOKE_WINDOWS_ISO=1
+            shift
+            ;;
         --smoke-timeout)
             [ $# -ge 2 ] || die "--smoke-timeout requires a value"
             SMOKE_TIMEOUT="$2"
@@ -262,13 +272,22 @@ fi
 
 if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
     SMOKE_EFI_FILE="${PROJECT_DIR}/target/${TARGET}/${BUILD_MODE}/nextboot-smoke-efi.efi"
-    SMOKE_ISO_FILE="${PROJECT_DIR}/target/nextboot-smoke-efi.iso"
+    SMOKE_ISO_PROFILE="generic"
+    SMOKE_ISO_BASENAME="nextboot-smoke-efi.iso"
+    if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
+        SMOKE_ISO_PROFILE="windows"
+        SMOKE_ISO_BASENAME="nextboot-smoke-windows.iso"
+    fi
+    SMOKE_ISO_FILE="${PROJECT_DIR}/target/${SMOKE_ISO_BASENAME}"
     if [ ! -f "$SMOKE_EFI_FILE" ]; then
         die "Smoke EFI file not found: ${SMOKE_EFI_FILE}. Run ./scripts/build.sh ${BUILD_MODE} first."
     fi
     require_command python3 "python3 is required to create the smoke ISO"
-    warn "Creating minimal UEFI smoke ISO..."
-    python3 "${SCRIPT_DIR}/create-smoke-iso.py" --efi "$SMOKE_EFI_FILE" "$SMOKE_ISO_FILE"
+    warn "Creating ${SMOKE_ISO_PROFILE} UEFI smoke ISO..."
+    python3 "${SCRIPT_DIR}/create-smoke-iso.py" \
+        --profile "$SMOKE_ISO_PROFILE" \
+        --efi "$SMOKE_EFI_FILE" \
+        "$SMOKE_ISO_FILE"
     IMAGES=("$SMOKE_ISO_FILE" "${IMAGES[@]}")
 fi
 
@@ -1048,9 +1067,18 @@ if [ "$SMOKE" -eq 1 ]; then
             if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
                 EXPECT_ARGS+=(
                     --expect "Using EFI El Torito boot image"
-                    --expect "Loaded EFI image"
-                    --expect "NEXTBOOT_SMOKE_EFI_STARTED"
                 )
+                if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
+                    EXPECT_ARGS+=(
+                        --expect "device_type: DvdRom"
+                        --expect "Booting Windows ISO"
+                        --expect "Chain loading: /efi/microsoft/boot/bootmgfw.efi"
+                        --expect "Loaded chained EFI image"
+                    )
+                else
+                    EXPECT_ARGS+=(--expect "Loaded EFI image")
+                fi
+                EXPECT_ARGS+=(--expect "NEXTBOOT_SMOKE_EFI_STARTED")
             fi
         fi
     else

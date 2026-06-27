@@ -13,6 +13,8 @@ SECTOR_SIZE = 2048
 SYSTEM_ID = b"NEXTBOOT"
 EL_TORITO_ID = b"EL TORITO SPECIFICATION"
 EL_TORITO_PLATFORM_EFI = 0xEF
+PROFILE_GENERIC = "generic"
+PROFILE_WINDOWS = "windows"
 
 
 def pad_ascii(text: str, size: int) -> bytes:
@@ -149,9 +151,60 @@ def volume_descriptor_terminator() -> bytes:
     return bytes(data)
 
 
-def write_smoke_iso(output: Path, efi: Path, label: str) -> None:
+def make_iso_layout(efi_data: bytes, profile: str) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    directories: list[dict[str, object]] = [
+        {"path": "/", "name": b"\x00", "parent": "/"},
+        {"path": "/EFI", "name": b"EFI", "parent": "/"},
+    ]
+    files: list[dict[str, object]] = []
+
+    if profile == PROFILE_GENERIC:
+        directories.append({"path": "/EFI/BOOT", "name": b"BOOT", "parent": "/EFI"})
+        files.append(
+            {
+                "dir": "/EFI/BOOT",
+                "name": b"BOOTX64.EFI;1",
+                "data": efi_data,
+                "eltorito": True,
+            }
+        )
+    elif profile == PROFILE_WINDOWS:
+        directories.extend(
+            [
+                {"path": "/EFI/MICROSOFT", "name": b"MICROSOFT", "parent": "/EFI"},
+                {
+                    "path": "/EFI/MICROSOFT/BOOT",
+                    "name": b"BOOT",
+                    "parent": "/EFI/MICROSOFT",
+                },
+                {"path": "/SOURCES", "name": b"SOURCES", "parent": "/"},
+            ]
+        )
+        files.extend(
+            [
+                {
+                    "dir": "/EFI/MICROSOFT/BOOT",
+                    "name": b"BOOTMGFW.EFI;1",
+                    "data": efi_data,
+                    "eltorito": True,
+                },
+                {
+                    "dir": "/SOURCES",
+                    "name": b"BOOT.WIM;1",
+                    "data": b"NEXTBOOT SMOKE WINDOWS BOOT WIM\n",
+                    "eltorito": False,
+                },
+            ]
+        )
+    else:
+        raise ValueError(f"unsupported smoke ISO profile: {profile}")
+
+    return directories, files
+
+
+def write_smoke_iso(output: Path, efi: Path, label: str, profile: str) -> None:
     efi_data = efi.read_bytes()
-    file_sectors = max(1, math.ceil(len(efi_data) / SECTOR_SIZE))
+    directories, files = make_iso_layout(efi_data, profile)
 
     pvd_lba = 16
     eltorito_record_lba = 17
@@ -159,17 +212,38 @@ def write_smoke_iso(output: Path, efi: Path, label: str) -> None:
     eltorito_catalog_lba = 19
     le_path_table_lba = 20
     be_path_table_lba = 21
-    root_lba = 22
-    efi_dir_lba = 23
-    boot_dir_lba = 24
-    file_lba = 25
-    total_sectors = file_lba + file_sectors
+    first_directory_lba = 22
+    for offset, directory in enumerate(directories):
+        directory["lba"] = first_directory_lba + offset
 
-    path_entries = [
-        (b"\x00", root_lba, 1),
-        (b"EFI", efi_dir_lba, 1),
-        (b"BOOT", boot_dir_lba, 2),
-    ]
+    next_lba = first_directory_lba + len(directories)
+    for file in files:
+        data = file["data"]
+        assert isinstance(data, bytes)
+        file["lba"] = next_lba
+        sectors = max(1, math.ceil(len(data) / SECTOR_SIZE))
+        file["sectors"] = sectors
+        next_lba += sectors
+
+    total_sectors = next_lba
+    root_lba = int(directories[0]["lba"])
+    eltorito_file = next(file for file in files if file.get("eltorito"))
+
+    directory_by_path = {str(directory["path"]): directory for directory in directories}
+    directory_index = {
+        str(directory["path"]): index + 1 for index, directory in enumerate(directories)
+    }
+    path_entries = []
+    for directory in directories:
+        parent_path = str(directory["parent"])
+        path_entries.append(
+            (
+                directory["name"],
+                int(directory["lba"]),
+                directory_index[parent_path],
+            )
+        )
+
     le_path_table = b"".join(
         path_table_record(name, lba, parent, "little")
         for name, lba, parent in path_entries
@@ -179,28 +253,6 @@ def write_smoke_iso(output: Path, efi: Path, label: str) -> None:
         for name, lba, parent in path_entries
     )
     path_table_size = len(le_path_table)
-
-    root_dir = directory_sector(
-        [
-            directory_record(b"\x00", root_lba, SECTOR_SIZE, 0x02),
-            directory_record(b"\x01", root_lba, SECTOR_SIZE, 0x02),
-            directory_record(b"EFI", efi_dir_lba, SECTOR_SIZE, 0x02),
-        ]
-    )
-    efi_dir = directory_sector(
-        [
-            directory_record(b"\x00", efi_dir_lba, SECTOR_SIZE, 0x02),
-            directory_record(b"\x01", root_lba, SECTOR_SIZE, 0x02),
-            directory_record(b"BOOT", boot_dir_lba, SECTOR_SIZE, 0x02),
-        ]
-    )
-    boot_dir = directory_sector(
-        [
-            directory_record(b"\x00", boot_dir_lba, SECTOR_SIZE, 0x02),
-            directory_record(b"\x01", efi_dir_lba, SECTOR_SIZE, 0x02),
-            directory_record(b"BOOTX64.EFI;1", file_lba, len(efi_data), 0x00),
-        ]
-    )
 
     image = bytearray(total_sectors * SECTOR_SIZE)
     image[pvd_lba * SECTOR_SIZE : (pvd_lba + 1) * SECTOR_SIZE] = (
@@ -221,7 +273,7 @@ def write_smoke_iso(output: Path, efi: Path, label: str) -> None:
         volume_descriptor_terminator()
     )
     image[eltorito_catalog_lba * SECTOR_SIZE : (eltorito_catalog_lba + 1) * SECTOR_SIZE] = (
-        eltorito_boot_catalog(file_lba, len(efi_data))
+        eltorito_boot_catalog(int(eltorito_file["lba"]), len(eltorito_file["data"]))
     )
     image[le_path_table_lba * SECTOR_SIZE : (le_path_table_lba + 1) * SECTOR_SIZE] = sector(
         le_path_table
@@ -229,12 +281,31 @@ def write_smoke_iso(output: Path, efi: Path, label: str) -> None:
     image[be_path_table_lba * SECTOR_SIZE : (be_path_table_lba + 1) * SECTOR_SIZE] = sector(
         be_path_table
     )
-    image[root_lba * SECTOR_SIZE : (root_lba + 1) * SECTOR_SIZE] = root_dir
-    image[efi_dir_lba * SECTOR_SIZE : (efi_dir_lba + 1) * SECTOR_SIZE] = efi_dir
-    image[boot_dir_lba * SECTOR_SIZE : (boot_dir_lba + 1) * SECTOR_SIZE] = boot_dir
+    for directory in directories:
+        path = str(directory["path"])
+        parent = directory_by_path[str(directory["parent"])]
+        records = [
+            directory_record(b"\x00", int(directory["lba"]), SECTOR_SIZE, 0x02),
+            directory_record(b"\x01", int(parent["lba"]), SECTOR_SIZE, 0x02),
+        ]
+        for child in directories:
+            if child is directory:
+                continue
+            if child["parent"] == path:
+                records.append(directory_record(child["name"], int(child["lba"]), SECTOR_SIZE, 0x02))
+        for file in files:
+            if file["dir"] == path:
+                data = file["data"]
+                assert isinstance(data, bytes)
+                records.append(directory_record(file["name"], int(file["lba"]), len(data), 0x00))
+        start = int(directory["lba"]) * SECTOR_SIZE
+        image[start : start + SECTOR_SIZE] = directory_sector(records)
 
-    file_offset = file_lba * SECTOR_SIZE
-    image[file_offset : file_offset + len(efi_data)] = efi_data
+    for file in files:
+        data = file["data"]
+        assert isinstance(data, bytes)
+        file_offset = int(file["lba"]) * SECTOR_SIZE
+        image[file_offset : file_offset + len(data)] = data
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(image)
@@ -245,6 +316,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("output", type=Path)
     parser.add_argument("--efi", required=True, type=Path, help="BOOTX64.EFI payload")
     parser.add_argument("--label", default="NEXTSMOKE", help="ISO9660 volume label")
+    parser.add_argument(
+        "--profile",
+        default=PROFILE_GENERIC,
+        choices=(PROFILE_GENERIC, PROFILE_WINDOWS),
+        help="file layout to generate",
+    )
     return parser.parse_args()
 
 
@@ -254,7 +331,7 @@ def main() -> int:
         raise SystemExit(f"EFI payload not found: {args.efi}")
     if len(args.label) > 32:
         raise SystemExit("--label must fit in 32 ASCII characters")
-    write_smoke_iso(args.output, args.efi, args.label)
+    write_smoke_iso(args.output, args.efi, args.label, args.profile)
     print(f"created {args.output} ({os.path.getsize(args.output)} bytes)")
     return 0
 
