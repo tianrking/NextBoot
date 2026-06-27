@@ -24,13 +24,15 @@ workflows and which gaps are still worth pursuing.
   auto-install smoke coverage.
 - Windows ISO chain loading plus WIMBOOT fallback asset integration.
 - Auto memdisk and menu memdisk smoke paths.
+- Raw `.img` virtual hard-disk boot smoke coverage with an inner GPT/FAT32 ESP.
 
 ## Useful Ventoy Ideas Still Open
 
 - Secure Boot distribution: Ventoy provides a documented Secure Boot workflow;
   NextBoot still needs a signing/enrollment story before this is user-friendly.
-- Broader image types: VHD/VHDX/IMG scanning exists in the product direction,
-  but boot coverage is still much thinner than ISO/WIM flows.
+- Broader image types: raw IMG has virtual hard-disk boot smoke coverage now;
+  VHD/VHDX/VDI scanning exists in the product direction, but boot coverage is
+  still thinner than ISO/WIM/raw IMG flows.
 - More filesystems: Ventoy covers a broader set of user storage formats. UDF,
   ext2/3/4, and a first XFS extent-reading framework are now covered in the
   QEMU data partition and flash paths; real `mkfs.xfs` directory formats still

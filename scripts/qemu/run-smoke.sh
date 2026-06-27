@@ -93,6 +93,13 @@ run_qemu_smoke() {
                     EXPECT_ARGS+=(--expect "Loaded EFI image")
                 fi
                 EXPECT_ARGS+=(--expect "NEXTBOOT_SMOKE_EFI_STARTED")
+            elif [ "$SMOKE_RAW_IMG" -eq 1 ]; then
+                EXPECT_ARGS+=(
+                    --expect "Found virtual disk filesystem partition"
+                    --expect "Trying virtual disk partition EFI loader path"
+                    --expect "Loaded EFI image"
+                    --expect "NEXTBOOT_SMOKE_EFI_STARTED"
+                )
             fi
         fi
     else
