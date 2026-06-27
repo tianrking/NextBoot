@@ -201,6 +201,22 @@ impl FilePathDevicePath {
     }
 }
 
+fn normalize_uefi_file_path(path: &str) -> alloc::vec::Vec<u16> {
+    let mut out = alloc::vec::Vec::new();
+
+    if !path.starts_with('\\') && !path.starts_with('/') {
+        out.push('\\' as u16);
+    }
+
+    for ch in path.chars() {
+        let ch = if ch == '/' { '\\' } else { ch };
+        let mut buf = [0u16; 2];
+        out.extend_from_slice(ch.encode_utf16(&mut buf));
+    }
+
+    out
+}
+
 /// 结束设备路径
 #[repr(C, packed)]
 pub struct EndDevicePath {
@@ -533,6 +549,10 @@ impl RegisteredVirtualBlockIo {
         self.handle
     }
 
+    pub fn device_path(&self) -> &[u8] {
+        &self.device_path
+    }
+
     pub fn protocol_ptr(&mut self) -> *mut BlockIoProtocol {
         self.protocol.as_ptr()
     }
@@ -591,6 +611,28 @@ pub fn create_hard_drive_device_path(partition: u32, start: u64, size: u64) -> a
     data.extend_from_slice(&end.to_bytes());
 
     data
+}
+
+/// Append a media file-path node to an existing complete device path.
+///
+/// `base` must end with an End Entire node. The returned path removes that
+/// terminal node, appends a normalized UEFI file path, then adds a new End
+/// Entire node.
+pub fn append_file_path_device_path(base: &[u8], path: &str) -> Option<alloc::vec::Vec<u8>> {
+    let end = EndDevicePath::new().to_bytes();
+    if base.len() < end.len() || base[base.len() - end.len()..] != end {
+        return None;
+    }
+
+    let path = normalize_uefi_file_path(path);
+    let file_path = FilePathDevicePath::new(&path);
+    let mut data = alloc::vec::Vec::with_capacity(base.len() + file_path.len());
+
+    data.extend_from_slice(&base[..base.len() - end.len()]);
+    data.extend_from_slice(&file_path);
+    data.extend_from_slice(&end);
+
+    Some(data)
 }
 
 /// GUID 格式化
@@ -712,5 +754,37 @@ mod tests {
             u16::from_le_bytes([path[path.len() - 2], path[path.len() - 1]]),
             4
         );
+    }
+
+    #[test]
+    fn append_file_path_device_path_replaces_end_node() {
+        let base = create_cdrom_device_path(0, 0, 128);
+        let full = append_file_path_device_path(&base, "/EFI/BOOT/BOOTX64.EFI").unwrap();
+        let cdrom_len = core::mem::size_of::<CdRomDevicePath>();
+        let file_node_len = u16::from_le_bytes([full[cdrom_len + 2], full[cdrom_len + 3]]) as usize;
+
+        assert_eq!(full[cdrom_len], DevicePathType::MEDIA.bits());
+        assert_eq!(full[cdrom_len + 1], MediaSubtype::FilePath as u8);
+        assert_eq!(
+            file_node_len,
+            4 + ("\\EFI\\BOOT\\BOOTX64.EFI".len() + 1) * 2
+        );
+        assert_eq!(full[full.len() - 4], DevicePathType::END.bits());
+        assert_eq!(full[full.len() - 3], 0xFF);
+        assert_eq!(
+            u16::from_le_bytes([full[full.len() - 2], full[full.len() - 1]]),
+            4
+        );
+        assert_eq!(full.len(), cdrom_len + file_node_len + 4);
+    }
+
+    #[test]
+    fn append_file_path_device_path_adds_leading_backslash() {
+        let base = create_hard_drive_device_path(1, 0, 128);
+        let full = append_file_path_device_path(&base, "EFI\\BOOT\\BOOTAA64.EFI").unwrap();
+        let hdd_len = core::mem::size_of::<HardDriveDevicePath>();
+
+        assert_eq!(full[hdd_len + 4], b'\\');
+        assert_eq!(full[hdd_len + 5], 0);
     }
 }

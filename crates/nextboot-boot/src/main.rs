@@ -7,31 +7,31 @@
 
 extern crate alloc;
 
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use alloc::format;
 use core::fmt::Write;
-use log::{info, warn, error};
+use log::{error, info, warn};
 use uefi::prelude::*;
-use uefi::table::boot::BootServices;
 use uefi::proto::console::text::Output;
+use uefi::table::boot::BootServices;
 use uefi::ResultExt;
 
+mod boot;
 mod init;
 mod scanner;
-mod boot;
 
-use init::StorageDevice;
-use scanner::IsoScanner;
 use boot::BootManager;
+use init::StorageDevice;
 use nextboot_menu::{MenuConfig, MenuState};
+use scanner::IsoScanner;
 
 /// 应用版本
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// UEFI 入口点
 #[entry]
-fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
+fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
     // 初始化 UEFI 服务
     if let Err(_e) = init::uefi_services(&mut st) {
         // 无法使用日志，直接输出
@@ -43,7 +43,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
 
     // 获取 Boot Services
     // 主启动流程
-    match main_flow(&mut st) {
+    match main_flow(image, &mut st) {
         Ok(_) => {
             info!("Boot process completed successfully");
             Status::SUCCESS
@@ -58,7 +58,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
 }
 
 /// 主启动流程
-fn main_flow(st: &mut SystemTable<Boot>) -> uefi::Result<()> {
+fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
     // Phase 1: 检测存储设备
     info!("Phase 1: Detecting storage devices...");
     let devices = init::detect_storage_devices(st.boot_services())?;
@@ -73,10 +73,18 @@ fn main_flow(st: &mut SystemTable<Boot>) -> uefi::Result<()> {
         info!(
             "  [{}] {} - {} blocks, {} bytes/block, {}",
             i,
-            if device.removable { "Removable" } else { "Fixed" },
+            if device.removable {
+                "Removable"
+            } else {
+                "Fixed"
+            },
             device.total_blocks,
             device.block_size,
-            if init::is_4k_native(device) { "4K Native" } else { "512B" }
+            if init::is_4k_native(device) {
+                "4K Native"
+            } else {
+                "512B"
+            }
         );
     }
 
@@ -112,7 +120,8 @@ fn main_flow(st: &mut SystemTable<Boot>) -> uefi::Result<()> {
 
             // Phase 5: 启动选中的 ISO
             info!("Phase 5: Booting selected ISO...");
-            let boot_manager = BootManager::new(st.boot_services(), &devices[data_device], iso);
+            let boot_manager =
+                BootManager::new(st.boot_services(), image, &devices[data_device], iso);
             boot_manager.prepare_and_boot()?;
         }
         None => {
@@ -145,15 +154,13 @@ fn show_menu<'a>(
     st: &mut SystemTable<Boot>,
     iso_files: &'a [scanner::IsoFile],
 ) -> uefi::Result<Option<&'a scanner::IsoFile>> {
-    use nextboot_menu::{MenuItem, MenuState, MenuConfig, IsoType, Input};
+    use nextboot_menu::{Input, IsoType, MenuConfig, MenuItem, MenuState};
 
     // 转换为菜单项
-    let items: Vec<MenuItem> = iso_files.iter()
+    let items: Vec<MenuItem> = iso_files
+        .iter()
         .map(|iso| {
-            let label = iso.path.split('/')
-                .last()
-                .unwrap_or(&iso.path)
-                .to_string();
+            let label = iso.path.split('/').last().unwrap_or(&iso.path).to_string();
 
             let iso_type = match iso.os_type {
                 scanner::OsType::Windows => IsoType::Windows,
@@ -228,8 +235,10 @@ fn display_menu(
             item.label.clone()
         };
 
-        output_text(stdout, &format!("{}{} {} {:<30} {:>10}\r\n",
-            prefix, icon, name, "", size))?;
+        output_text(
+            stdout,
+            &format!("{}{} {} {:<30} {:>10}\r\n", prefix, icon, name, "", size),
+        )?;
     }
 
     // 显示帮助
@@ -241,7 +250,9 @@ fn display_menu(
 
 /// 输出文本
 fn output_text(stdout: &mut Output, text: &str) -> uefi::Result<()> {
-    stdout.write_str(text).map_err(|_| uefi::Status::DEVICE_ERROR.into())
+    stdout
+        .write_str(text)
+        .map_err(|_| uefi::Status::DEVICE_ERROR.into())
 }
 
 /// 显示消息
@@ -267,7 +278,12 @@ fn wait_for_key(st: &mut SystemTable<Boot>) -> nextboot_menu::Input {
     loop {
         if let Some(event) = st.stdin().wait_for_key_event() {
             let mut events = [event];
-            if st.boot_services().wait_for_event(&mut events).discard_errdata().is_err() {
+            if st
+                .boot_services()
+                .wait_for_event(&mut events)
+                .discard_errdata()
+                .is_err()
+            {
                 continue;
             }
             if let Ok(Some(key)) = st.stdin().read_key() {

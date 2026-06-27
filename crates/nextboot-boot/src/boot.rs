@@ -8,37 +8,67 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ptr::NonNull;
 use log::{info, warn};
+use nextboot_virtio::protocol::append_file_path_device_path;
 use nextboot_virtio::{PhysicalReader, VirtIoError};
+use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
-use uefi::table::boot::BootServices;
-use uefi::Status;
+use uefi::table::boot::{BootServices, LoadImageSource};
+use uefi::{Handle, Status};
+
+const DEFAULT_EFI_BOOT_PATHS: &[&str] = &[
+    "\\EFI\\BOOT\\BOOTX64.EFI",
+    "\\EFI\\BOOT\\BOOTAA64.EFI",
+    "\\EFI\\BOOT\\BOOTIA32.EFI",
+    "\\EFI\\BOOT\\BOOTARM.EFI",
+];
 
 /// 引导管理器
 pub struct BootManager<'a> {
     bt: &'a BootServices,
+    parent_image: Handle,
     device: &'a StorageDevice,
     iso: &'a IsoFile,
 }
 
 impl<'a> BootManager<'a> {
     /// 创建新的引导管理器
-    pub fn new(bt: &'a BootServices, device: &'a StorageDevice, iso: &'a IsoFile) -> Self {
-        Self { bt, device, iso }
+    pub fn new(
+        bt: &'a BootServices,
+        parent_image: Handle,
+        device: &'a StorageDevice,
+        iso: &'a IsoFile,
+    ) -> Self {
+        Self {
+            bt,
+            parent_image,
+            device,
+            iso,
+        }
     }
 
     /// 准备并执行引导
     pub fn prepare_and_boot(&self) -> uefi::Result<()> {
         info!("Preparing to boot: {}", self.iso.path);
-        self.create_virtual_block_io()?;
+        let virtual_device = self.create_virtual_block_io()?;
 
-        match self.iso.os_type {
-            OsType::Windows | OsType::WinPE => self.boot_windows(),
-            OsType::Ubuntu | OsType::Debian | OsType::Fedora | OsType::Arch | OsType::Linux => {
-                self.boot_linux()
-            }
-            OsType::Unknown => {
-                // 尝试通用引导
-                self.boot_generic()
+        match self.boot_virtual_device(&virtual_device) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                warn!(
+                    "Virtual device boot failed for {}: {:?}",
+                    self.iso.path,
+                    err.status()
+                );
+
+                match self.iso.os_type {
+                    OsType::Windows | OsType::WinPE => self.boot_windows(),
+                    OsType::Ubuntu
+                    | OsType::Debian
+                    | OsType::Fedora
+                    | OsType::Arch
+                    | OsType::Linux => self.boot_linux(),
+                    OsType::Unknown => self.boot_generic(),
+                }
             }
         }
     }
@@ -175,7 +205,7 @@ impl<'a> BootManager<'a> {
     }
 
     /// 创建虚拟 Block IO
-    fn create_virtual_block_io(&self) -> uefi::Result<()> {
+    fn create_virtual_block_io(&self) -> uefi::Result<VirtualBootDevice> {
         use nextboot_virtio::protocol::VirtualBlockIoProtocol;
         use nextboot_virtio::{VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
 
@@ -232,7 +262,9 @@ impl<'a> BootManager<'a> {
 
         let virtual_info = vbio.device_info();
         let registered = VirtualBlockIoProtocol::new(vbio).install(self.bt)?;
-        let virtual_handle = registered.leak();
+        let virtual_handle = registered.handle();
+        let device_path = registered.device_path().to_vec();
+        registered.leak();
 
         info!(
             "Virtual Block IO installed on {:?}: {:?}, source extents: {}",
@@ -241,8 +273,61 @@ impl<'a> BootManager<'a> {
             self.iso.extents.len()
         );
 
-        Ok(())
+        Ok(VirtualBootDevice {
+            handle: virtual_handle,
+            device_path,
+        })
     }
+
+    fn boot_virtual_device(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
+        info!("Connecting virtual boot device {:?}", device.handle);
+        if let Err(err) = self.bt.connect_controller(device.handle, None, None, true) {
+            warn!(
+                "ConnectController on virtual device returned {:?}; trying LoadImage anyway",
+                err.status()
+            );
+        }
+
+        let mut last_status = Status::NOT_FOUND;
+        for path in DEFAULT_EFI_BOOT_PATHS {
+            let full_path = append_file_path_device_path(&device.device_path, path)
+                .ok_or(Status::INVALID_PARAMETER)?;
+            let device_path =
+                unsafe { DevicePath::from_ffi_ptr(full_path.as_ptr().cast::<FfiDevicePath>()) };
+
+            info!("Trying virtual EFI loader path: {}", path);
+            match self.bt.load_image(
+                self.parent_image,
+                LoadImageSource::FromDevicePath {
+                    device_path,
+                    from_boot_manager: true,
+                },
+            ) {
+                Ok(image) => {
+                    info!("Loaded EFI image {:?} from virtual device", image);
+                    match self.bt.start_image(image) {
+                        Ok(()) => return Ok(()),
+                        Err(err) => {
+                            last_status = err.status();
+                            warn!("StartImage failed for {} with {:?}", path, err.status());
+                            let _ = self.bt.unload_image(image);
+                        }
+                    }
+                }
+                Err(err) => {
+                    last_status = err.status();
+                    warn!("LoadImage failed for {} with {:?}", path, err.status());
+                }
+            }
+        }
+
+        Err(last_status.into())
+    }
+}
+
+struct VirtualBootDevice {
+    handle: Handle,
+    device_path: Vec<u8>,
 }
 
 struct UefiPhysicalReader {
