@@ -2368,6 +2368,8 @@ impl<'a> BootManager<'a> {
 
     fn ventoy_reserved_flags(&self, disk_signature: [u8; 4]) -> crate::ventoy::VentoyReserved {
         let chain_type = ventoy_chain_type(self.iso);
+        let windows_cd_prompt =
+            chain_type == crate::ventoy::VENTOY_CHAIN_WINDOWS && self.iso.ventoy_windows_cd_prompt;
         let windows_resolution_lock = if chain_type == crate::ventoy::VENTOY_CHAIN_WINDOWS {
             self.iso.ventoy_windows_uefi_resolution_lock
         } else {
@@ -2377,7 +2379,7 @@ impl<'a> BootManager<'a> {
         crate::ventoy::VentoyReserved::new()
             .with_chain_type(chain_type)
             .with_iso_udf(self.iso.is_udf)
-            .with_windows_cd_prompt(false)
+            .with_windows_cd_prompt(windows_cd_prompt)
             .with_linux_remount(self.iso.ventoy_linux_remount)
             .with_vlnk(false)
             .with_disk_signature(disk_signature)

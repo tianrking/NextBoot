@@ -62,6 +62,8 @@ pub struct IsoFile {
     pub ventoy_menu_timeout: Option<u32>,
     /// Ventoy control.VTOY_LINUX_REMOUNT 是否要求 Linux hook 重新挂载源盘。
     pub ventoy_linux_remount: bool,
+    /// Ventoy control.VTOY_WINDOWS_CD_PROMPT 是否保留 Windows CD/DVD 提示。
+    pub ventoy_windows_cd_prompt: bool,
     /// Ventoy control.VTOY_WIN_UEFI_RES_LOCK 映射到 Windows UEFI 分辨率锁定模式。
     pub ventoy_windows_uefi_resolution_lock: u8,
     /// Ventoy password 插件为该镜像匹配出的密码。
@@ -1125,6 +1127,7 @@ impl<'a> IsoScanner<'a> {
                     ventoy_default_image: config.default_image_matches(&full_path),
                     ventoy_menu_timeout: config.menu_timeout,
                     ventoy_linux_remount: config.linux_remount,
+                    ventoy_windows_cd_prompt: config.windows_cd_prompt,
                     ventoy_windows_uefi_resolution_lock: config.windows_uefi_resolution_lock,
                     ventoy_password: config.image_password_for(&full_path).cloned(),
                     ventoy_boot_password: config.password.boot.clone(),
@@ -1248,6 +1251,7 @@ impl<'a> IsoScanner<'a> {
                     ventoy_default_image: config.default_image_matches(&full_path),
                     ventoy_menu_timeout: config.menu_timeout,
                     ventoy_linux_remount: config.linux_remount,
+                    ventoy_windows_cd_prompt: config.windows_cd_prompt,
                     ventoy_windows_uefi_resolution_lock: config.windows_uefi_resolution_lock,
                     ventoy_password: config.image_password_for(&full_path).cloned(),
                     ventoy_boot_password: config.password.boot.clone(),

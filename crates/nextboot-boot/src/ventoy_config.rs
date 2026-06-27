@@ -230,6 +230,7 @@ pub struct VentoyConfig {
     pub default_image: Option<String>,
     pub default_menu_mode: Option<u32>,
     pub linux_remount: bool,
+    pub windows_cd_prompt: bool,
     pub windows_uefi_resolution_lock: u8,
     pub image_list_mode: VentoyImageListMode,
     pub image_list: Vec<String>,
@@ -876,6 +877,9 @@ impl<'a> JsonParser<'a> {
                         }
                         "VTOY_LINUX_REMOUNT" => {
                             config.linux_remount = value == "1";
+                        }
+                        "VTOY_WINDOWS_CD_PROMPT" => {
+                            config.windows_cd_prompt = value == "1";
                         }
                         "VTOY_WIN_UEFI_RES_LOCK" => {
                             config.windows_uefi_resolution_lock =
@@ -1802,6 +1806,7 @@ mod tests {
                 { "VTOY_DEFAULT_SEARCH_ROOT": "/ISO" },
                 { "VTOY_MAX_SEARCH_LEVEL": "2" },
                 { "VTOY_LINUX_REMOUNT": "1" },
+                { "VTOY_WINDOWS_CD_PROMPT": "1" },
                 { "VTOY_WIN_UEFI_RES_LOCK": "2" },
                 { "VTOY_FILT_DOT_UNDERSCORE_FILE": "1" }
             ],
@@ -1816,6 +1821,7 @@ mod tests {
         assert!(config.filters.wim);
         assert!(config.filter_dot_underscore);
         assert!(config.linux_remount);
+        assert!(config.windows_cd_prompt);
         assert_eq!(config.windows_uefi_resolution_lock, 2);
         assert_eq!(config.default_search_root.as_deref(), Some("/ISO"));
         assert_eq!(config.max_search_level, Some(2));
