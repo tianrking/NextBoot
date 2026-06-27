@@ -9,6 +9,8 @@ use bitflags::bitflags;
 #[cfg(not(test))]
 use core::ffi::c_void;
 #[cfg(not(test))]
+use uefi::proto::device_path::DevicePath;
+#[cfg(not(test))]
 use uefi::proto::media::block::BlockIO;
 #[cfg(not(test))]
 use uefi::table::boot::BootServices;
@@ -17,7 +19,7 @@ use uefi::{Handle, Identify};
 
 /// UEFI Block IO Protocol GUID
 pub const BLOCK_IO_GUID: [u8; 16] = [
-    0x96, 0x5e, 0x3b, 0x09, 0x63, 0x30, 0xd3, 0x11, 0x8d, 0xbd, 0x00, 0xa0, 0xc9, 0x06, 0xec, 0x9b,
+    0x21, 0x5b, 0x4e, 0x96, 0x59, 0x64, 0xd2, 0x11, 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b,
 ];
 
 /// UEFI Block IO 2 Protocol GUID
@@ -27,7 +29,7 @@ pub const BLOCK_IO_2_GUID: [u8; 16] = [
 
 /// 设备路径协议 GUID
 pub const DEVICE_PATH_GUID: [u8; 16] = [
-    0x9b, 0x9a, 0x2d, 0x09, 0x62, 0x30, 0xd3, 0x11, 0x8d, 0xbd, 0x00, 0xa0, 0xc9, 0x06, 0xec, 0x9b,
+    0x91, 0x6e, 0x57, 0x09, 0x3f, 0x6d, 0xd2, 0x11, 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b,
 ];
 
 /// 加载的镜像协议 GUID
@@ -382,10 +384,39 @@ impl VirtualBlockIoProtocol {
     #[cfg(not(test))]
     pub fn install(self, bt: &BootServices) -> uefi::Result<RegisteredVirtualBlockIo> {
         let mut protocol = Box::new(self);
-        let interface = protocol.as_ptr().cast::<c_void>();
-        let handle = unsafe { bt.install_protocol_interface(None, &BlockIO::GUID, interface) }?;
+        let block_io_interface = protocol.as_ptr().cast::<c_void>();
+        let handle =
+            unsafe { bt.install_protocol_interface(None, &BlockIO::GUID, block_io_interface) }?;
 
-        Ok(RegisteredVirtualBlockIo { handle, protocol })
+        let mut device_path = protocol.device_path_bytes().into_boxed_slice();
+        let device_path_interface = device_path.as_mut_ptr().cast::<c_void>();
+        if let Err(err) = unsafe {
+            bt.install_protocol_interface(Some(handle), &DevicePath::GUID, device_path_interface)
+        } {
+            let _ = unsafe {
+                bt.uninstall_protocol_interface(handle, &BlockIO::GUID, block_io_interface)
+            };
+            return Err(err);
+        }
+
+        Ok(RegisteredVirtualBlockIo {
+            handle,
+            protocol,
+            device_path,
+        })
+    }
+
+    #[cfg(not(test))]
+    fn device_path_bytes(&self) -> alloc::vec::Vec<u8> {
+        let vbio = unsafe { &*self.vbio.get() };
+        let info = vbio.device_info();
+
+        match info.device_type {
+            crate::VirtualDeviceType::DvdRom => create_cdrom_device_path(0, 0, info.block_count),
+            crate::VirtualDeviceType::HardDisk | crate::VirtualDeviceType::UsbMassStorage => {
+                create_hard_drive_device_path(1, 0, info.block_count)
+            }
+        }
     }
 
     /// Reset 处理函数
@@ -493,6 +524,7 @@ impl VirtualBlockIoProtocol {
 pub struct RegisteredVirtualBlockIo {
     handle: Handle,
     protocol: Box<VirtualBlockIoProtocol>,
+    device_path: Box<[u8]>,
 }
 
 #[cfg(not(test))]
@@ -505,10 +537,16 @@ impl RegisteredVirtualBlockIo {
         self.protocol.as_ptr()
     }
 
+    pub fn device_path_ptr(&mut self) -> *mut u8 {
+        self.device_path.as_mut_ptr()
+    }
+
     pub fn leak(self) -> Handle {
         let handle = self.handle;
         let protocol = self.protocol;
+        let device_path = self.device_path;
         let _ = Box::leak(protocol);
+        let _ = Box::leak(device_path);
         handle
     }
 }
@@ -642,5 +680,37 @@ mod tests {
         };
 
         assert_eq!(status, UefiStatus::WriteProtected as u64);
+    }
+
+    #[test]
+    fn cdrom_device_path_has_media_node_and_end_node() {
+        let path = create_cdrom_device_path(0, 0, 128);
+
+        assert_eq!(path.len(), core::mem::size_of::<CdRomDevicePath>() + 4);
+        assert_eq!(path[0], DevicePathType::MEDIA.bits());
+        assert_eq!(path[1], MediaSubtype::CdRom as u8);
+        assert_eq!(u16::from_le_bytes([path[2], path[3]]), 24);
+        assert_eq!(path[path.len() - 4], DevicePathType::END.bits());
+        assert_eq!(path[path.len() - 3], 0xFF);
+        assert_eq!(
+            u16::from_le_bytes([path[path.len() - 2], path[path.len() - 1]]),
+            4
+        );
+    }
+
+    #[test]
+    fn hard_drive_device_path_has_media_node_and_end_node() {
+        let path = create_hard_drive_device_path(1, 0, 128);
+
+        assert_eq!(path.len(), core::mem::size_of::<HardDriveDevicePath>() + 4);
+        assert_eq!(path[0], DevicePathType::MEDIA.bits());
+        assert_eq!(path[1], MediaSubtype::HardDrive as u8);
+        assert_eq!(u16::from_le_bytes([path[2], path[3]]), 42);
+        assert_eq!(path[path.len() - 4], DevicePathType::END.bits());
+        assert_eq!(path[path.len() - 3], 0xFF);
+        assert_eq!(
+            u16::from_le_bytes([path[path.len() - 2], path[path.len() - 1]]),
+            4
+        );
     }
 }
