@@ -109,11 +109,13 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
     info!("Found {} ISO file(s)", iso_files.len());
     for (i, iso) in iso_files.iter().enumerate() {
         info!(
-            "  [{}] vol{}:{} ({})",
+            "  [{}] vol{}:{} [{}] file={} virtual={}",
             i,
             iso.volume_index,
             iso.path,
-            format_size(iso.size)
+            iso.image_format,
+            format_size(iso.size),
+            format_size(iso.virtual_size)
         );
     }
 
@@ -190,7 +192,7 @@ fn show_menu<'a>(
                 _ => IsoType::Unknown,
             };
 
-            MenuItem::new(label, iso.path.clone(), iso.size, iso_type)
+            MenuItem::new(label, iso.path.clone(), iso.virtual_size, iso_type)
         })
         .collect();
 

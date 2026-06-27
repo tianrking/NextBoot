@@ -31,6 +31,8 @@ pub struct IsoFile {
     pub path: String,
     /// 文件大小 (字节)
     pub size: u64,
+    /// 启动时呈现给固件/系统的虚拟介质大小
+    pub virtual_size: u64,
     /// 文件所在的 UEFI volume handle
     pub volume_handle: Handle,
     /// 扫描时分配的卷索引，用于区分不同卷上的同名镜像
@@ -43,6 +45,8 @@ pub struct IsoFile {
     pub extents: Vec<IsoExtent>,
     /// 检测到的操作系统类型
     pub os_type: OsType,
+    /// 镜像格式
+    pub image_format: ImageFormat,
     /// ISO 内的 EFI El Torito 启动镜像信息
     pub boot_info: Option<IsoBootInfo>,
 }
@@ -92,6 +96,81 @@ impl From<FileExtent> for IsoExtent {
             physical_lba: extent.physical_lba,
             block_count: extent.block_count,
         }
+    }
+}
+
+/// 可启动镜像格式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFormat {
+    Iso,
+    Wim,
+    Esd,
+    RawDisk,
+    Vhd,
+    FixedVhd,
+    DynamicVhd,
+    DifferencingVhd,
+    Vhdx,
+    Unknown,
+}
+
+impl ImageFormat {
+    pub fn detect_from_path(path: &str) -> Self {
+        let lower = path.to_lowercase();
+        if lower.ends_with(".iso") {
+            Self::Iso
+        } else if lower.ends_with(".wim") {
+            Self::Wim
+        } else if lower.ends_with(".esd") {
+            Self::Esd
+        } else if lower.ends_with(".img") {
+            Self::RawDisk
+        } else if lower.ends_with(".vhd") {
+            Self::Vhd
+        } else if lower.ends_with(".vhdx") {
+            Self::Vhdx
+        } else {
+            Self::Unknown
+        }
+    }
+
+    pub fn from_vhd_disk_type(disk_type: u32) -> Self {
+        match disk_type {
+            2 => Self::FixedVhd,
+            3 => Self::DynamicVhd,
+            4 => Self::DifferencingVhd,
+            _ => Self::Vhd,
+        }
+    }
+
+    pub fn is_iso(self) -> bool {
+        self == Self::Iso
+    }
+
+    pub fn supports_virtual_disk_boot(self) -> bool {
+        matches!(self, Self::Iso | Self::RawDisk | Self::FixedVhd)
+    }
+
+    pub fn uses_512_byte_virtual_sectors(self) -> bool {
+        matches!(self, Self::RawDisk | Self::FixedVhd)
+    }
+}
+
+impl core::fmt::Display for ImageFormat {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let name = match self {
+            ImageFormat::Iso => "ISO",
+            ImageFormat::Wim => "WIM",
+            ImageFormat::Esd => "ESD",
+            ImageFormat::RawDisk => "RAW",
+            ImageFormat::Vhd => "VHD",
+            ImageFormat::FixedVhd => "Fixed VHD",
+            ImageFormat::DynamicVhd => "Dynamic VHD",
+            ImageFormat::DifferencingVhd => "Differencing VHD",
+            ImageFormat::Vhdx => "VHDX",
+            ImageFormat::Unknown => "Unknown",
+        };
+        write!(f, "{}", name)
     }
 }
 
@@ -156,7 +235,7 @@ impl<'a> IsoScanner<'a> {
         let mut iso_files = Vec::new();
 
         // 支持的文件扩展名
-        let extensions = [".iso", ".wim", ".img", ".vhd", ".esd"];
+        let extensions = [".iso", ".wim", ".img", ".vhd", ".vhdx", ".esd"];
 
         // 扫描常见目录
         let search_paths = [
@@ -304,21 +383,34 @@ impl<'a> IsoScanner<'a> {
             }
 
             if has_supported_extension(&name, extensions) {
-                let is_iso = name.to_lowercase().ends_with(".iso");
-                let (block_size, extents, boot_info) = self
-                    .resolve_image_metadata(volume_handle, &full_path, entry.file_size(), is_iso)
-                    .unwrap_or((self.device.block_size, Vec::new(), None));
+                let image_format = ImageFormat::detect_from_path(&full_path);
+                let (block_size, extents, boot_info, image_format, virtual_size) = self
+                    .resolve_image_metadata(
+                        volume_handle,
+                        &full_path,
+                        entry.file_size(),
+                        image_format,
+                    )
+                    .unwrap_or((
+                        self.device.block_size,
+                        Vec::new(),
+                        None,
+                        image_format,
+                        entry.file_size(),
+                    ));
                 let start_lba = extents.first().map_or(0, |extent| extent.physical_lba);
 
                 files.push(IsoFile {
                     path: full_path.clone(),
                     size: entry.file_size(),
+                    virtual_size,
                     volume_handle,
                     volume_index,
                     block_size,
                     start_lba,
                     extents,
                     os_type: self.detect_iso_type(&full_path),
+                    image_format,
                     boot_info,
                 });
             }
@@ -332,8 +424,8 @@ impl<'a> IsoScanner<'a> {
         volume_handle: Handle,
         path: &str,
         size: u64,
-        is_iso: bool,
-    ) -> Option<(u32, Vec<IsoExtent>, Option<IsoBootInfo>)> {
+        image_format: ImageFormat,
+    ) -> Option<(u32, Vec<IsoExtent>, Option<IsoBootInfo>, ImageFormat, u64)> {
         let block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(volume_handle)
@@ -360,13 +452,80 @@ impl<'a> IsoScanner<'a> {
         };
 
         let extents: Vec<IsoExtent> = extents.into_iter().map(IsoExtent::from).collect();
-        let boot_info = if is_iso {
+        let (image_format, virtual_size) =
+            self.detect_image_virtual_metadata(&block_io, block_size, size, &extents, image_format);
+        let boot_info = if image_format.is_iso() {
             self.resolve_iso_boot_info(&block_io, block_size, size, &extents)
         } else {
             None
         };
 
-        Some((block_size, extents, boot_info))
+        Some((block_size, extents, boot_info, image_format, virtual_size))
+    }
+
+    fn detect_image_virtual_metadata(
+        &self,
+        block_io: &BlockIO,
+        source_block_size: u32,
+        file_size: u64,
+        extents: &[IsoExtent],
+        image_format: ImageFormat,
+    ) -> (ImageFormat, u64) {
+        if !matches!(image_format, ImageFormat::Vhd) {
+            return (image_format, file_size);
+        }
+
+        match self.read_image_tail(block_io, source_block_size, file_size, extents, 512) {
+            Some(footer) => parse_vhd_footer(&footer)
+                .map(|info| {
+                    let virtual_size = if info.image_format == ImageFormat::FixedVhd {
+                        info.virtual_size.min(file_size.saturating_sub(512))
+                    } else {
+                        info.virtual_size
+                    };
+                    (info.image_format, virtual_size)
+                })
+                .unwrap_or((image_format, file_size)),
+            None => (image_format, file_size),
+        }
+    }
+
+    fn read_image_tail(
+        &self,
+        block_io: &BlockIO,
+        source_block_size: u32,
+        file_size: u64,
+        extents: &[IsoExtent],
+        tail_len: usize,
+    ) -> Option<Vec<u8>> {
+        if extents.is_empty() || tail_len == 0 || file_size < tail_len as u64 {
+            return None;
+        }
+
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::HardDisk, 0, file_size, 512)
+            .with_physical_block_size(source_block_size);
+        let extent_map: Vec<(u64, u64, u64)> = extents
+            .iter()
+            .map(|extent| {
+                (
+                    extent.virtual_block_start,
+                    extent.physical_lba,
+                    extent.block_count,
+                )
+            })
+            .collect();
+        let mut vbio = VirtualBlockIo::from_file_extents(config, &extent_map);
+        vbio.set_physical_reader(UefiBlockIo::new(block_io)?);
+
+        let offset = file_size.checked_sub(tail_len as u64)?;
+        if offset % 512 != 0 {
+            return None;
+        }
+
+        let mut data = alloc::vec![0u8; tail_len];
+        vbio.read_blocks(vbio.media_id(), offset / 512, &mut data)
+            .ok()?;
+        Some(data)
     }
 
     fn resolve_iso_boot_info(
@@ -568,6 +727,29 @@ fn cstr16_to_string(name: &uefi::CStr16) -> String {
 fn has_supported_extension(name: &str, extensions: &[&str]) -> bool {
     let lower = name.to_lowercase();
     extensions.iter().any(|ext| lower.ends_with(ext))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VhdFooterInfo {
+    image_format: ImageFormat,
+    virtual_size: u64,
+}
+
+fn parse_vhd_footer(footer: &[u8]) -> Option<VhdFooterInfo> {
+    if footer.len() < 512 || footer.get(0..8)? != b"conectix" {
+        return None;
+    }
+
+    let virtual_size = u64::from_be_bytes(footer.get(48..56)?.try_into().ok()?);
+    let disk_type = u32::from_be_bytes(footer.get(60..64)?.try_into().ok()?);
+    if virtual_size == 0 {
+        return None;
+    }
+
+    Some(VhdFooterInfo {
+        image_format: ImageFormat::from_vhd_disk_type(disk_type),
+        virtual_size,
+    })
 }
 
 fn is_hidden_tree(name: &str) -> bool {

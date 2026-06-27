@@ -189,6 +189,14 @@ impl<'a> BootManager<'a> {
     /// 准备并执行引导
     pub fn prepare_and_boot(&self) -> uefi::Result<()> {
         info!("Preparing to boot: {}", self.iso.path);
+        if !self.iso.image_format.supports_virtual_disk_boot() {
+            warn!(
+                "Image format {} is recognized but not bootable yet: {}",
+                self.iso.image_format, self.iso.path
+            );
+            return Err(Status::UNSUPPORTED.into());
+        }
+
         let boot_config = self.boot_virtual_config();
         if let Err(err) = self.publish_os_param(&boot_config) {
             warn!(
@@ -209,6 +217,10 @@ impl<'a> BootManager<'a> {
                     self.iso.path,
                     err.status()
                 );
+
+                if !self.iso.image_format.is_iso() {
+                    return Err(err);
+                }
 
                 match self.iso.os_type {
                     OsType::Windows | OsType::WinPE => self.boot_windows(&virtual_device),
@@ -378,6 +390,10 @@ impl<'a> BootManager<'a> {
 
     /// 从 ISO 加载文件
     fn load_file(&self, path: &str) -> uefi::Result<Vec<u8>> {
+        if !self.iso.image_format.is_iso() {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
         info!("Loading file: {}", path);
 
         let source_block_io = self
@@ -425,7 +441,7 @@ impl<'a> BootManager<'a> {
         let virtual_handle = registered.handle();
         let device_path = registered.device_path().to_vec();
 
-        let simple_file_system =
+        let simple_file_system = if self.iso.image_format.is_iso() {
             match self.install_iso_simple_file_system(&source_block_io, virtual_handle) {
                 Ok(protocol) => Some(protocol),
                 Err(err) => {
@@ -436,7 +452,10 @@ impl<'a> BootManager<'a> {
                     );
                     None
                 }
-            };
+            }
+        } else {
+            None
+        };
 
         let load_file_protocol = if load_file_entries.is_empty() {
             None
@@ -533,7 +552,7 @@ impl<'a> BootManager<'a> {
         push_u32(&mut data, usize_to_u32(self.iso.volume_index)?);
         push_u32(&mut data, os_type_code(self.iso.os_type));
         push_u32(&mut data, virtual_device_type_code(config.device_type));
-        push_u64(&mut data, self.iso.size);
+        push_u64(&mut data, self.iso.virtual_size);
         push_u64(&mut data, self.iso.start_lba);
         push_u32(&mut data, self.iso.block_size);
         push_u32(&mut data, config.block_size);
@@ -555,7 +574,7 @@ impl<'a> BootManager<'a> {
 
     fn append_runtime_extents(&self, data: &mut Vec<u8>) -> uefi::Result<()> {
         if self.iso.extents.is_empty() {
-            let block_count = div_round_up(self.iso.size, u64::from(self.iso.block_size))
+            let block_count = div_round_up(self.iso.virtual_size, u64::from(self.iso.block_size))
                 .ok_or(uefi::Status::INVALID_PARAMETER)?;
             push_extent_record(data, 0, self.iso.start_lba, block_count);
             return Ok(());
@@ -576,19 +595,27 @@ impl<'a> BootManager<'a> {
     fn boot_virtual_config(&self) -> VirtualDeviceConfig {
         use nextboot_virtio::CdRomBootInfo;
 
-        let device_type = match self.iso.os_type {
-            OsType::Windows | OsType::WinPE => VirtualDeviceType::DvdRom,
-            _ => VirtualDeviceType::HardDisk,
+        let device_type = if self.iso.image_format.is_iso() {
+            match self.iso.os_type {
+                OsType::Windows | OsType::WinPE => VirtualDeviceType::DvdRom,
+                _ => VirtualDeviceType::HardDisk,
+            }
+        } else {
+            VirtualDeviceType::HardDisk
         };
-        let virtual_block_size = match device_type {
-            VirtualDeviceType::DvdRom => 2048,
-            _ => self.iso.block_size,
+        let virtual_block_size = if self.iso.image_format.uses_512_byte_virtual_sectors() {
+            512
+        } else {
+            match device_type {
+                VirtualDeviceType::DvdRom => 2048,
+                _ => self.iso.block_size,
+            }
         };
 
         let mut config = VirtualDeviceConfig::new(
             device_type,
             self.iso.start_lba,
-            self.iso.size,
+            self.iso.virtual_size,
             virtual_block_size,
         )
         .with_physical_block_size(self.iso.block_size)
@@ -604,7 +631,8 @@ impl<'a> BootManager<'a> {
                 "Using EFI El Torito boot image: catalog LBA {}, entry {}, image LBA {}, blocks {}",
                 boot.catalog_lba, boot.boot_entry, boot.image_lba, boot.image_block_count
             );
-        } else if matches!(device_type, VirtualDeviceType::DvdRom) {
+        } else if self.iso.image_format.is_iso() && matches!(device_type, VirtualDeviceType::DvdRom)
+        {
             warn!("No EFI El Torito boot image found for {}", self.iso.path);
         }
 
@@ -681,6 +709,9 @@ impl<'a> BootManager<'a> {
 
     fn preload_load_file_entries(&self) -> Vec<PreloadedFile> {
         let mut entries = Vec::new();
+        if !self.iso.image_format.is_iso() {
+            return entries;
+        }
 
         for path in generic_efi_boot_paths() {
             match self.load_file(path) {
