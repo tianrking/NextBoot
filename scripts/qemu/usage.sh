@@ -9,7 +9,7 @@ Usage:
 
 Options:
   --mode MODE        Build mode: debug or release
-  --bus BUS          Storage bus: virtio, nvme, sata, usb
+  --bus BUS          Storage bus: virtio, nvme, sata, usb, sd
   --image PATH       Copy an ISO/WIM/VHD image into /ISO (repeatable)
   --disk-size MB     GPT disk image size in MiB (default: 256, 512 for 4K, 1024 for 4K split)
   --sector-size BYTES
@@ -49,6 +49,6 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
   $0 --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
   $0 --bus usb --no-run
+  $0 --bus sd --layout split --data-fs fat32 --smoke-efi-iso
 USAGE
 }
-

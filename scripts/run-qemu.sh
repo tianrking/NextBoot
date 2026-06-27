@@ -73,6 +73,7 @@ require_command() {
 }
 
 source "${SCRIPT_DIR}/qemu/usage.sh"
+source "${SCRIPT_DIR}/qemu/device.sh"
 source "${SCRIPT_DIR}/qemu/run-smoke.sh"
 
 while [ $# -gt 0 ]; do
@@ -221,10 +222,7 @@ case "$BUILD_MODE" in
     *) die "Invalid build mode: ${BUILD_MODE}" ;;
 esac
 
-case "$BUS" in
-    virtio|nvme|sata|usb) ;;
-    *) die "Invalid bus '${BUS}'. Use virtio, nvme, sata, or usb." ;;
-esac
+validate_qemu_storage_bus "$BUS"
 
 case "$DISK_SIZE_MB" in
     ''|*[!0-9]*) die "--disk-size must be an integer MiB value" ;;
@@ -234,6 +232,7 @@ case "$SECTOR_SIZE" in
     512|4096) ;;
     *) die "--sector-size must be 512 or 4096" ;;
 esac
+validate_qemu_bus_sector_size "$BUS" "$SECTOR_SIZE"
 
 case "$SMOKE_TIMEOUT" in
     ''|*[!0-9]*) die "--smoke-timeout must be an integer second value" ;;
@@ -253,8 +252,8 @@ if [ "$LAYOUT" = "single" ] && [ "$DATA_FS" != "exfat" ]; then
     warn "--data-fs is ignored for single layout"
 fi
 
-if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ]; then
-    die "--smoke cannot be combined with --no-run"
+if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ]; then
+    die "--smoke without a generated smoke ISO cannot be combined with --no-run"
 fi
 
 if [ "$SMOKE_WINDOWS_ISO" -eq 1 ] && [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
@@ -396,11 +395,6 @@ if [ "$VERIFY_IMAGE" -eq 1 ]; then
     python3 "$VERIFY_SCRIPT" "${VERIFY_ARGS[@]}"
 fi
 
-DEVICE_BLOCK_OPTS=""
-if [ "$SECTOR_SIZE" -ne 512 ]; then
-    DEVICE_BLOCK_OPTS=",logical_block_size=${SECTOR_SIZE},physical_block_size=${SECTOR_SIZE}"
-fi
-
 QEMU_OPTS=(
     -machine q35,accel=tcg
     -m "$MEMORY"
@@ -431,34 +425,7 @@ elif [ "$NO_RUN" -eq 0 ]; then
     die "OVMF firmware not found. Install OVMF/edk2-ovmf or use --no-run to only create the image."
 fi
 
-case "$BUS" in
-    virtio)
-        QEMU_OPTS+=(
-            -drive "if=none,id=nextboot_disk,format=raw,file=${DISK_IMG}"
-            -device "virtio-blk-pci,drive=nextboot_disk,bootindex=1${DEVICE_BLOCK_OPTS}"
-        )
-        ;;
-    nvme)
-        QEMU_OPTS+=(
-            -drive "if=none,id=nextboot_disk,format=raw,file=${DISK_IMG}"
-            -device "nvme,drive=nextboot_disk,serial=NEXTBOOT0,bootindex=1${DEVICE_BLOCK_OPTS}"
-        )
-        ;;
-    sata)
-        QEMU_OPTS+=(
-            -device "ahci,id=ahci0"
-            -drive "if=none,id=nextboot_disk,format=raw,file=${DISK_IMG}"
-            -device "ide-hd,drive=nextboot_disk,bus=ahci0.0,bootindex=1${DEVICE_BLOCK_OPTS}"
-        )
-        ;;
-    usb)
-        QEMU_OPTS+=(
-            -device "qemu-xhci,id=xhci"
-            -drive "if=none,id=nextboot_disk,format=raw,file=${DISK_IMG}"
-            -device "usb-storage,drive=nextboot_disk,bootindex=1${DEVICE_BLOCK_OPTS}"
-        )
-        ;;
-esac
+append_qemu_storage_device "$BUS" "$DISK_IMG" "$SECTOR_SIZE"
 
 echo -e "${BLUE}QEMU command:${NC}"
 printf 'qemu-system-x86_64'

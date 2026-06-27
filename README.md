@@ -15,6 +15,7 @@ NextBoot 是一个基于 Rust 的 UEFI 启动加载器，核心功能是无需�
 - ✅ Linux 发行版引导支持
 - ✅ Windows ISO 引导支持
 - ✅ 4K Native 设备兼容
+- ✅ 固定盘/移动盘路径覆盖：NVMe、SATA、USB、SD、virtio
 
 ## 项目结构
 
@@ -104,6 +105,9 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 # 用真实 SSD 风格的 ESP + exFAT Data 双分区 GPT 布局测试
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --image ~/Downloads/ubuntu.iso
 
+# 用 SD 控制器风格路径测试
+./scripts/run-qemu.sh --bus sd --layout split --data-fs fat32 --smoke-efi-iso
+
 # 用 NTFS Data 分区覆盖 Windows/大文件盘常见布局
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-linux-plugins
 
@@ -133,10 +137,13 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 
 # 只生成 GPT/FAT32 测试盘，不启动虚拟机
 ./scripts/run-qemu.sh --bus sata --no-run
+
+# 运行推荐 QEMU smoke 矩阵；设置 NEXTBOOT_FULL_QEMU_MATRIX=1 可扩展到更多总线
+./scripts/qemu-smoke-matrix.sh
 ```
 
 `run-qemu.sh` 会直接创建 GPT/FAT32/exFAT/NTFS 磁盘镜像，并支持 `virtio`、`nvme`、`sata`、
-`usb` 四种 QEMU 存储路径，用来覆盖固定盘和可移动盘的启动差异。`--sector-size
+`usb`、`sd` 五种 QEMU 存储路径，用来覆盖固定盘、可移动盘和 SD 控制器路径的启动差异。`--sector-size
 4096` 会生成 4K Native 测试盘，并让 QEMU 设备暴露 4096B logical/physical block
 size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异。`--layout split` 会
 生成独立 ESP 和 Data 分区：ESP 只放 `BOOTX64.EFI`，Data 分区放 `/ISO`，用于验证
@@ -159,6 +166,15 @@ WIMBOOT fallback 入口；
 会额外生成 `/ventoy/ventoy.json`、自动安装模板、注入包、DUD 镜像和 persistence 后端，
 验证 Ventoy Linux initrd overlay 能加载这些插件载荷；必要时可用 `--skip-verify` 跳过
 镜像结构检查。
+
+`qemu-smoke-matrix.sh` 默认执行最关键的固定盘与可移动盘组合：NVMe 4K split/exFAT
+真实启动、USB 512 split/FAT32 真实启动，以及 SD 512 split/FAT32 带小 ISO 的镜像
+生成与校验。`NEXTBOOT_FULL_QEMU_MATRIX=1 ./scripts/qemu-smoke-matrix.sh` 会继续覆盖
+virtio 和 SATA/NTFS。SD 目前限制为 512B 扇区，因为 QEMU `sd-card` 设备没有提供和
+NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B，因为 QEMU
+`ide-hd` 要求 512B discard granularity。当前 macOS Homebrew OVMF 也不会直接从
+`sdhci-pci` 启动，所以 SD 启动 smoke 需要显式设置 `NEXTBOOT_QEMU_SD_BOOT_SMOKE=1`
+作为实验项。
 
 ### 写入 U 盘
 
