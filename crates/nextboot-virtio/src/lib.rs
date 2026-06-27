@@ -54,6 +54,24 @@ impl VirtualDeviceType {
     }
 }
 
+/// El Torito CD-ROM boot image location used in UEFI device paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CdRomBootInfo {
+    pub boot_entry: u32,
+    pub image_lba: u64,
+    pub image_block_count: u64,
+}
+
+impl CdRomBootInfo {
+    pub fn new(boot_entry: u32, image_lba: u64, image_block_count: u64) -> Self {
+        Self {
+            boot_entry,
+            image_lba,
+            image_block_count: image_block_count.max(1),
+        }
+    }
+}
+
 /// 虚拟设备配置
 #[derive(Debug, Clone)]
 pub struct VirtualDeviceConfig {
@@ -69,6 +87,8 @@ pub struct VirtualDeviceConfig {
     pub physical_block_size: u32,
     /// 设备名称
     pub device_name: alloc::string::String,
+    /// Optional El Torito boot image used by virtual CD-ROM device paths.
+    pub cdrom_boot: Option<CdRomBootInfo>,
 }
 
 impl VirtualDeviceConfig {
@@ -86,6 +106,7 @@ impl VirtualDeviceConfig {
             block_size,
             physical_block_size: block_size,
             device_name: alloc::string::String::from("NextBoot Virtual Device"),
+            cdrom_boot: None,
         }
     }
 
@@ -103,6 +124,12 @@ impl VirtualDeviceConfig {
     /// 设置底层物理块大小。
     pub fn with_physical_block_size(mut self, physical_block_size: u32) -> Self {
         self.physical_block_size = physical_block_size;
+        self
+    }
+
+    /// Set the El Torito boot image for virtual CD-ROM media.
+    pub fn with_cdrom_boot(mut self, boot: CdRomBootInfo) -> Self {
+        self.cdrom_boot = Some(boot);
         self
     }
 }
@@ -619,6 +646,15 @@ mod tests {
 
         assert_eq!(config.block_count(), 358400);
         assert_eq!(config.device_type, VirtualDeviceType::DvdRom);
+    }
+
+    #[test]
+    fn virtual_device_config_keeps_cdrom_boot_info() {
+        let boot = CdRomBootInfo::new(2, 48, 0);
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::DvdRom, 0, 4096, 2048)
+            .with_cdrom_boot(boot);
+
+        assert_eq!(config.cdrom_boot, Some(CdRomBootInfo::new(2, 48, 1)));
     }
 
     #[test]

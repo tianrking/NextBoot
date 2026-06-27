@@ -207,7 +207,9 @@ impl<'a> BootManager<'a> {
     /// 创建虚拟 Block IO
     fn create_virtual_block_io(&self) -> uefi::Result<VirtualBootDevice> {
         use nextboot_virtio::protocol::VirtualBlockIoProtocol;
-        use nextboot_virtio::{VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
+        use nextboot_virtio::{
+            CdRomBootInfo, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
+        };
 
         info!("Creating virtual Block IO...");
 
@@ -222,7 +224,7 @@ impl<'a> BootManager<'a> {
         };
 
         // 创建配置
-        let config = VirtualDeviceConfig::new(
+        let mut config = VirtualDeviceConfig::new(
             device_type,
             self.iso.start_lba,
             self.iso.size,
@@ -230,6 +232,19 @@ impl<'a> BootManager<'a> {
         )
         .with_physical_block_size(self.iso.block_size)
         .with_name(&self.iso.path);
+        if let Some(boot) = self.iso.boot_info {
+            config = config.with_cdrom_boot(CdRomBootInfo::new(
+                boot.boot_entry,
+                u64::from(boot.image_lba),
+                boot.image_block_count,
+            ));
+            info!(
+                "Using EFI El Torito boot image: catalog LBA {}, entry {}, image LBA {}, blocks {}",
+                boot.catalog_lba, boot.boot_entry, boot.image_lba, boot.image_block_count
+            );
+        } else if matches!(device_type, VirtualDeviceType::DvdRom) {
+            warn!("No EFI El Torito boot image found for {}", self.iso.path);
+        }
 
         // 创建虚拟 Block IO
         let mut vbio = if self.iso.extents.is_empty() {

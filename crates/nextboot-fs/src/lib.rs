@@ -451,7 +451,7 @@ mod tests {
     use super::*;
     use crate::exfat::ExFat;
     use crate::fat32::Fat32;
-    use crate::iso9660::Iso9660;
+    use crate::iso9660::{get_eltorito_boot_info, read_efi_eltorito_boot_info, Iso9660};
     use alloc::rc::Rc;
     use alloc::vec;
 
@@ -521,6 +521,34 @@ mod tests {
         }
     }
 
+    fn write_el_torito_boot_record(block: &mut [u8], catalog_lba: u32) {
+        block[0] = 0;
+        block[1..6].copy_from_slice(b"CD001");
+        block[6] = 1;
+        block[7..30].copy_from_slice(b"EL TORITO SPECIFICATION");
+        block[0x47..0x4B].copy_from_slice(&catalog_lba.to_le_bytes());
+    }
+
+    fn write_validation_entry(catalog: &mut [u8], platform_id: u8) {
+        catalog[0] = 0x01;
+        catalog[1] = platform_id;
+        catalog[30] = 0x55;
+        catalog[31] = 0xAA;
+    }
+
+    fn write_boot_entry(
+        catalog: &mut [u8],
+        offset: usize,
+        media_type: u8,
+        sector_count: u16,
+        image_lba: u32,
+    ) {
+        catalog[offset] = 0x88;
+        catalog[offset + 1] = media_type;
+        catalog[offset + 6..offset + 8].copy_from_slice(&sector_count.to_le_bytes());
+        catalog[offset + 8..offset + 12].copy_from_slice(&image_lba.to_le_bytes());
+    }
+
     #[test]
     fn read_full_blocks_checks_bounds_and_alignment() {
         let io = MemoryBlockIo::new(512, 2);
@@ -575,6 +603,52 @@ mod tests {
         let read = fs.read_file("/kernel", 0, &mut data).expect("file read");
         assert_eq!(read, 11);
         assert_eq!(&data, b"hello world");
+    }
+
+    #[test]
+    fn eltorito_reads_efi_default_entry() {
+        let mut io = MemoryBlockIo::new(2048, 40);
+        write_el_torito_boot_record(io.block_mut(17), 22);
+        write_validation_entry(io.block_mut(22), 0xEF);
+        write_boot_entry(io.block_mut(22), 32, 0, 4, 30);
+
+        let info = read_efi_eltorito_boot_info(&io)
+            .expect("read catalog")
+            .expect("efi boot entry");
+
+        assert_eq!(info.catalog_lba, 22);
+        assert_eq!(info.boot_entry, 0);
+        assert_eq!(info.platform_id, 0xEF);
+        assert_eq!(info.image_lba, 30);
+        assert_eq!(info.image_block_count_2048(), 1);
+        assert_eq!(get_eltorito_boot_info(&io.data), Some((30, 4)));
+    }
+
+    #[test]
+    fn eltorito_prefers_efi_section_entry() {
+        let mut io = MemoryBlockIo::new(2048, 64);
+        write_el_torito_boot_record(io.block_mut(17), 24);
+
+        {
+            let catalog = io.block_mut(24);
+            write_validation_entry(catalog, 0x00);
+            write_boot_entry(catalog, 32, 0, 4, 31);
+
+            catalog[64] = 0x91;
+            catalog[65] = 0xEF;
+            catalog[66..68].copy_from_slice(&1u16.to_le_bytes());
+            write_boot_entry(catalog, 96, 0, 8, 42);
+        }
+
+        let info = read_efi_eltorito_boot_info(&io)
+            .expect("read catalog")
+            .expect("efi section boot entry");
+
+        assert_eq!(info.boot_entry, 1);
+        assert_eq!(info.platform_id, 0xEF);
+        assert_eq!(info.image_lba, 42);
+        assert_eq!(info.sector_count, 8);
+        assert_eq!(info.image_block_count_2048(), 2);
     }
 
     #[test]

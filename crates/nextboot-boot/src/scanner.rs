@@ -10,7 +10,11 @@ use alloc::vec::Vec;
 use core::ptr::NonNull;
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::fat32::Fat32;
+use nextboot_fs::iso9660::{read_efi_eltorito_boot_info, ElToritoBootInfo};
 use nextboot_fs::{detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError};
+use nextboot_virtio::{
+    PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
+};
 use uefi::data_types::CString16;
 use uefi::proto::media::block::BlockIO;
 use uefi::proto::media::file::{Directory, File, FileAttribute, FileMode};
@@ -37,6 +41,8 @@ pub struct IsoFile {
     pub extents: Vec<IsoExtent>,
     /// 检测到的操作系统类型
     pub os_type: OsType,
+    /// ISO 内的 EFI El Torito 启动镜像信息
+    pub boot_info: Option<IsoBootInfo>,
 }
 
 /// ISO 文件在所在卷上的物理区段。
@@ -45,6 +51,36 @@ pub struct IsoExtent {
     pub virtual_block_start: u64,
     pub physical_lba: u64,
     pub block_count: u64,
+}
+
+/// ISO 内 El Torito EFI 启动镜像信息。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IsoBootInfo {
+    pub catalog_lba: u32,
+    pub boot_entry: u32,
+    pub platform_id: u8,
+    pub image_lba: u32,
+    pub image_block_count: u64,
+    pub sector_count: u16,
+}
+
+impl IsoBootInfo {
+    pub fn is_efi(&self) -> bool {
+        self.platform_id == 0xEF
+    }
+}
+
+impl From<ElToritoBootInfo> for IsoBootInfo {
+    fn from(info: ElToritoBootInfo) -> Self {
+        Self {
+            catalog_lba: info.catalog_lba,
+            boot_entry: info.boot_entry,
+            platform_id: info.platform_id,
+            image_lba: info.image_lba,
+            image_block_count: info.image_block_count_2048(),
+            sector_count: info.sector_count,
+        }
+    }
 }
 
 impl From<FileExtent> for IsoExtent {
@@ -252,9 +288,10 @@ impl<'a> IsoScanner<'a> {
             }
 
             if has_supported_extension(&name, extensions) {
-                let (block_size, extents) = self
-                    .resolve_file_extents(volume_handle, &full_path)
-                    .unwrap_or((self.device.block_size, Vec::new()));
+                let is_iso = name.to_lowercase().ends_with(".iso");
+                let (block_size, extents, boot_info) = self
+                    .resolve_image_metadata(volume_handle, &full_path, entry.file_size(), is_iso)
+                    .unwrap_or((self.device.block_size, Vec::new(), None));
                 let start_lba = extents.first().map_or(0, |extent| extent.physical_lba);
 
                 files.push(IsoFile {
@@ -265,6 +302,7 @@ impl<'a> IsoScanner<'a> {
                     start_lba,
                     extents,
                     os_type: self.detect_iso_type(&full_path),
+                    boot_info,
                 });
             }
         }
@@ -272,11 +310,13 @@ impl<'a> IsoScanner<'a> {
         Ok(())
     }
 
-    fn resolve_file_extents(
+    fn resolve_image_metadata(
         &self,
         volume_handle: Handle,
         path: &str,
-    ) -> Option<(u32, Vec<IsoExtent>)> {
+        size: u64,
+        is_iso: bool,
+    ) -> Option<(u32, Vec<IsoExtent>, Option<IsoBootInfo>)> {
         let block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(volume_handle)
@@ -302,10 +342,48 @@ impl<'a> IsoScanner<'a> {
             _ => return None,
         };
 
-        Some((
-            block_size,
-            extents.into_iter().map(IsoExtent::from).collect(),
-        ))
+        let extents: Vec<IsoExtent> = extents.into_iter().map(IsoExtent::from).collect();
+        let boot_info = if is_iso {
+            self.resolve_iso_boot_info(&block_io, block_size, size, &extents)
+        } else {
+            None
+        };
+
+        Some((block_size, extents, boot_info))
+    }
+
+    fn resolve_iso_boot_info(
+        &self,
+        block_io: &BlockIO,
+        source_block_size: u32,
+        size: u64,
+        extents: &[IsoExtent],
+    ) -> Option<IsoBootInfo> {
+        if extents.is_empty() || size == 0 {
+            return None;
+        }
+
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::DvdRom, 0, size, 2048)
+            .with_physical_block_size(source_block_size);
+        let extent_map: Vec<(u64, u64, u64)> = extents
+            .iter()
+            .map(|extent| {
+                (
+                    extent.virtual_block_start,
+                    extent.physical_lba,
+                    extent.block_count,
+                )
+            })
+            .collect();
+
+        let mut vbio = VirtualBlockIo::from_file_extents(config, &extent_map);
+        vbio.set_physical_reader(UefiBlockIo::new(block_io)?);
+        let iso_io = VirtualIsoBlockIo::new(vbio);
+
+        read_efi_eltorito_boot_info(&iso_io)
+            .ok()
+            .flatten()
+            .map(IsoBootInfo::from)
     }
 }
 
@@ -358,6 +436,56 @@ impl BlockIoOps for UefiBlockIo {
 
         let block_io = unsafe { self.block_io.as_ref() };
         block_io
+            .read_blocks(self.media_id, lba, buf)
+            .map_err(|_| FsError::ReadError)
+    }
+}
+
+impl PhysicalReader for UefiBlockIo {
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
+        let block_size = self.block_size as usize;
+        if block_size == 0 || buf.is_empty() || buf.len() % block_size != 0 {
+            return Err(VirtIoError::InvalidBufferSize);
+        }
+
+        let block_count = (buf.len() / block_size) as u64;
+        if lba
+            .checked_add(block_count)
+            .map_or(true, |end| end > self.total_blocks)
+        {
+            return Err(VirtIoError::OutOfBounds);
+        }
+
+        let block_io = unsafe { self.block_io.as_ref() };
+        block_io
+            .read_blocks(self.media_id, lba, buf)
+            .map_err(|_| VirtIoError::ReadFailed)
+    }
+}
+
+struct VirtualIsoBlockIo {
+    vbio: VirtualBlockIo,
+    media_id: u32,
+}
+
+impl VirtualIsoBlockIo {
+    fn new(vbio: VirtualBlockIo) -> Self {
+        let media_id = vbio.media_id();
+        Self { vbio, media_id }
+    }
+}
+
+impl BlockIoOps for VirtualIsoBlockIo {
+    fn block_size(&self) -> u32 {
+        self.vbio.block_size()
+    }
+
+    fn total_blocks(&self) -> u64 {
+        self.vbio.block_count()
+    }
+
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        self.vbio
             .read_blocks(self.media_id, lba, buf)
             .map_err(|_| FsError::ReadError)
     }

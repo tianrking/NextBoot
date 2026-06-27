@@ -428,7 +428,17 @@ impl VirtualBlockIoProtocol {
         let info = vbio.device_info();
 
         match info.device_type {
-            crate::VirtualDeviceType::DvdRom => create_cdrom_device_path(0, 0, info.block_count),
+            crate::VirtualDeviceType::DvdRom => {
+                if let Some(boot) = vbio.config().cdrom_boot {
+                    create_cdrom_device_path(
+                        boot.boot_entry,
+                        boot.image_lba,
+                        boot.image_block_count,
+                    )
+                } else {
+                    create_cdrom_device_path(0, 0, info.block_count)
+                }
+            }
             crate::VirtualDeviceType::HardDisk | crate::VirtualDeviceType::UsbMassStorage => {
                 create_hard_drive_device_path(1, 0, info.block_count)
             }
