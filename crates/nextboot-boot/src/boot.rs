@@ -7,7 +7,8 @@ use crate::scanner::{IsoFile, OsType};
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::ptr::NonNull;
+use core::ffi::c_void;
+use core::ptr::{self, NonNull};
 use log::{info, warn};
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::{BlockIoOps, FileSystem, FsError};
@@ -17,8 +18,43 @@ use nextboot_virtio::{
 };
 use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
+use uefi::proto::unsafe_protocol;
 use uefi::table::boot::{BootServices, LoadImageSource};
-use uefi::{Handle, Status};
+use uefi::{Handle, Identify, Status};
+
+#[derive(Debug)]
+#[repr(transparent)]
+#[unsafe_protocol("56ec3091-954c-11d2-8e3f-00a0c969723b")]
+struct LoadFile(LoadFileProtocol);
+
+#[derive(Debug)]
+#[repr(transparent)]
+#[unsafe_protocol("4006c0c1-fcb3-403e-996d-4a6c8724e06d")]
+struct LoadFile2(LoadFile2Protocol);
+
+#[derive(Debug)]
+#[repr(C)]
+struct LoadFileProtocol {
+    load_file: extern "efiapi" fn(
+        *mut LoadFileProtocol,
+        *const FfiDevicePath,
+        bool,
+        *mut usize,
+        *mut c_void,
+    ) -> Status,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+struct LoadFile2Protocol {
+    load_file: extern "efiapi" fn(
+        *mut LoadFile2Protocol,
+        *const FfiDevicePath,
+        bool,
+        *mut usize,
+        *mut c_void,
+    ) -> Status,
+}
 
 const EFI_BOOT_X64: &str = "\\EFI\\BOOT\\BOOTX64.EFI";
 const EFI_BOOT_AA64: &str = "\\EFI\\BOOT\\BOOTAA64.EFI";
@@ -307,6 +343,7 @@ impl<'a> BootManager<'a> {
         use nextboot_virtio::protocol::VirtualBlockIoProtocol;
 
         info!("Creating virtual Block IO...");
+        let load_file_entries = self.preload_load_file_entries();
 
         let source_block_io = self
             .bt
@@ -316,7 +353,27 @@ impl<'a> BootManager<'a> {
         let registered = VirtualBlockIoProtocol::new(vbio).install(self.bt)?;
         let virtual_handle = registered.handle();
         let device_path = registered.device_path().to_vec();
+
+        let load_file_protocol = if load_file_entries.is_empty() {
+            None
+        } else {
+            match PreloadedLoadFileProtocol::install(self.bt, virtual_handle, load_file_entries) {
+                Ok(protocol) => Some(protocol),
+                Err(err) => {
+                    warn!(
+                        "Failed to install LoadFile protocols on virtual device {:?}: {:?}",
+                        virtual_handle,
+                        err.status()
+                    );
+                    None
+                }
+            }
+        };
+
         registered.leak();
+        if let Some(protocol) = load_file_protocol {
+            protocol.leak();
+        }
 
         info!(
             "Virtual Block IO installed on {:?}: {:?}, source extents: {}",
@@ -411,6 +468,33 @@ impl<'a> BootManager<'a> {
         vbio.set_physical_reader(reader);
 
         Ok(vbio)
+    }
+
+    fn preload_load_file_entries(&self) -> Vec<PreloadedFile> {
+        let mut entries = Vec::new();
+
+        for path in generic_efi_boot_paths() {
+            match self.load_file(path) {
+                Ok(data) if !data.is_empty() => {
+                    let key = normalize_load_file_key(path);
+                    if entries
+                        .iter()
+                        .any(|entry: &PreloadedFile| entry.path == key)
+                    {
+                        continue;
+                    }
+
+                    info!("Preloaded LoadFile path {} ({} bytes)", path, data.len());
+                    entries.push(PreloadedFile { path: key, data });
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    info!("LoadFile preload skipped {}: {:?}", path, err.status());
+                }
+            }
+        }
+
+        entries
     }
 
     fn boot_virtual_device(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
@@ -516,6 +600,159 @@ impl PhysicalReader for UefiPhysicalReader {
     }
 }
 
+struct PreloadedFile {
+    path: String,
+    data: Vec<u8>,
+}
+
+#[repr(C)]
+struct PreloadedLoadFileProtocol {
+    load_file: LoadFileProtocol,
+    load_file_2: LoadFile2Protocol,
+    entries: Vec<PreloadedFile>,
+}
+
+impl PreloadedLoadFileProtocol {
+    fn install(
+        bt: &BootServices,
+        handle: Handle,
+        entries: Vec<PreloadedFile>,
+    ) -> uefi::Result<RegisteredPreloadedLoadFile> {
+        let mut protocol = alloc::boxed::Box::new(Self {
+            load_file: LoadFileProtocol {
+                load_file: Self::load_file_handler,
+            },
+            load_file_2: LoadFile2Protocol {
+                load_file: Self::load_file_2_handler,
+            },
+            entries,
+        });
+
+        let load_file_interface = protocol.load_file_ptr().cast::<c_void>();
+        unsafe {
+            bt.install_protocol_interface(Some(handle), &LoadFile::GUID, load_file_interface)
+        }?;
+
+        let load_file_2_interface = protocol.load_file_2_ptr().cast::<c_void>();
+        if let Err(err) = unsafe {
+            bt.install_protocol_interface(Some(handle), &LoadFile2::GUID, load_file_2_interface)
+        } {
+            let _ = unsafe {
+                bt.uninstall_protocol_interface(handle, &LoadFile::GUID, load_file_interface)
+            };
+            return Err(err);
+        }
+
+        Ok(RegisteredPreloadedLoadFile { protocol })
+    }
+
+    fn load_file_ptr(&mut self) -> *mut LoadFileProtocol {
+        &mut self.load_file
+    }
+
+    fn load_file_2_ptr(&mut self) -> *mut LoadFile2Protocol {
+        &mut self.load_file_2
+    }
+
+    extern "efiapi" fn load_file_handler(
+        this: *mut LoadFileProtocol,
+        file_path: *const FfiDevicePath,
+        boot_policy: bool,
+        buffer_size: *mut usize,
+        buffer: *mut c_void,
+    ) -> Status {
+        let Some(protocol) = Self::from_load_file(this) else {
+            return Status::INVALID_PARAMETER;
+        };
+
+        protocol.load_file(file_path, boot_policy, buffer_size, buffer)
+    }
+
+    extern "efiapi" fn load_file_2_handler(
+        this: *mut LoadFile2Protocol,
+        file_path: *const FfiDevicePath,
+        boot_policy: bool,
+        buffer_size: *mut usize,
+        buffer: *mut c_void,
+    ) -> Status {
+        let Some(protocol) = Self::from_load_file_2(this) else {
+            return Status::INVALID_PARAMETER;
+        };
+
+        protocol.load_file(file_path, boot_policy, buffer_size, buffer)
+    }
+
+    fn load_file(
+        &self,
+        file_path: *const FfiDevicePath,
+        boot_policy: bool,
+        buffer_size: *mut usize,
+        buffer: *mut c_void,
+    ) -> Status {
+        if buffer_size.is_null() {
+            return Status::INVALID_PARAMETER;
+        }
+
+        let requested = unsafe { load_file_path_from_device_path(file_path) };
+        let entry = requested
+            .as_ref()
+            .and_then(|path| self.find_entry(path))
+            .or_else(|| boot_policy.then(|| self.entries.first()).flatten());
+
+        let Some(entry) = entry else {
+            return Status::NOT_FOUND;
+        };
+
+        let required_size = entry.data.len();
+        let provided_size = unsafe { *buffer_size };
+        unsafe {
+            *buffer_size = required_size;
+        }
+
+        if buffer.is_null() || provided_size < required_size {
+            return Status::BUFFER_TOO_SMALL;
+        }
+
+        unsafe {
+            ptr::copy_nonoverlapping(entry.data.as_ptr(), buffer.cast::<u8>(), required_size);
+        }
+
+        Status::SUCCESS
+    }
+
+    fn find_entry(&self, path: &str) -> Option<&PreloadedFile> {
+        self.entries.iter().find(|entry| entry.path == path)
+    }
+
+    fn from_load_file(this: *mut LoadFileProtocol) -> Option<&'static mut Self> {
+        if this.is_null() {
+            return None;
+        }
+
+        Some(unsafe { &mut *(this.cast::<Self>()) })
+    }
+
+    fn from_load_file_2(this: *mut LoadFile2Protocol) -> Option<&'static mut Self> {
+        if this.is_null() {
+            return None;
+        }
+
+        let offset = core::mem::offset_of!(Self, load_file_2);
+        let ptr = unsafe { this.cast::<u8>().sub(offset).cast::<Self>() };
+        Some(unsafe { &mut *ptr })
+    }
+}
+
+struct RegisteredPreloadedLoadFile {
+    protocol: alloc::boxed::Box<PreloadedLoadFileProtocol>,
+}
+
+impl RegisteredPreloadedLoadFile {
+    fn leak(self) {
+        let _ = alloc::boxed::Box::leak(self.protocol);
+    }
+}
+
 struct VirtualIsoBlockIo {
     vbio: VirtualBlockIo,
     media_id: u32,
@@ -589,6 +826,59 @@ fn normalize_iso_path(path: &str) -> String {
     }
 
     normalized
+}
+
+fn normalize_load_file_key(path: &str) -> String {
+    let mut normalized = normalize_iso_path(path);
+    normalized.make_ascii_lowercase();
+    normalized
+}
+
+unsafe fn load_file_path_from_device_path(file_path: *const FfiDevicePath) -> Option<String> {
+    if file_path.is_null() {
+        return None;
+    }
+
+    let mut node = file_path.cast::<u8>();
+    let mut path = String::new();
+
+    for _ in 0..64 {
+        let node_type = unsafe { *node };
+        let node_subtype = unsafe { *node.add(1) };
+        let length = u16::from_le_bytes([unsafe { *node.add(2) }, unsafe { *node.add(3) }]);
+        let length = usize::from(length);
+
+        if length < 4 {
+            return None;
+        }
+
+        if node_type == 0x7f {
+            break;
+        }
+
+        if node_type == 0x04 && node_subtype == 0x04 {
+            let units = (length - 4) / 2;
+            let chars = unsafe { node.add(4).cast::<u16>() };
+
+            for index in 0..units {
+                let unit = unsafe { ptr::read_unaligned(chars.add(index)) };
+                if unit == 0 {
+                    break;
+                }
+
+                let ch = char::from_u32(u32::from(unit)).unwrap_or('\u{fffd}');
+                path.push(if ch == '\\' { '/' } else { ch });
+            }
+        }
+
+        node = unsafe { node.add(length) };
+    }
+
+    if path.is_empty() {
+        None
+    } else {
+        Some(normalize_load_file_key(&path))
+    }
 }
 
 /// 引导模式
