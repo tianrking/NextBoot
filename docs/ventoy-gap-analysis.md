@@ -61,8 +61,9 @@ workflows and which gaps are still worth pursuing.
   smoke coverage; real `mkfs.xfs` btree-scale directories still need broader
   compatibility work.
 - Cross-architecture boot: x86_64, IA32, and AArch64 build/QEMU smoke paths and
-  shared ESP release layout exist now. Broader production packaging could still
-  add ARM 32-bit artifacts.
+  shared ESP release layout exist now. The QEMU architecture map is isolated in
+  `scripts/qemu/arch.sh`; ARM 32-bit remains out of scope until Rust exposes an
+  `arm*-unknown-uefi` target.
 - Compatibility database: Ventoy has years of device reports. NextBoot now has
   `scripts/hardware-report.sh` and `docs/hardware-compatibility-matrix.md` to
   collect structured rows for real SSD, NVMe enclosure, USB stick, SD reader,
