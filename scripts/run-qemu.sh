@@ -17,6 +17,7 @@
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
+#   TARGET=i686-unknown-uefi ./scripts/run-qemu.sh --bus virtio --smoke-efi-iso
 #   TARGET=aarch64-unknown-uefi ./scripts/run-qemu.sh --bus virtio --smoke-efi-iso
 
 set -eo pipefail
@@ -101,6 +102,19 @@ configure_qemu_arch() {
                 "/opt/homebrew/opt/qemu/share/qemu/edk2-x86_64-code.fd"
             )
             ;;
+        i686-unknown-uefi)
+            EFI_BOOT_NAME="BOOTIA32.EFI"
+            SMOKE_ARCH_TAG="ia32"
+            QEMU_BINARY="qemu-system-i386"
+            QEMU_OPTS=(-machine q35,accel=tcg)
+            OVMF_PATHS=(
+                "/usr/share/OVMF/OVMF32_CODE.fd"
+                "/usr/share/ovmf/OVMF32.fd"
+                "/usr/share/qemu/edk2-i386-code.fd"
+                "/opt/homebrew/share/qemu/edk2-i386-code.fd"
+                "/opt/homebrew/opt/qemu/share/qemu/edk2-i386-code.fd"
+            )
+            ;;
         aarch64-unknown-uefi)
             EFI_BOOT_NAME="BOOTAA64.EFI"
             SMOKE_ARCH_TAG="aa64"
@@ -117,7 +131,7 @@ configure_qemu_arch() {
             )
             ;;
         *)
-            die "Unsupported UEFI QEMU target '${TARGET}'. Supported: x86_64-unknown-uefi, aarch64-unknown-uefi"
+            die "Unsupported UEFI QEMU target '${TARGET}'. Supported: x86_64-unknown-uefi, i686-unknown-uefi, aarch64-unknown-uefi"
             ;;
     esac
 }

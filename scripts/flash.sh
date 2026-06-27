@@ -40,7 +40,8 @@ Usage:
   $0 [options] <device>
 
 Options:
-  --target TARGET   UEFI build target: x86_64-unknown-uefi, aarch64-unknown-uefi, or all
+  --target TARGET   UEFI build target: x86_64-unknown-uefi, i686-unknown-uefi,
+                    aarch64-unknown-uefi, or all
   --layout LAYOUT   Disk layout: split or single (default: split)
   --data-fs FS      Data partition filesystem for split layout: exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs (default: exfat)
   --esp-size MB     ESP size for split layout in MiB (default: 260)
@@ -60,6 +61,7 @@ Examples:
   $0 --layout split --data-fs ntfs /dev/diskX
   $0 --layout split --data-fs udf /dev/sdX
   $0 --layout split --data-fs xfs /dev/nvme0n1
+  $0 --target i686-unknown-uefi --layout split --data-fs exfat /dev/diskX
   $0 --target aarch64-unknown-uefi --layout split --data-fs exfat /dev/diskX
   $0 --target all --layout split --data-fs exfat /dev/diskX
   $0 --layout split --ventoy-assets ../Ventoy/INSTALL/ventoy /dev/diskX
@@ -123,53 +125,7 @@ list_devices() {
 }
 
 source "${SCRIPT_DIR}/lib/flash_helpers.sh"
-
-configure_flash_target() {
-    case "$TARGET" in
-        x86_64-unknown-uefi)
-            EFI_INSTALL_TARGETS=("x86_64-unknown-uefi")
-            EFI_INSTALL_NAMES=("BOOTX64.EFI")
-            ;;
-        aarch64-unknown-uefi)
-            EFI_INSTALL_TARGETS=("aarch64-unknown-uefi")
-            EFI_INSTALL_NAMES=("BOOTAA64.EFI")
-            ;;
-        all)
-            EFI_INSTALL_TARGETS=("x86_64-unknown-uefi" "aarch64-unknown-uefi")
-            EFI_INSTALL_NAMES=("BOOTX64.EFI" "BOOTAA64.EFI")
-            ;;
-        *)
-            die "Unsupported UEFI target '${TARGET}'. Supported: x86_64-unknown-uefi, aarch64-unknown-uefi, all"
-            ;;
-    esac
-}
-
-find_built_efi() {
-    local target="$1"
-    local release="${PROJECT_DIR}/target/${target}/release/nextboot-boot.efi"
-    local debug="${PROJECT_DIR}/target/${target}/debug/nextboot-boot.efi"
-
-    if [ -f "$release" ]; then
-        printf '%s\n' "$release"
-    elif [ -f "$debug" ]; then
-        printf '%s\n' "$debug"
-    else
-        return 1
-    fi
-}
-
-resolve_efi_files() {
-    EFI_INSTALL_FILES=()
-    local index
-    for index in "${!EFI_INSTALL_TARGETS[@]}"; do
-        local install_target="${EFI_INSTALL_TARGETS[$index]}"
-        local efi_file
-        efi_file="$(find_built_efi "$install_target")" || {
-            die "EFI file not found for ${install_target}. Run TARGET=${TARGET} ./scripts/build.sh first."
-        }
-        EFI_INSTALL_FILES+=("$efi_file")
-    done
-}
+source "${SCRIPT_DIR}/lib/flash_targets.sh"
 
 parse_args() {
     if [ $# -eq 0 ]; then

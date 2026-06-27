@@ -5,7 +5,7 @@
 #   ./scripts/build.sh          - Build in debug mode
 #   ./scripts/build.sh check    - Type-check the UEFI binary
 #   ./scripts/build.sh release  - Build in release mode
-#   TARGET=all ./scripts/build.sh release - Build x86_64 and AArch64 artifacts
+#   TARGET=all ./scripts/build.sh release - Build x86_64, IA32, and AArch64 artifacts
 
 set -e
 
@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 TARGET="${TARGET:-x86_64-unknown-uefi}"
 RUSTC_BIN="${RUSTC:-}"
 CARGO_BIN="${CARGO:-}"
-ALL_TARGETS=(x86_64-unknown-uefi aarch64-unknown-uefi)
+ALL_TARGETS=(x86_64-unknown-uefi i686-unknown-uefi aarch64-unknown-uefi)
 
 if [ "${TARGET}" = "all" ]; then
     for nextboot_target in "${ALL_TARGETS[@]}"; do

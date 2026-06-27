@@ -460,7 +460,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--boot-file-name",
         default="BOOTX64.EFI",
-        choices=("BOOTX64.EFI", "BOOTAA64.EFI"),
+        choices=("BOOTX64.EFI", "BOOTIA32.EFI", "BOOTAA64.EFI"),
         help="generic ISO fallback filename under /EFI/BOOT",
     )
     parser.add_argument("--label", default="NEXTSMOKE", help="ISO9660 volume label")

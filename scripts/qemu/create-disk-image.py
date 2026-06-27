@@ -40,8 +40,8 @@ if layout not in ("single", "split"):
     raise SystemExit("layout must be single or split")
 if data_fs not in ("exfat", "ext2", "ext3", "ext4", "fat32", "ntfs", "udf", "xfs"):
     raise SystemExit("data filesystem must be exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs")
-if efi_boot_name not in ("BOOTX64.EFI", "BOOTAA64.EFI"):
-    raise SystemExit("EFI boot name must be BOOTX64.EFI or BOOTAA64.EFI")
+if efi_boot_name not in ("BOOTX64.EFI", "BOOTIA32.EFI", "BOOTAA64.EFI"):
+    raise SystemExit("EFI boot name must be BOOTX64.EFI, BOOTIA32.EFI, or BOOTAA64.EFI")
 total_bytes = size_mb * 1024 * 1024
 if total_bytes % sector_size != 0:
     raise SystemExit("disk size must be aligned to the sector size")

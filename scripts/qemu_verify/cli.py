@@ -24,7 +24,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--efi-boot-name",
         default="BOOTX64.EFI",
-        choices=("BOOTX64.EFI", "BOOTAA64.EFI"),
+        choices=("BOOTX64.EFI", "BOOTIA32.EFI", "BOOTAA64.EFI"),
         help="fallback EFI filename under /EFI/BOOT",
     )
     parser.add_argument("--image", action="append", default=[], help="expected /ISO image file; repeatable")

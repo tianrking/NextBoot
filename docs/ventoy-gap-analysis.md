@@ -33,14 +33,16 @@ workflows and which gaps are still worth pursuing.
   local test certificate, sign the UEFI binary with sbsigntools, verify the
   signed binary where `sbverify` is available, and document firmware db or shim
   MOK enrollment via `docs/secure-boot.md`.
-- AArch64 UEFI test path: `TARGET=aarch64-unknown-uefi` now builds the
-  bootloader and smoke EFI, writes `EFI/BOOT/BOOTAA64.EFI` into generated QEMU
-  disks and flash media, verifies that fallback path, and runs under
-  `qemu-system-aarch64` with AAVMF/edk2-aarch64 firmware.
-- Cross-architecture release media: `TARGET=all` builds both x86_64 and
-  AArch64 UEFI artifacts, and `flash.sh --target all` installs both
-  `EFI/BOOT/BOOTX64.EFI` and `EFI/BOOT/BOOTAA64.EFI` on one ESP for portable
-  SSD, USB, or SD media.
+- IA32 and AArch64 UEFI test paths: `TARGET=i686-unknown-uefi` and
+  `TARGET=aarch64-unknown-uefi` now build the bootloader and smoke EFI, write
+  `EFI/BOOT/BOOTIA32.EFI` or `EFI/BOOT/BOOTAA64.EFI` into generated QEMU disks
+  and flash media, verify those fallback paths, and run under `qemu-system-i386`
+  with edk2-i386 firmware or `qemu-system-aarch64` with AAVMF/edk2-aarch64
+  firmware.
+- Cross-architecture release media: `TARGET=all` builds x86_64, IA32, and
+  AArch64 UEFI artifacts, and `flash.sh --target all` installs
+  `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and `EFI/BOOT/BOOTAA64.EFI`
+  on one ESP for portable SSD, USB, or SD media.
 
 ## Useful Ventoy Ideas Still Open
 
@@ -58,9 +60,9 @@ workflows and which gaps are still worth pursuing.
   in the QEMU data partition and flash paths, including 512B and 4K-sector XFS
   smoke coverage; real `mkfs.xfs` btree-scale directories still need broader
   compatibility work.
-- Cross-architecture boot: x86_64 and AArch64 build/QEMU smoke paths and shared
-  ESP release layout exist now. Broader production packaging could still add
-  IA32/ARM artifacts.
+- Cross-architecture boot: x86_64, IA32, and AArch64 build/QEMU smoke paths and
+  shared ESP release layout exist now. Broader production packaging could still
+  add ARM 32-bit artifacts.
 - Compatibility database: Ventoy has years of device reports. NextBoot now has
   `scripts/hardware-report.sh` and `docs/hardware-compatibility-matrix.md` to
   collect structured rows for real SSD, NVMe enclosure, USB stick, SD reader,

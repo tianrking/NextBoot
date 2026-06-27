@@ -46,13 +46,14 @@ NextBoot/
 
 - Rust 1.70+ (安装 `rustup`)
 - QEMU + OVMF (用于测试)
-- x86_64-unknown-uefi target; 可选 `aarch64-unknown-uefi`
+- x86_64-unknown-uefi target; 可选 `i686-unknown-uefi`、`aarch64-unknown-uefi`
 
 ### 安装依赖
 
 ```bash
 # 添加 UEFI 目标
 rustup target add x86_64-unknown-uefi
+rustup target add i686-unknown-uefi
 rustup target add aarch64-unknown-uefi
 
 # 安装 rust-src 组件
@@ -77,7 +78,7 @@ sudo dnf install edk2-ovmf
 # Debug 模式
 ./scripts/build.sh
 
-# 同时构建 x86_64 和 AArch64 UEFI 产物
+# 同时构建 x86_64、IA32 和 AArch64 UEFI 产物
 TARGET=all ./scripts/build.sh
 
 # Release 模式
@@ -85,12 +86,13 @@ TARGET=all ./scripts/build.sh
 
 # 可选：覆盖目标平台
 TARGET=x86_64-unknown-uefi ./scripts/build.sh check
+TARGET=i686-unknown-uefi ./scripts/build.sh check
 TARGET=aarch64-unknown-uefi ./scripts/build.sh check
 TARGET=all ./scripts/build.sh check
 ```
 
 `scripts/build.sh` 会优先验证当前 toolchain 是否已经包含 UEFI target，并在需要时安装
-`x86_64-unknown-uefi`。如果本机的 `rustup` shim 状态异常，也可以显式指定真实工具链：
+`x86_64-unknown-uefi`、`i686-unknown-uefi` 或 `aarch64-unknown-uefi`。如果本机的 `rustup` shim 状态异常，也可以显式指定真实工具链：
 
 ```bash
 RUSTC="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc" \
@@ -138,6 +140,10 @@ shim、微软 UEFI CA 签名和 SBAT/吊销策略仍在兼容性 gap 中。详�
 
 # 用 SD 控制器风格路径测试
 ./scripts/run-qemu.sh --bus sd --layout split --data-fs fat32 --smoke-efi-iso
+
+# 用 IA32 UEFI 固件测试 virtio 固定盘路径和 BOOTIA32.EFI fallback
+TARGET=i686-unknown-uefi ./scripts/build.sh
+TARGET=i686-unknown-uefi ./scripts/run-qemu.sh --bus virtio --smoke-efi-iso
 
 # 用 AArch64 UEFI 固件测试 virtio 固定盘路径和 BOOTAA64.EFI fallback
 TARGET=aarch64-unknown-uefi ./scripts/build.sh
@@ -194,7 +200,7 @@ TARGET=aarch64-unknown-uefi ./scripts/run-qemu.sh --bus virtio --smoke-efi-iso
 4096` 会生成 4K Native 测试盘，并让 QEMU 设备暴露 4096B logical/physical block
 size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异。`--layout split` 会
 生成独立 ESP 和 Data 分区：ESP 只放当前目标架构的 fallback EFI（x86_64 为
-`BOOTX64.EFI`，AArch64 为 `BOOTAA64.EFI`），Data 分区放 `/ISO`，用于验证
+`BOOTX64.EFI`，IA32 为 `BOOTIA32.EFI`，AArch64 为 `BOOTAA64.EFI`），Data 分区放 `/ISO`，用于验证
 固定盘上“引导分区与镜像分区分离”的真实部署路径；`--data-fs exfat|ext2|ext3|ext4|fat32|ntfs|udf|xfs` 可覆盖
 默认写盘布局、Linux ext 系列数据盘、FAT32 兼容布局、NTFS 大文件布局和 UDF 数据盘布局。生成后脚本会调用
 `verify-qemu-image.py` 校验 GPT CRC、分区布局、FAT32/exFAT/ext2/3/4/NTFS/UDF/XFS 目录、fallback EFI、
@@ -203,7 +209,7 @@ size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异�
 `mkfs.xfs` 更复杂的大目录/btree 形态仍在 gap 列表中；`--smoke`
 会继续启动 QEMU 并检查 NextBoot 日志里是否进入扫描/菜单阶段；`--smoke-boot` 会
 自动按 Enter 并检查是否安装虚拟 Block IO；`--smoke-efi-iso` 会生成一个带 EFI
-El Torito boot catalog、内含 `/EFI/BOOT/BOOTX64.EFI` 的最小 ISO，并继续验证该 EFI
+El Torito boot catalog、内含当前架构 `/EFI/BOOT/BOOT*.EFI` fallback 的最小 ISO，并继续验证该 EFI
 loader 被链式启动；`--smoke-vlnk-iso` 会生成 Ventoy 兼容 `.vlnk.iso` 指针文件，
 指向同一 Data 分区 `/ventoy/vlnk-target.iso` 下的真实 ISO，并验证 VLNK 解析、
 目标 extent 映射、VentoyOsParam 的 vlnk 标记和目标 ISO 的 EFI loader 启动；
@@ -221,7 +227,7 @@ sector bitmap，验证不依赖父盘数据的 partially-present VHDX 也能启�
 `--smoke-windows-wimboot` 会生成一个没有默认 Windows EFI loader、但包含 `boot.wim`、BCD
 和 `boot.sdi` 的 ISO，同时在 Data 分区放入 `/ventoy/wimboot.x86_64.xz`，验证 Windows ISO
 WIMBOOT fallback 入口；
-`--smoke-linux-iso` 会生成不含 `/EFI/BOOT/BOOTX64.EFI` 的 Linux 风格 ISO，验证内核
+`--smoke-linux-iso` 会生成不含当前架构 fallback EFI 的 Linux 风格 ISO，验证内核
 候选发现、initrd LoadFile2 provider 和 EFI stub 启动路径；`--smoke-linux-plugins`
 会额外生成 `/ventoy/ventoy.json`、自动安装模板、注入包、DUD 镜像和 persistence 后端，
 验证 Ventoy Linux initrd overlay 能加载这些插件载荷；必要时可用 `--skip-verify` 跳过
@@ -235,8 +241,9 @@ NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B�
 `ide-hd` 要求 512B discard granularity。当前 macOS Homebrew OVMF 也不会直接从
 `sdhci-pci` 启动，所以 SD 启动 smoke 需要显式设置 `NEXTBOOT_QEMU_SD_BOOT_SMOKE=1`
 作为实验项。
-矩阵默认使用 `x86_64-unknown-uefi`；可用 `TARGET=aarch64-unknown-uefi ./scripts/qemu-smoke-matrix.sh`
-覆盖 AArch64 virtio/NVMe/USB 等路径，其中 fallback 文件名会自动改为 `BOOTAA64.EFI`。
+矩阵默认使用 `x86_64-unknown-uefi`；可用 `TARGET=i686-unknown-uefi ./scripts/qemu-smoke-matrix.sh`
+覆盖 IA32 virtio/NVMe/USB 等路径，或用 `TARGET=aarch64-unknown-uefi ./scripts/qemu-smoke-matrix.sh`
+覆盖 AArch64 路径，其中 fallback 文件名会自动改为 `BOOTIA32.EFI` 或 `BOOTAA64.EFI`。
 
 真实硬件测试用 `./scripts/hardware-report.sh` 生成统一报告，并可追加
 `docs/hardware/hardware-matrix.csv`。推荐覆盖项见
@@ -255,7 +262,10 @@ SATA SSD、SD 读卡器、512B/4K 扇区和 exFAT/NTFS/ext/UDF/XFS Data 分区�
 # 写入 AArch64 UEFI 介质，ESP 使用 EFI/BOOT/BOOTAA64.EFI
 TARGET=aarch64-unknown-uefi ./scripts/flash.sh --layout split --data-fs exfat /dev/sdX
 
-# 写入跨架构介质，ESP 同时包含 BOOTX64.EFI 和 BOOTAA64.EFI
+# 写入 IA32 UEFI 介质，ESP 使用 EFI/BOOT/BOOTIA32.EFI
+TARGET=i686-unknown-uefi ./scripts/flash.sh --layout split --data-fs exfat /dev/sdX
+
+# 写入跨架构介质，ESP 同时包含 BOOTX64.EFI、BOOTIA32.EFI 和 BOOTAA64.EFI
 TARGET=all ./scripts/build.sh release
 TARGET=all ./scripts/flash.sh --layout split --data-fs exfat /dev/sdX
 
@@ -285,7 +295,7 @@ TARGET=all ./scripts/flash.sh --layout split --data-fs exfat /dev/sdX
 启动文件；第 2 分区是 Data 分区，默认 exFAT，也可选择 FAT32、ext2/ext3/ext4、NTFS、UDF 或 XFS，用来存放
 `/ISO` 下的 ISO/WIM/VHD 文件。旧式单分区 FAT32 仍可通过 `--layout single` 生成。
 设置 `TARGET=all` 或 `--target all` 时，ESP 会同时安装 `EFI/BOOT/BOOTX64.EFI` 和
-`EFI/BOOT/BOOTAA64.EFI`，适合一块 SSD/U 盘/SD 卡跨 x86_64 与 AArch64 UEFI 固件启动。
+`EFI/BOOT/BOOTIA32.EFI`、`EFI/BOOT/BOOTAA64.EFI`，适合一块 SSD/U 盘/SD 卡跨 x86_64、IA32 与 AArch64 UEFI 固件启动。
 在 Linux 上写入 ext/UDF/XFS Data 分区需要 `mkfs.ext2`/`mkfs.ext3`/`mkfs.ext4`/`mkudffs`/`mkfs.xfs`。在 macOS 上写入 NTFS
 Data 分区需要额外安装 `mkfs.ntfs`/`mkntfs`；若要脚本自动创建 `/ISO` 目录，还需要可写
 NTFS 驱动，例如 `ntfs-3g`。macOS 没有可靠内置 ext 写挂载，因此 `--data-fs ext2/ext3/ext4`
