@@ -30,6 +30,7 @@ gpt = "4.0"
 # 工具库
 bitflags = "2.4"
 byteorder = { version = "1.5", default-features = false }
+xz4rust = { version = "0.2.1", default-features = false, features = ["alloc", "bcj", "crc64", "delta"] }
 
 # 内部 crate
 nextboot-fs = { path = "crates/nextboot-fs" }

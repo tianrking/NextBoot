@@ -8,6 +8,7 @@ use crate::vdi;
 use crate::vhdx;
 use crate::virtual_fs::{IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem};
 use crate::wimboot::{self, WimbootCallbacks, WimbootVirtualFile};
+use crate::xz::{self, XzDecodeError};
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -117,12 +118,14 @@ const WIMBOOT_BOOT_WIM_CALLBACK_PATH: &str = "nb-boot-wim";
 const WIMBOOT_BCD_CALLBACK_PATH: &str = "nb-bcd";
 const WIMBOOT_BOOT_SDI_CALLBACK_PATH: &str = "nb-boot-sdi";
 const WIMBOOT_SELF_CALLBACK_PATH: &str = "nb-wimboot";
+const WIMBOOT_XZ_MAX_OUTPUT_SIZE: usize = 2 * 1024 * 1024;
 const WIMBOOT_BCD_CANDIDATES: &[&str] = &[
     "/ventoy/common_bcd",
     "/ventoy/bcd",
     "/boot/bcd",
     "/efi/microsoft/boot/bcd",
 ];
+const WIMBOOT_COMPRESSED_BCD_CANDIDATES: &[&str] = &["/ventoy/common_bcd.xz", "/ventoy/bcd.xz"];
 const WIMBOOT_BOOT_SDI_CANDIDATES: &[&str] = &[
     "/boot/boot.sdi",
     "/2K10/FONTS/boot.sdi",
@@ -399,16 +402,17 @@ impl<'a> BootManager<'a> {
             self.iso,
             WIMBOOT_BOOT_WIM_CALLBACK_PATH,
         )?);
-        runtime_files.push(WimbootRuntimeFile::from_source_file(
-            &helper.metadata,
+        runtime_files.push(WimbootRuntimeFile::from_memory(
             WIMBOOT_SELF_CALLBACK_PATH,
-        )?);
+            helper.data.clone(),
+        ));
 
-        let bcd = self.find_source_volume_file_metadata(WIMBOOT_BCD_CANDIDATES)?;
-        runtime_files.push(WimbootRuntimeFile::from_source_file(
-            &bcd,
+        let bcd = self
+            .find_source_volume_file(WIMBOOT_BCD_CANDIDATES, WIMBOOT_COMPRESSED_BCD_CANDIDATES)?;
+        runtime_files.push(WimbootRuntimeFile::from_memory(
             WIMBOOT_BCD_CALLBACK_PATH,
-        )?);
+            bcd.data,
+        ));
 
         let boot_sdi =
             match self.find_optional_source_volume_file_metadata(WIMBOOT_BOOT_SDI_CANDIDATES) {
@@ -502,12 +506,26 @@ impl<'a> BootManager<'a> {
         }
 
         for path in compressed_wimboot_helper_candidates() {
-            if self.source_volume_file_metadata(path).is_ok() {
-                warn!(
-                    "Found compressed WIMBOOT helper {}, but XZ decompression is not implemented yet",
-                    path
-                );
-                return Err(Status::UNSUPPORTED.into());
+            match self.load_compressed_source_volume_file(path) {
+                Ok(file) => {
+                    info!(
+                        "Loaded compressed WIMBOOT helper {} -> {} bytes",
+                        file.path,
+                        file.data.len()
+                    );
+                    return Ok(file);
+                }
+                Err(err) if err.status() == Status::NOT_FOUND => {
+                    last_status = Status::NOT_FOUND;
+                }
+                Err(err) => {
+                    last_status = err.status();
+                    warn!(
+                        "Compressed WIMBOOT helper candidate {} failed: {:?}",
+                        path,
+                        err.status()
+                    );
+                }
             }
         }
 
@@ -819,6 +837,74 @@ impl<'a> BootManager<'a> {
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
         let fs = SourceVolumeFileSystem::open(&source_block_io)?;
         fs.load_file(path)
+    }
+
+    fn load_compressed_source_volume_file(&self, path: &str) -> uefi::Result<SourceVolumeFile> {
+        let compressed = self.load_source_volume_file(path)?;
+        let data = xz::decompress_xz(&compressed.data, WIMBOOT_XZ_MAX_OUTPUT_SIZE)
+            .map_err(xz_error_to_uefi_status)?;
+        let mut decompressed_path = compressed.path.clone();
+        if decompressed_path.ends_with(".xz") {
+            decompressed_path.truncate(decompressed_path.len() - 3);
+        }
+
+        Ok(SourceVolumeFile {
+            path: decompressed_path,
+            data,
+        })
+    }
+
+    fn find_source_volume_file(
+        &self,
+        candidates: &[&str],
+        compressed_candidates: &[&str],
+    ) -> uefi::Result<SourceVolumeFile> {
+        let mut last_status = Status::NOT_FOUND;
+        for path in candidates {
+            match self.load_source_volume_file(path) {
+                Ok(file) => {
+                    info!(
+                        "Loaded source volume file {} ({} bytes)",
+                        file.path,
+                        file.data.len()
+                    );
+                    return Ok(file);
+                }
+                Err(err) if err.status() == Status::NOT_FOUND => {
+                    last_status = Status::NOT_FOUND;
+                }
+                Err(err) => {
+                    last_status = err.status();
+                    warn!("Source volume file {} failed: {:?}", path, err.status());
+                }
+            }
+        }
+
+        for path in compressed_candidates {
+            match self.load_compressed_source_volume_file(path) {
+                Ok(file) => {
+                    info!(
+                        "Loaded compressed source volume file {} ({} bytes)",
+                        file.path,
+                        file.data.len()
+                    );
+                    return Ok(file);
+                }
+                Err(err) if err.status() == Status::NOT_FOUND => {
+                    last_status = Status::NOT_FOUND;
+                }
+                Err(err) => {
+                    last_status = err.status();
+                    warn!(
+                        "Compressed source volume file {} failed: {:?}",
+                        path,
+                        err.status()
+                    );
+                }
+            }
+        }
+
+        Err(last_status.into())
     }
 
     fn source_volume_file_metadata(&self, path: &str) -> uefi::Result<SourceVolumeFileMetadata> {
@@ -1973,7 +2059,6 @@ impl BlockIoOps for UefiPhysicalReader {
 struct SourceVolumeFile {
     path: String,
     data: Vec<u8>,
-    metadata: SourceVolumeFileMetadata,
 }
 
 struct SourceVolumeFileMetadata {
@@ -2033,7 +2118,6 @@ impl SourceVolumeFileSystem {
         Ok(SourceVolumeFile {
             path: metadata.path.clone(),
             data,
-            metadata,
         })
     }
 
@@ -2111,8 +2195,32 @@ impl WimbootRuntimeContext {
 struct WimbootRuntimeFile {
     callback_path: String,
     size: u64,
-    block_size: u32,
-    extents: Vec<IsoExtent>,
+    storage: WimbootRuntimeFileStorage,
+}
+
+enum WimbootRuntimeFileStorage {
+    Disk {
+        block_size: u32,
+        extents: Vec<IsoExtent>,
+    },
+    Memory(Vec<u8>),
+}
+
+impl WimbootRuntimeFileStorage {
+    fn read_range(&self, reader: &UefiPhysicalReader, offset: u64, buf: &mut [u8]) -> Option<()> {
+        match self {
+            Self::Disk {
+                block_size,
+                extents,
+            } => read_extent_range(reader, *block_size, extents, offset, buf),
+            Self::Memory(data) => {
+                let start = usize::try_from(offset).ok()?;
+                let end = start.checked_add(buf.len())?;
+                buf.copy_from_slice(data.get(start..end)?);
+                Some(())
+            }
+        }
+    }
 }
 
 impl WimbootRuntimeFile {
@@ -2124,8 +2232,10 @@ impl WimbootRuntimeFile {
         Ok(Self {
             callback_path: String::from(callback_path),
             size: iso.size,
-            block_size: iso.block_size,
-            extents: iso.extents.clone(),
+            storage: WimbootRuntimeFileStorage::Disk {
+                block_size: iso.block_size,
+                extents: iso.extents.clone(),
+            },
         })
     }
 
@@ -2140,9 +2250,19 @@ impl WimbootRuntimeFile {
         Ok(Self {
             callback_path: String::from(callback_path),
             size: file.size,
-            block_size: file.block_size,
-            extents: file.extents.clone(),
+            storage: WimbootRuntimeFileStorage::Disk {
+                block_size: file.block_size,
+                extents: file.extents.clone(),
+            },
         })
+    }
+
+    fn from_memory(callback_path: &str, data: Vec<u8>) -> Self {
+        Self {
+            callback_path: String::from(callback_path),
+            size: data.len() as u64,
+            storage: WimbootRuntimeFileStorage::Memory(data),
+        }
     }
 
     fn size_i32(&self) -> Option<i32> {
@@ -2155,47 +2275,58 @@ impl WimbootRuntimeFile {
             return None;
         }
 
-        let block_size = u64::from(self.block_size);
-        let mut cursor = offset;
-        let mut copied = 0usize;
-
-        while copied < buf.len() {
-            let extent = self.extents.iter().find(|extent| {
-                let Some(extent_start) = extent.virtual_block_start.checked_mul(block_size) else {
-                    return false;
-                };
-                let Some(extent_bytes) = extent.block_count.checked_mul(block_size) else {
-                    return false;
-                };
-                let Some(extent_end) = extent_start.checked_add(extent_bytes) else {
-                    return false;
-                };
-                cursor >= extent_start && cursor < extent_end
-            })?;
-
-            let extent_start = extent.virtual_block_start.checked_mul(block_size)?;
-            let extent_bytes = extent.block_count.checked_mul(block_size)?;
-            let extent_end = extent_start.checked_add(extent_bytes)?;
-            let read_end = end.min(extent_end);
-            let read_len = usize::try_from(read_end.checked_sub(cursor)?).ok()?;
-            let physical_byte = extent
-                .physical_lba
-                .checked_mul(block_size)?
-                .checked_add(cursor.checked_sub(extent_start)?)?;
-
-            read_physical_bytes(
-                reader,
-                self.block_size,
-                physical_byte,
-                &mut buf[copied..copied + read_len],
-            )?;
-
-            cursor = read_end;
-            copied += read_len;
-        }
-
-        Some(())
+        self.storage.read_range(reader, offset, buf)
     }
+}
+
+fn read_extent_range(
+    reader: &UefiPhysicalReader,
+    block_size: u32,
+    extents: &[IsoExtent],
+    offset: u64,
+    buf: &mut [u8],
+) -> Option<()> {
+    let end = offset.checked_add(buf.len() as u64)?;
+    let block_size_u64 = u64::from(block_size);
+    let mut cursor = offset;
+    let mut copied = 0usize;
+
+    while copied < buf.len() {
+        let extent = extents.iter().find(|extent| {
+            let Some(extent_start) = extent.virtual_block_start.checked_mul(block_size_u64) else {
+                return false;
+            };
+            let Some(extent_bytes) = extent.block_count.checked_mul(block_size_u64) else {
+                return false;
+            };
+            let Some(extent_end) = extent_start.checked_add(extent_bytes) else {
+                return false;
+            };
+            cursor >= extent_start && cursor < extent_end
+        })?;
+
+        let extent_start = extent.virtual_block_start.checked_mul(block_size_u64)?;
+        let extent_bytes = extent.block_count.checked_mul(block_size_u64)?;
+        let extent_end = extent_start.checked_add(extent_bytes)?;
+        let read_end = end.min(extent_end);
+        let read_len = usize::try_from(read_end.checked_sub(cursor)?).ok()?;
+        let physical_byte = extent
+            .physical_lba
+            .checked_mul(block_size_u64)?
+            .checked_add(cursor.checked_sub(extent_start)?)?;
+
+        read_physical_bytes(
+            reader,
+            block_size,
+            physical_byte,
+            &mut buf[copied..copied + read_len],
+        )?;
+
+        cursor = read_end;
+        copied += read_len;
+    }
+
+    Some(())
 }
 
 struct WimbootRuntimeRegistration<'a> {
@@ -2550,6 +2681,15 @@ fn fs_error_to_uefi_status(err: FsError) -> Status {
             Status::LOAD_ERROR
         }
         FsError::ReadError => Status::DEVICE_ERROR,
+    }
+}
+
+fn xz_error_to_uefi_status(err: XzDecodeError) -> Status {
+    match err {
+        XzDecodeError::OutputTooLarge | XzDecodeError::OutputReserveFailed => {
+            Status::OUT_OF_RESOURCES
+        }
+        XzDecodeError::Decoder(_) | XzDecodeError::Stalled => Status::LOAD_ERROR,
     }
 }
 
