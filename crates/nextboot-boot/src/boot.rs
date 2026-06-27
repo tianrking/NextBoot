@@ -2371,7 +2371,7 @@ impl<'a> BootManager<'a> {
             .with_chain_type(ventoy_chain_type(self.iso))
             .with_iso_udf(self.iso.is_udf)
             .with_windows_cd_prompt(false)
-            .with_linux_remount(false)
+            .with_linux_remount(self.iso.ventoy_linux_remount)
             .with_vlnk(false)
             .with_disk_signature(disk_signature)
     }

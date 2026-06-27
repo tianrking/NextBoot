@@ -229,6 +229,7 @@ pub struct VentoyConfig {
     pub menu_timeout: Option<u32>,
     pub default_image: Option<String>,
     pub default_menu_mode: Option<u32>,
+    pub linux_remount: bool,
     pub image_list_mode: VentoyImageListMode,
     pub image_list: Vec<String>,
     pub menu_aliases: Vec<VentoyMenuAlias>,
@@ -863,6 +864,9 @@ impl<'a> JsonParser<'a> {
                         }
                         "VTOY_DEFAULT_MENU_MODE" => {
                             config.default_menu_mode = parse_u32_text(&value);
+                        }
+                        "VTOY_LINUX_REMOUNT" => {
+                            config.linux_remount = value == "1";
                         }
                         "VTOY_FILT_DOT_UNDERSCORE_FILE" => {
                             config.filter_dot_underscore = value == "1";
@@ -1784,6 +1788,7 @@ mod tests {
                 { "VTOY_FILE_FLT_WIM": "1" },
                 { "VTOY_DEFAULT_SEARCH_ROOT": "/ISO" },
                 { "VTOY_MAX_SEARCH_LEVEL": "2" },
+                { "VTOY_LINUX_REMOUNT": "1" },
                 { "VTOY_FILT_DOT_UNDERSCORE_FILE": "1" }
             ],
             "menu_alias": [
@@ -1796,6 +1801,7 @@ mod tests {
 
         assert!(config.filters.wim);
         assert!(config.filter_dot_underscore);
+        assert!(config.linux_remount);
         assert_eq!(config.default_search_root.as_deref(), Some("/ISO"));
         assert_eq!(config.max_search_level, Some(2));
         assert_eq!(config.image_list_mode, VentoyImageListMode::Deny);

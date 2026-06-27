@@ -60,6 +60,8 @@ pub struct IsoFile {
     pub ventoy_default_image: bool,
     /// Ventoy control.VTOY_MENU_TIMEOUT 为该卷菜单设置的自动启动超时。
     pub ventoy_menu_timeout: Option<u32>,
+    /// Ventoy control.VTOY_LINUX_REMOUNT 是否要求 Linux hook 重新挂载源盘。
+    pub ventoy_linux_remount: bool,
     /// Ventoy password 插件为该镜像匹配出的密码。
     pub ventoy_password: Option<VentoyPassword>,
     /// Ventoy password.bootpwd 为该卷设置的全局启动菜单密码。
@@ -1120,6 +1122,7 @@ impl<'a> IsoScanner<'a> {
                     ventoy_menu_tip: config.menu_tip_for_image(&full_path).cloned(),
                     ventoy_default_image: config.default_image_matches(&full_path),
                     ventoy_menu_timeout: config.menu_timeout,
+                    ventoy_linux_remount: config.linux_remount,
                     ventoy_password: config.image_password_for(&full_path).cloned(),
                     ventoy_boot_password: config.password.boot.clone(),
                     ventoy_plugin: config.image_plugin_for(&full_path),
@@ -1241,6 +1244,7 @@ impl<'a> IsoScanner<'a> {
                     ventoy_menu_tip: config.menu_tip_for_image(&full_path).cloned(),
                     ventoy_default_image: config.default_image_matches(&full_path),
                     ventoy_menu_timeout: config.menu_timeout,
+                    ventoy_linux_remount: config.linux_remount,
                     ventoy_password: config.image_password_for(&full_path).cloned(),
                     ventoy_boot_password: config.password.boot.clone(),
                     ventoy_plugin: config.image_plugin_for(&full_path),
