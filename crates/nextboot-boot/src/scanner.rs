@@ -8,7 +8,7 @@ use crate::source_disk::{
     SourceDiskIdentity,
 };
 use crate::vdi;
-use crate::ventoy_config::{VentoyConfig, VentoyConfigError};
+use crate::ventoy_config::{VentoyConfig, VentoyConfigError, VentoyImagePlugin};
 use crate::vhdx;
 use crate::wim;
 use alloc::format;
@@ -42,6 +42,8 @@ pub struct IsoFile {
     pub path: String,
     /// Ventoy menu_alias 插件提供的显示名。
     pub menu_alias: Option<String>,
+    /// Ventoy 启动相关插件为该镜像匹配出的配置。
+    pub ventoy_plugin: Option<VentoyImagePlugin>,
     /// 文件大小 (字节)
     pub size: u64,
     /// 启动时呈现给固件/系统的虚拟介质大小
@@ -563,6 +565,7 @@ impl<'a> IsoScanner<'a> {
                 files.push(IsoFile {
                     path: full_path.clone(),
                     menu_alias: config.menu_alias_for(&full_path).map(ToString::to_string),
+                    ventoy_plugin: config.image_plugin_for(&full_path),
                     size: entry.file_size(),
                     virtual_size,
                     virtual_block_size,
