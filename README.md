@@ -116,6 +116,9 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 # 自动生成 Windows 风格 ISO，并断言 DVD-ROM/bootmgfw.efi 分支被链式启动
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-windows-iso
 
+# 自动生成 Linux 风格 ISO，并断言 EFI stub/initrd LoadFile2 分支被启动
+./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
+
 # 只生成 GPT/FAT32 测试盘，不启动虚拟机
 ./scripts/run-qemu.sh --bus sata --no-run
 ```
@@ -132,8 +135,10 @@ CRC、分区布局、FAT32/exFAT 目录、`BOOTX64.EFI`、`/ISO` 文件和物理
 自动按 Enter 并检查是否安装虚拟 Block IO；`--smoke-efi-iso` 会生成一个带 EFI
 El Torito boot catalog、内含 `/EFI/BOOT/BOOTX64.EFI` 的最小 ISO，并继续验证该 EFI
 loader 被链式启动；`--smoke-windows-iso` 会生成 Windows 风格 ISO，验证 Windows/WinPE
-的 DVD-ROM 虚拟设备与 `/efi/microsoft/boot/bootmgfw.efi` 链式启动路径；必要时可用
-`--skip-verify` 跳过镜像结构检查。
+的 DVD-ROM 虚拟设备与 `/efi/microsoft/boot/bootmgfw.efi` 链式启动路径；
+`--smoke-linux-iso` 会生成不含 `/EFI/BOOT/BOOTX64.EFI` 的 Linux 风格 ISO，验证内核
+候选发现、initrd LoadFile2 provider 和 EFI stub 启动路径；必要时可用 `--skip-verify`
+跳过镜像结构检查。
 
 ### 写入 U 盘
 

@@ -13,6 +13,7 @@
 #   ./scripts/run-qemu.sh --bus nvme --sector-size 4096 --no-run
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --image ~/Downloads/ubuntu.iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
+#   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
 #   ./scripts/run-qemu.sh --bus usb --mode release --no-run
 
 set -eo pipefail
@@ -40,6 +41,7 @@ SMOKE=0
 SMOKE_BOOT=0
 SMOKE_EFI_ISO=0
 SMOKE_WINDOWS_ISO=0
+SMOKE_LINUX_ISO=0
 SMOKE_TIMEOUT=20
 MEMORY="1024M"
 IMAGES=()
@@ -68,6 +70,7 @@ Options:
   --smoke-efi-iso    Generate a minimal UEFI ISO and verify its loader starts
   --smoke-windows-iso
                      Generate a Windows-style smoke ISO and verify bootmgfw starts
+  --smoke-linux-iso  Generate a Linux-style smoke ISO and verify EFI stub/initrd starts
   --smoke-timeout S  Seconds to wait for --smoke markers (default: 20)
   --no-run           Create the disk image and print the QEMU command only
   -h, --help         Show this help
@@ -78,6 +81,7 @@ Examples:
   $0 --bus nvme --sector-size 4096 --no-run
   $0 --bus nvme --layout split --data-fs exfat --image ~/Downloads/Win11.iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
   $0 --bus usb --no-run
 USAGE
 }
@@ -177,6 +181,13 @@ while [ $# -gt 0 ]; do
             SMOKE_WINDOWS_ISO=1
             shift
             ;;
+        --smoke-linux-iso)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_EFI_ISO=1
+            SMOKE_LINUX_ISO=1
+            shift
+            ;;
         --smoke-timeout)
             [ $# -ge 2 ] || die "--smoke-timeout requires a value"
             SMOKE_TIMEOUT="$2"
@@ -237,6 +248,10 @@ if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ]; then
     die "--smoke cannot be combined with --no-run"
 fi
 
+if [ "$SMOKE_WINDOWS_ISO" -eq 1 ] && [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
+    die "--smoke-windows-iso and --smoke-linux-iso cannot be combined"
+fi
+
 if [ "$SMOKE_BOOT" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "${#IMAGES[@]}" -eq 0 ]; then
     die "--smoke-boot requires at least one --image"
 fi
@@ -277,6 +292,10 @@ if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
     if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
         SMOKE_ISO_PROFILE="windows"
         SMOKE_ISO_BASENAME="nextboot-smoke-windows.iso"
+    fi
+    if [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
+        SMOKE_ISO_PROFILE="linux"
+        SMOKE_ISO_BASENAME="nextboot-smoke-linux.iso"
     fi
     SMOKE_ISO_FILE="${PROJECT_DIR}/target/${SMOKE_ISO_BASENAME}"
     if [ ! -f "$SMOKE_EFI_FILE" ]; then
@@ -1074,6 +1093,19 @@ if [ "$SMOKE" -eq 1 ]; then
                         --expect "Booting Windows ISO"
                         --expect "Chain loading: /efi/microsoft/boot/bootmgfw.efi"
                         --expect "Loaded chained EFI image"
+                    )
+                elif [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
+                    EXPECT_ARGS+=(
+                        --expect "Booting Linux ISO"
+                        --expect "Using distro Linux defaults: kernel=/boot/vmlinuz initrd=/boot/initrd.img"
+                        --expect "Kernel: /boot/vmlinuz"
+                        --expect "Initrd: /boot/initrd.img"
+                        --expect "Loaded Linux kernel:"
+                        --expect "Loaded initrd:"
+                        --expect "Prepared Linux EFI stub:"
+                        --expect "Registered Linux EFI initrd LoadFile2 provider:"
+                        --expect "Trying Linux EFI stub EFI loader path: /boot/vmlinuz"
+                        --expect "Loaded EFI image"
                     )
                 else
                     EXPECT_ARGS+=(--expect "Loaded EFI image")
