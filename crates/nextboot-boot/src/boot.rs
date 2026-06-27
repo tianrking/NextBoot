@@ -60,6 +60,7 @@ const EFI_BOOT_X64: &str = "\\EFI\\BOOT\\BOOTX64.EFI";
 const EFI_BOOT_AA64: &str = "\\EFI\\BOOT\\BOOTAA64.EFI";
 const EFI_BOOT_IA32: &str = "\\EFI\\BOOT\\BOOTIA32.EFI";
 const EFI_BOOT_ARM: &str = "\\EFI\\BOOT\\BOOTARM.EFI";
+const WINDOWS_BOOTMGFW_PATH: &str = "/efi/microsoft/boot/bootmgfw.efi";
 
 fn default_efi_boot_paths() -> &'static [&'static str] {
     #[cfg(target_arch = "aarch64")]
@@ -164,23 +165,26 @@ impl<'a> BootManager<'a> {
                 );
 
                 match self.iso.os_type {
-                    OsType::Windows | OsType::WinPE => self.boot_windows(),
+                    OsType::Windows | OsType::WinPE => self.boot_windows(&virtual_device),
                     OsType::Ubuntu
                     | OsType::Debian
                     | OsType::Fedora
                     | OsType::Arch
-                    | OsType::Linux => self.boot_linux(),
-                    OsType::Unknown => self.boot_generic(),
+                    | OsType::Linux => self.boot_linux(&virtual_device),
+                    OsType::Unknown => self.boot_generic(&virtual_device),
                 }
             }
         }
     }
 
     /// 引导 Linux ISO
-    fn boot_linux(&self) -> uefi::Result<()> {
+    fn boot_linux(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
         use nextboot_linux::{LinuxBootConfig, LinuxBootloader, LinuxDistro};
 
         info!("Booting Linux ISO...");
+        if let Ok(()) = self.try_chain_load_paths(device, generic_efi_boot_paths()) {
+            return Ok(());
+        }
 
         // 映射发行版类型
         let distro = match self.iso.os_type {
@@ -213,80 +217,77 @@ impl<'a> BootManager<'a> {
             .load_initrd(initrd_data)
             .map_err(|_| Status::LOAD_ERROR)?;
 
-        // 执行引导
-        info!("Starting Linux kernel...");
-        unsafe {
-            bootloader.boot();
-        }
-
-        // 不会到达这里
-        Ok(())
+        warn!(
+            "Direct Linux EFI handover is not implemented yet; loaded kernel={} bytes initrd={} bytes",
+            bootloader.kernel_size(),
+            bootloader.initrd_size()
+        );
+        Err(Status::UNSUPPORTED.into())
     }
 
     /// 引导 Windows ISO
-    fn boot_windows(&self) -> uefi::Result<()> {
-        use nextboot_windows::{WindowsBootConfig, WindowsBootloader};
-
+    fn boot_windows(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
         info!("Booting Windows ISO...");
-
-        // 创建启动配置
-        let config = WindowsBootConfig::new();
-
-        info!("Boot file: {}", config.bootmgfw_path);
-
-        // 创建启动器
-        let mut bootloader = WindowsBootloader::new(config);
-
-        // 准备启动环境
-        bootloader.prepare().map_err(|_| Status::DEVICE_ERROR)?;
-
-        // 加载 bootmgfw.efi
-        let bootmgfw_data = self.load_file(&bootloader.config().bootmgfw_path)?;
-        bootloader
-            .load_bootmgfw(bootmgfw_data)
-            .map_err(|_| Status::LOAD_ERROR)?;
-
-        // 执行引导
-        info!("Starting Windows Boot Manager...");
-        unsafe {
-            bootloader.boot();
+        match self.chain_load_path(device, WINDOWS_BOOTMGFW_PATH) {
+            Ok(()) => return Ok(()),
+            Err(err) => warn!(
+                "Windows Boot Manager chain-load failed with {:?}; trying default EFI paths",
+                err.status()
+            ),
         }
 
-        // 不会到达这里
-        Ok(())
+        self.try_chain_load_paths(device, generic_efi_boot_paths())
     }
 
     /// 通用引导 (尝试链式加载)
-    fn boot_generic(&self) -> uefi::Result<()> {
+    fn boot_generic(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
         info!("Attempting generic boot...");
+        self.try_chain_load_paths(device, generic_efi_boot_paths())
+    }
 
-        for path in generic_efi_boot_paths() {
-            if let Ok(data) = self.load_file(path) {
-                if !data.is_empty() {
-                    info!("Found EFI boot file: {}", path);
-                    return self.chain_load(path, &data);
+    fn try_chain_load_paths(&self, device: &VirtualBootDevice, paths: &[&str]) -> uefi::Result<()> {
+        let mut last_status = Status::NOT_FOUND;
+
+        for path in paths {
+            match self.chain_load_path(device, path) {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    last_status = err.status();
+                    warn!("Chain-load path {} failed with {:?}", path, err.status());
                 }
             }
         }
 
-        // 尝试 Linux 方式
-        warn!("No EFI boot file found, trying Linux boot method");
-        self.boot_linux()
+        Err(last_status.into())
+    }
+
+    fn chain_load_path(&self, device: &VirtualBootDevice, path: &str) -> uefi::Result<()> {
+        let data = self.load_file(path)?;
+        if data.is_empty() {
+            return Err(Status::LOAD_ERROR.into());
+        }
+
+        self.chain_load(device, path, &data)
     }
 
     /// 链式加载 EFI 文件
-    fn chain_load(&self, path: &str, data: &[u8]) -> uefi::Result<()> {
+    fn chain_load(&self, device: &VirtualBootDevice, path: &str, data: &[u8]) -> uefi::Result<()> {
         info!("Chain loading: {} ({} bytes)", path, data.len());
 
         if data.is_empty() {
             return Err(Status::LOAD_ERROR.into());
         }
 
+        let full_path = append_file_path_device_path(&device.device_path, path)
+            .ok_or(Status::INVALID_PARAMETER)?;
+        let file_path =
+            unsafe { DevicePath::from_ffi_ptr(full_path.as_ptr().cast::<FfiDevicePath>()) };
+
         let image = self.bt.load_image(
             self.parent_image,
             LoadImageSource::FromBuffer {
                 buffer: data,
-                file_path: None,
+                file_path: Some(file_path),
             },
         )?;
 
