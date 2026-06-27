@@ -173,6 +173,7 @@ loader 被链式启动；`--smoke-vlnk-iso` 会生成 Ventoy 兼容 `.vlnk.iso` 
 `--smoke-raw-img` 会生成内层 GPT/FAT32 raw `.img`，验证 NextBoot 把它当作虚拟硬盘安装后从其 ESP 启动；
 `--smoke-vhd` 会把同一个内层启动盘包成 fixed VHD，验证 VHD footer 识别、虚拟大小裁剪和虚拟硬盘启动；
 `--smoke-dynamic-vhd` 会生成全分配 dynamic VHD，验证 BAT/bitmap 映射和虚拟硬盘启动；
+`--smoke-vhdx` 会生成全分配 VHDX，验证 VHDX region table、metadata、BAT 映射和虚拟硬盘启动；
 `--smoke-vdi` 会生成全分配 dynamic VDI，验证 VDI block map 映射和虚拟硬盘启动；
 `--smoke-windows-iso` 会生成 Windows 风格 ISO，验证 Windows/WinPE
 的 DVD-ROM 虚拟设备与 `/efi/microsoft/boot/bootmgfw.efi` 链式启动路径；
@@ -188,7 +189,7 @@ WIMBOOT fallback 入口；
 `qemu-smoke-matrix.sh` 默认执行最关键的固定盘与可移动盘组合：NVMe 4K split/exFAT
 真实启动、USB 512 split/FAT32 真实启动，以及 SD 512 split/FAT32 带小 ISO 的镜像
 生成与校验。`NEXTBOOT_FULL_QEMU_MATRIX=1 ./scripts/qemu-smoke-matrix.sh` 会继续覆盖
-virtio、SATA/NTFS、NVMe/UDF、NVMe/ext3、NVMe/XFS、NVMe/XFS VLNK、NVMe raw IMG、NVMe fixed/dynamic VHD、NVMe dynamic VDI 和 NVMe/ext4 Linux 插件载荷。SD 目前限制为 512B 扇区，因为 QEMU `sd-card` 设备没有提供和
+virtio、SATA/NTFS、NVMe/UDF、NVMe/ext3、NVMe/XFS、NVMe/XFS VLNK、NVMe raw IMG、NVMe fixed/dynamic VHD、NVMe VHDX、NVMe dynamic VDI 和 NVMe/ext4 Linux 插件载荷。SD 目前限制为 512B 扇区，因为 QEMU `sd-card` 设备没有提供和
 NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B，因为 QEMU
 `ide-hd` 要求 512B discard granularity。当前 macOS Homebrew OVMF 也不会直接从
 `sdhci-pci` 启动，所以 SD 启动 smoke 需要显式设置 `NEXTBOOT_QEMU_SD_BOOT_SMOKE=1`

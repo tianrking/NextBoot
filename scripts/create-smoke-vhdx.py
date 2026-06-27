@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Wrap a raw disk image as a minimal VHDX for NextBoot smoke tests."""
+
+from __future__ import annotations
+
+import argparse
+import struct
+from pathlib import Path
+
+
+MIB = 1024 * 1024
+HEADER_SECTION_SIZE = MIB
+METADATA_OFFSET = MIB
+BAT_OFFSET = 2 * MIB
+PAYLOAD_OFFSET = 3 * MIB
+REGION_TABLE_OFFSET = 192 * 1024
+REGION_TABLE_SIZE = 64 * 1024
+BLOCK_SIZE = 2 * MIB
+LOGICAL_SECTOR_SIZE = 512
+PHYSICAL_SECTOR_SIZE = 4096
+BAT_STATE_FULLY_PRESENT = 6
+
+BAT_REGION_GUID = bytes.fromhex("6677c22d23f600429d64115e9bfd4a08")
+METADATA_REGION_GUID = bytes.fromhex("06a27c8b90479a4bb8fe575f050f886e")
+FILE_PARAMETERS_GUID = bytes.fromhex("3767a1ca36fa434db3b633f0aa44e76b")
+VIRTUAL_DISK_SIZE_GUID = bytes.fromhex("2442a52f1bcd7648b2115dbed83bf4b8")
+LOGICAL_SECTOR_SIZE_GUID = bytes.fromhex("1dbf41816fa90947ba47f233a8faab5f")
+PHYSICAL_SECTOR_SIZE_GUID = bytes.fromhex("c748a3cd5d4471449cc9e9885251c556")
+
+
+def align_up(value: int, alignment: int) -> int:
+    return ((value + alignment - 1) // alignment) * alignment
+
+
+def ceil_div(value: int, divisor: int) -> int:
+    return (value + divisor - 1) // divisor
+
+
+def put_u16(data: bytearray, offset: int, value: int) -> None:
+    struct.pack_into("<H", data, offset, value)
+
+
+def put_u32(data: bytearray, offset: int, value: int) -> None:
+    struct.pack_into("<I", data, offset, value)
+
+
+def put_u64(data: bytearray, offset: int, value: int) -> None:
+    struct.pack_into("<Q", data, offset, value)
+
+
+def write_region_entry(
+    table: bytearray,
+    offset: int,
+    guid: bytes,
+    file_offset: int,
+    length: int,
+    flags: int,
+) -> None:
+    table[offset : offset + 16] = guid
+    put_u64(table, offset + 16, file_offset)
+    put_u32(table, offset + 24, length)
+    put_u32(table, offset + 28, flags)
+
+
+def write_metadata_entry(
+    metadata: bytearray,
+    offset: int,
+    guid: bytes,
+    item_offset: int,
+    length: int,
+) -> None:
+    metadata[offset : offset + 16] = guid
+    put_u32(metadata, offset + 16, item_offset)
+    put_u32(metadata, offset + 20, length)
+    put_u32(metadata, offset + 24, 0x6)
+
+
+def header_section() -> bytes:
+    header = bytearray(HEADER_SECTION_SIZE)
+    header[0:8] = b"vhdxfile"
+    header[REGION_TABLE_OFFSET : REGION_TABLE_OFFSET + 4] = b"regi"
+    put_u32(header, REGION_TABLE_OFFSET + 8, 2)
+    write_region_entry(header, REGION_TABLE_OFFSET + 16, BAT_REGION_GUID, BAT_OFFSET, MIB, 1)
+    write_region_entry(
+        header,
+        REGION_TABLE_OFFSET + 48,
+        METADATA_REGION_GUID,
+        METADATA_OFFSET,
+        MIB,
+        1,
+    )
+    return bytes(header)
+
+
+def metadata_region(virtual_size: int) -> bytes:
+    metadata = bytearray(MIB)
+    metadata[0:8] = b"metadata"
+    put_u16(metadata, 10, 4)
+
+    write_metadata_entry(metadata, 32, FILE_PARAMETERS_GUID, 0x10000, 8)
+    put_u32(metadata, 0x10000, BLOCK_SIZE)
+    put_u32(metadata, 0x10004, 0)
+
+    write_metadata_entry(metadata, 64, VIRTUAL_DISK_SIZE_GUID, 0x10008, 8)
+    put_u64(metadata, 0x10008, virtual_size)
+
+    write_metadata_entry(metadata, 96, LOGICAL_SECTOR_SIZE_GUID, 0x10010, 4)
+    put_u32(metadata, 0x10010, LOGICAL_SECTOR_SIZE)
+
+    write_metadata_entry(metadata, 128, PHYSICAL_SECTOR_SIZE_GUID, 0x10014, 4)
+    put_u32(metadata, 0x10014, PHYSICAL_SECTOR_SIZE)
+    return bytes(metadata)
+
+
+def bat_region(block_count: int) -> bytes:
+    bat = bytearray(MIB)
+    for index in range(block_count):
+        block_offset_mib = (PAYLOAD_OFFSET + index * BLOCK_SIZE) // MIB
+        raw_entry = (block_offset_mib << 20) | BAT_STATE_FULLY_PRESENT
+        put_u64(bat, index * 8, raw_entry)
+    return bytes(bat)
+
+
+def vhdx(raw: bytes) -> bytes:
+    if not raw or len(raw) % LOGICAL_SECTOR_SIZE:
+        raise ValueError("VHDX payload size must be a non-zero multiple of 512 bytes")
+
+    block_count = ceil_div(len(raw), BLOCK_SIZE)
+    image = bytearray()
+    image.extend(header_section())
+    image.extend(metadata_region(len(raw)))
+    image.extend(bat_region(block_count))
+    assert len(image) == PAYLOAD_OFFSET
+
+    for index in range(block_count):
+        start = index * BLOCK_SIZE
+        chunk = raw[start : start + BLOCK_SIZE]
+        image.extend(chunk)
+        image.extend(bytes(BLOCK_SIZE - len(chunk)))
+    return bytes(image)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("raw_image", type=Path)
+    parser.add_argument("vhdx_image", type=Path)
+    args = parser.parse_args()
+
+    raw = args.raw_image.read_bytes()
+    args.vhdx_image.parent.mkdir(parents=True, exist_ok=True)
+    args.vhdx_image.write_bytes(vhdx(raw))
+    print(f"created {args.vhdx_image} ({args.vhdx_image.stat().st_size} bytes)")
+
+
+if __name__ == "__main__":
+    main()

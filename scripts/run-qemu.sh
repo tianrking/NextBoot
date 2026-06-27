@@ -47,6 +47,7 @@ SMOKE_VLNK_ISO=0
 SMOKE_RAW_IMG=0
 SMOKE_FIXED_VHD=0
 SMOKE_DYNAMIC_VHD=0
+SMOKE_VHDX=0
 SMOKE_VDI=0
 SMOKE_AUTO_MEMDISK=0
 SMOKE_MENU_MEMDISK=0
@@ -177,6 +178,12 @@ while [ $# -gt 0 ]; do
             SMOKE_DYNAMIC_VHD=1
             shift
             ;;
+        --smoke-vhdx)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_VHDX=1
+            shift
+            ;;
         --smoke-vdi)
             SMOKE=1
             SMOKE_BOOT=1
@@ -285,7 +292,7 @@ if [ "$LAYOUT" = "single" ] && [ "$DATA_FS" != "exfat" ]; then
     warn "--data-fs is ignored for single layout"
 fi
 
-if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "$SMOKE_RAW_IMG" -eq 0 ] && [ "$SMOKE_FIXED_VHD" -eq 0 ] && [ "$SMOKE_DYNAMIC_VHD" -eq 0 ] && [ "$SMOKE_VDI" -eq 0 ]; then
+if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "$SMOKE_RAW_IMG" -eq 0 ] && [ "$SMOKE_FIXED_VHD" -eq 0 ] && [ "$SMOKE_DYNAMIC_VHD" -eq 0 ] && [ "$SMOKE_VHDX" -eq 0 ] && [ "$SMOKE_VDI" -eq 0 ]; then
     die "--smoke without a generated smoke image cannot be combined with --no-run"
 fi
 
@@ -293,16 +300,16 @@ if [ "$SMOKE_WINDOWS_ISO" -eq 1 ] && [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
     die "--smoke-windows-iso and --smoke-linux-iso cannot be combined"
 fi
 
-if { [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ] || [ "$SMOKE_DYNAMIC_VHD" -eq 1 ] || [ "$SMOKE_VDI" -eq 1 ]; } && [ "$SMOKE_EFI_ISO" -eq 1 ]; then
-    die "--smoke-raw-img/--smoke-vhd/--smoke-dynamic-vhd/--smoke-vdi cannot be combined with ISO smoke generators"
+if { [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ] || [ "$SMOKE_DYNAMIC_VHD" -eq 1 ] || [ "$SMOKE_VHDX" -eq 1 ] || [ "$SMOKE_VDI" -eq 1 ]; } && [ "$SMOKE_EFI_ISO" -eq 1 ]; then
+    die "--smoke-raw-img/--smoke-vhd/--smoke-dynamic-vhd/--smoke-vhdx/--smoke-vdi cannot be combined with ISO smoke generators"
 fi
 
-SMOKE_DISK_IMAGE_COUNT=$((SMOKE_RAW_IMG + SMOKE_FIXED_VHD + SMOKE_DYNAMIC_VHD + SMOKE_VDI))
+SMOKE_DISK_IMAGE_COUNT=$((SMOKE_RAW_IMG + SMOKE_FIXED_VHD + SMOKE_DYNAMIC_VHD + SMOKE_VHDX + SMOKE_VDI))
 if [ "$SMOKE_DISK_IMAGE_COUNT" -gt 1 ]; then
-    die "--smoke-raw-img, --smoke-vhd, --smoke-dynamic-vhd, and --smoke-vdi are mutually exclusive"
+    die "--smoke-raw-img, --smoke-vhd, --smoke-dynamic-vhd, --smoke-vhdx, and --smoke-vdi are mutually exclusive"
 fi
 
-if [ "$SMOKE_BOOT" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "$SMOKE_RAW_IMG" -eq 0 ] && [ "$SMOKE_FIXED_VHD" -eq 0 ] && [ "$SMOKE_DYNAMIC_VHD" -eq 0 ] && [ "$SMOKE_VDI" -eq 0 ] && [ "${#IMAGES[@]}" -eq 0 ]; then
+if [ "$SMOKE_BOOT" -eq 1 ] && [ "$SMOKE_EFI_ISO" -eq 0 ] && [ "$SMOKE_RAW_IMG" -eq 0 ] && [ "$SMOKE_FIXED_VHD" -eq 0 ] && [ "$SMOKE_DYNAMIC_VHD" -eq 0 ] && [ "$SMOKE_VHDX" -eq 0 ] && [ "$SMOKE_VDI" -eq 0 ] && [ "${#IMAGES[@]}" -eq 0 ]; then
     die "--smoke-boot requires at least one --image"
 fi
 
