@@ -20,7 +20,7 @@ use nextboot_virtio::{
 use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
 use uefi::proto::unsafe_protocol;
-use uefi::table::boot::{BootServices, LoadImageSource};
+use uefi::table::boot::{BootServices, LoadImageSource, MemoryType};
 use uefi::table::runtime::{RuntimeServices, VariableAttributes, VariableVendor};
 use uefi::{CString16, Guid, Handle, Identify, Status};
 
@@ -56,6 +56,29 @@ struct LoadFile2Protocol {
         *mut usize,
         *mut c_void,
     ) -> Status,
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+#[unsafe_protocol("5b1b31a1-9562-11d2-8e3f-00a0c969723b")]
+struct RawLoadedImage(RawLoadedImageProtocol);
+
+#[derive(Debug)]
+#[repr(C)]
+struct RawLoadedImageProtocol {
+    revision: u32,
+    parent_handle: *mut c_void,
+    system_table: *const c_void,
+    device_handle: *mut c_void,
+    file_path: *const FfiDevicePath,
+    reserved: *const c_void,
+    load_options_size: u32,
+    load_options: *const c_void,
+    image_base: *const c_void,
+    image_size: u64,
+    image_code_type: MemoryType,
+    image_data_type: MemoryType,
+    unload: Option<unsafe extern "efiapi" fn(*mut c_void) -> Status>,
 }
 
 const EFI_BOOT_X64: &str = "\\EFI\\BOOT\\BOOTX64.EFI";
@@ -314,6 +337,18 @@ impl<'a> BootManager<'a> {
             },
         )?;
 
+        if let Err(err) = self.patch_loaded_image_source(
+            image,
+            device.handle,
+            full_path.as_ptr().cast::<FfiDevicePath>(),
+        ) {
+            warn!(
+                "Failed to rebind LoadedImage source for {}: {:?}",
+                path,
+                err.status()
+            );
+        }
+
         info!("Loaded chained EFI image {:?} from {}", image, path);
         match self.bt.start_image(image) {
             Ok(()) => Ok(()),
@@ -327,6 +362,18 @@ impl<'a> BootManager<'a> {
                 Err(err)
             }
         }
+    }
+
+    fn patch_loaded_image_source(
+        &self,
+        image: Handle,
+        source_device: Handle,
+        file_path: *const FfiDevicePath,
+    ) -> uefi::Result<()> {
+        let mut loaded_image = self.bt.open_protocol_exclusive::<RawLoadedImage>(image)?;
+        loaded_image.0.device_handle = source_device.as_ptr();
+        loaded_image.0.file_path = file_path;
+        Ok(())
     }
 
     /// 从 ISO 加载文件
