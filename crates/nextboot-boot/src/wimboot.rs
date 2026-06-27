@@ -9,6 +9,8 @@ use alloc::format;
 use alloc::string::String;
 use core::fmt::Write;
 
+pub const MAX_VF_ARGUMENT_LEN: usize = 63;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WimbootVirtualFile<'a> {
     pub name: &'a str,
@@ -19,6 +21,7 @@ impl<'a> WimbootVirtualFile<'a> {
     pub fn new(name: &'a str, source: &'a str) -> Result<Self, WimbootCommandLineError> {
         validate_virtual_file_name(name)?;
         validate_argument_value(source)?;
+        validate_virtual_file_argument_len(name, source)?;
         Ok(Self { name, source })
     }
 }
@@ -36,6 +39,7 @@ pub enum WimbootCommandLineError {
     InvalidWhitespace,
     InvalidNul,
     InvalidVirtualFileName,
+    VirtualFileArgumentTooLong,
 }
 
 pub fn build_wimboot_command_line(
@@ -55,6 +59,7 @@ pub fn build_wimboot_command_line(
     for file in files {
         validate_virtual_file_name(file.name)?;
         validate_argument_value(file.source)?;
+        validate_virtual_file_argument_len(file.name, file.source)?;
         command.push(' ');
         command.push_str("vf=");
         command.push_str(file.name);
@@ -95,6 +100,21 @@ fn validate_argument_value(value: &str) -> Result<(), WimbootCommandLineError> {
     }
     if value.chars().any(char::is_whitespace) {
         return Err(WimbootCommandLineError::InvalidWhitespace);
+    }
+    Ok(())
+}
+
+fn validate_virtual_file_argument_len(
+    name: &str,
+    source: &str,
+) -> Result<(), WimbootCommandLineError> {
+    let len = name
+        .len()
+        .checked_add(1)
+        .and_then(|len| len.checked_add(source.len()))
+        .ok_or(WimbootCommandLineError::VirtualFileArgumentTooLong)?;
+    if len > MAX_VF_ARGUMENT_LEN {
+        return Err(WimbootCommandLineError::VirtualFileArgumentTooLong);
     }
     Ok(())
 }
@@ -148,6 +168,16 @@ mod tests {
         assert_eq!(
             WimbootVirtualFile::new("", "/boot.wim"),
             Err(WimbootCommandLineError::EmptyValue)
+        );
+    }
+
+    #[test]
+    fn rejects_virtual_file_arguments_that_wimboot_would_truncate() {
+        let long_source = "/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.wim";
+
+        assert_eq!(
+            WimbootVirtualFile::new("boot.wim", long_source),
+            Err(WimbootCommandLineError::VirtualFileArgumentTooLong)
         );
     }
 }

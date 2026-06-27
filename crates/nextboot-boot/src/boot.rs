@@ -3,16 +3,18 @@
 //! 负责准备和执行 ISO 引导
 
 use crate::init::StorageDevice;
-use crate::scanner::{ImageFormat, IsoFile, OsType};
+use crate::scanner::{ImageFormat, IsoExtent, IsoFile, OsType};
 use crate::vdi;
 use crate::vhdx;
 use crate::virtual_fs::{IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem};
-use crate::wimboot::{self, WimbootVirtualFile};
+use crate::wimboot::{self, WimbootCallbacks, WimbootVirtualFile};
+use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::ptr::{self, NonNull};
+use core::sync::atomic::{AtomicPtr, Ordering};
 use log::{info, warn};
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::{BlockIoOps, FileSystem, FsError};
@@ -27,7 +29,7 @@ use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::unsafe_protocol;
 use uefi::table::boot::{
     BootServices, LoadImageSource, MemoryType, OpenProtocolAttributes, OpenProtocolParams,
-    SearchType,
+    ScopedProtocol, SearchType,
 };
 use uefi::table::runtime::{RuntimeServices, VariableAttributes, VariableVendor};
 use uefi::{CString16, Guid, Handle, Identify, Status};
@@ -106,6 +108,10 @@ const VHD_SECTOR_SIZE: u64 = 512;
 const VHD_FOOTER_SIZE: usize = 512;
 const VHD_DYNAMIC_HEADER_SIZE: usize = 1024;
 const VHD_UNUSED_BAT_ENTRY: u32 = 0xFFFF_FFFF;
+const WIMBOOT_MAX_CALLBACK_PATH: usize = 512;
+const WIMBOOT_BOOT_WIM_CALLBACK_PATH: &str = "nb-boot-wim";
+
+static WIMBOOT_RUNTIME_CONTEXT: AtomicPtr<WimbootRuntimeContext> = AtomicPtr::new(ptr::null_mut());
 
 fn default_efi_boot_paths() -> &'static [&'static str] {
     #[cfg(target_arch = "aarch64")]
@@ -282,19 +288,45 @@ impl<'a> BootManager<'a> {
             return Err(Status::UNSUPPORTED.into());
         }
 
-        let boot_wim = WimbootVirtualFile::new("boot.wim", &self.iso.path)
+        let runtime = self.register_wimboot_runtime_files()?;
+        let boot_wim = WimbootVirtualFile::new("boot.wim", WIMBOOT_BOOT_WIM_CALLBACK_PATH)
             .map_err(|_| Status::INVALID_PARAMETER)?;
-        let load_options =
-            wimboot::build_wimboot_command_line(&[boot_wim], None, Some(wim_info.boot_index))
-                .map_err(|_| Status::INVALID_PARAMETER)?;
+        let callbacks = runtime.callbacks();
+        let load_options = wimboot::build_wimboot_command_line(
+            &[boot_wim],
+            Some(callbacks),
+            Some(wim_info.boot_index),
+        )
+        .map_err(|_| Status::INVALID_PARAMETER)?;
 
         info!(
             "Prepared WIMBOOT load options for {}: {}",
             self.iso.path, load_options
         );
-        warn!("WIMBOOT runtime file callbacks and helper file injection are not implemented yet");
+        info!(
+            "Registered WIMBOOT runtime file callbacks: pfsize=0x{:x} pfread=0x{:x}",
+            callbacks.file_size, callbacks.file_read
+        );
+        warn!("WIMBOOT helper file injection and chain-loading are not implemented yet");
 
         Err(Status::UNSUPPORTED.into())
+    }
+
+    fn register_wimboot_runtime_files(&self) -> uefi::Result<WimbootRuntimeRegistration<'a>> {
+        let bt: &'a BootServices = self.bt;
+        let source_block_io = bt.open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+        let reader = UefiPhysicalReader::new(&source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+        let file = WimbootRuntimeFile::from_iso(self.iso, WIMBOOT_BOOT_WIM_CALLBACK_PATH)?;
+        let mut files = Vec::new();
+        files
+            .try_reserve_exact(1)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        files.push(file);
+
+        Ok(WimbootRuntimeRegistration::install(
+            WimbootRuntimeContext { reader, files },
+            source_block_io,
+        ))
     }
 
     /// 引导 Linux ISO
@@ -1655,6 +1687,240 @@ impl PhysicalReader for UefiPhysicalReader {
                 _ => VirtIoError::ReadFailed,
             })
     }
+}
+
+struct WimbootRuntimeContext {
+    reader: UefiPhysicalReader,
+    files: Vec<WimbootRuntimeFile>,
+}
+
+impl WimbootRuntimeContext {
+    fn find_file(&self, path: &[u8]) -> Option<&WimbootRuntimeFile> {
+        self.files
+            .iter()
+            .find(|file| file.callback_path.as_bytes() == path)
+    }
+}
+
+struct WimbootRuntimeFile {
+    callback_path: String,
+    size: u64,
+    block_size: u32,
+    extents: Vec<IsoExtent>,
+}
+
+impl WimbootRuntimeFile {
+    fn from_iso(iso: &IsoFile, callback_path: &str) -> uefi::Result<Self> {
+        if iso.extents.is_empty() || iso.block_size == 0 {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        Ok(Self {
+            callback_path: String::from(callback_path),
+            size: iso.size,
+            block_size: iso.block_size,
+            extents: iso.extents.clone(),
+        })
+    }
+
+    fn size_i32(&self) -> Option<i32> {
+        i32::try_from(self.size).ok()
+    }
+
+    fn read_range(&self, reader: &UefiPhysicalReader, offset: u64, buf: &mut [u8]) -> Option<()> {
+        let end = offset.checked_add(buf.len() as u64)?;
+        if end > self.size {
+            return None;
+        }
+
+        let block_size = u64::from(self.block_size);
+        let mut cursor = offset;
+        let mut copied = 0usize;
+
+        while copied < buf.len() {
+            let extent = self.extents.iter().find(|extent| {
+                let Some(extent_start) = extent.virtual_block_start.checked_mul(block_size) else {
+                    return false;
+                };
+                let Some(extent_bytes) = extent.block_count.checked_mul(block_size) else {
+                    return false;
+                };
+                let Some(extent_end) = extent_start.checked_add(extent_bytes) else {
+                    return false;
+                };
+                cursor >= extent_start && cursor < extent_end
+            })?;
+
+            let extent_start = extent.virtual_block_start.checked_mul(block_size)?;
+            let extent_bytes = extent.block_count.checked_mul(block_size)?;
+            let extent_end = extent_start.checked_add(extent_bytes)?;
+            let read_end = end.min(extent_end);
+            let read_len = usize::try_from(read_end.checked_sub(cursor)?).ok()?;
+            let physical_byte = extent
+                .physical_lba
+                .checked_mul(block_size)?
+                .checked_add(cursor.checked_sub(extent_start)?)?;
+
+            read_physical_bytes(
+                reader,
+                self.block_size,
+                physical_byte,
+                &mut buf[copied..copied + read_len],
+            )?;
+
+            cursor = read_end;
+            copied += read_len;
+        }
+
+        Some(())
+    }
+}
+
+struct WimbootRuntimeRegistration<'a> {
+    context: *mut WimbootRuntimeContext,
+    previous: *mut WimbootRuntimeContext,
+    _source_block_io: ScopedProtocol<'a, BlockIO>,
+}
+
+impl<'a> WimbootRuntimeRegistration<'a> {
+    fn install(
+        context: WimbootRuntimeContext,
+        source_block_io: ScopedProtocol<'a, BlockIO>,
+    ) -> Self {
+        let context = Box::into_raw(Box::new(context));
+        let previous = WIMBOOT_RUNTIME_CONTEXT.swap(context, Ordering::SeqCst);
+        Self {
+            context,
+            previous,
+            _source_block_io: source_block_io,
+        }
+    }
+
+    fn callbacks(&self) -> WimbootCallbacks {
+        WimbootCallbacks {
+            file_size: wimboot_runtime_file_size as usize,
+            file_read: wimboot_runtime_file_read as usize,
+        }
+    }
+}
+
+impl Drop for WimbootRuntimeRegistration<'_> {
+    fn drop(&mut self) {
+        if WIMBOOT_RUNTIME_CONTEXT.load(Ordering::SeqCst) == self.context {
+            WIMBOOT_RUNTIME_CONTEXT.store(self.previous, Ordering::SeqCst);
+        }
+
+        unsafe {
+            drop(Box::from_raw(self.context));
+        }
+    }
+}
+
+extern "C" fn wimboot_runtime_file_size(path: *const u8) -> i32 {
+    let Some(context) = current_wimboot_context() else {
+        return -1;
+    };
+    let Some(path) = (unsafe { c_path_bytes(path) }) else {
+        return -1;
+    };
+    let Some(file) = context.find_file(path) else {
+        return -1;
+    };
+
+    file.size_i32().unwrap_or(-1)
+}
+
+extern "C" fn wimboot_runtime_file_read(
+    path: *const u8,
+    offset: i32,
+    len: i32,
+    buf: *mut c_void,
+) -> i32 {
+    if offset < 0 || len < 0 {
+        return -1;
+    }
+
+    let len = len as usize;
+    if len == 0 {
+        return 0;
+    }
+    if buf.is_null() {
+        return -1;
+    }
+
+    let Some(context) = current_wimboot_context() else {
+        return -1;
+    };
+    let Some(path) = (unsafe { c_path_bytes(path) }) else {
+        return -1;
+    };
+    let Some(file) = context.find_file(path) else {
+        return -1;
+    };
+
+    let data = unsafe { core::slice::from_raw_parts_mut(buf.cast::<u8>(), len) };
+    match file.read_range(&context.reader, offset as u64, data) {
+        Some(()) => len.try_into().unwrap_or(i32::MAX),
+        None => -1,
+    }
+}
+
+fn current_wimboot_context() -> Option<&'static WimbootRuntimeContext> {
+    let context = WIMBOOT_RUNTIME_CONTEXT.load(Ordering::SeqCst);
+    if context.is_null() {
+        None
+    } else {
+        Some(unsafe { &*context })
+    }
+}
+
+unsafe fn c_path_bytes(path: *const u8) -> Option<&'static [u8]> {
+    if path.is_null() {
+        return None;
+    }
+
+    for len in 0..WIMBOOT_MAX_CALLBACK_PATH {
+        let byte = unsafe { *path.add(len) };
+        if byte == 0 {
+            return Some(unsafe { core::slice::from_raw_parts(path, len) });
+        }
+    }
+
+    None
+}
+
+fn read_physical_bytes(
+    reader: &UefiPhysicalReader,
+    block_size: u32,
+    physical_byte_start: u64,
+    buf: &mut [u8],
+) -> Option<()> {
+    let block_size = usize::try_from(block_size).ok()?;
+    if block_size == 0 {
+        return None;
+    }
+
+    let mut scratch = Vec::new();
+    scratch.try_reserve_exact(block_size).ok()?;
+    scratch.resize(block_size, 0);
+
+    let mut physical_byte = physical_byte_start;
+    let mut copied = 0usize;
+
+    while copied < buf.len() {
+        let physical_lba = physical_byte / block_size as u64;
+        let in_block_offset = usize::try_from(physical_byte % block_size as u64).ok()?;
+        let copy_size = (block_size - in_block_offset).min(buf.len() - copied);
+
+        reader.read_blocks(physical_lba, &mut scratch).ok()?;
+        buf[copied..copied + copy_size]
+            .copy_from_slice(&scratch[in_block_offset..in_block_offset + copy_size]);
+
+        physical_byte = physical_byte.checked_add(copy_size as u64)?;
+        copied += copy_size;
+    }
+
+    Some(())
 }
 
 struct PreloadedFile {
