@@ -382,6 +382,7 @@ if [ "${#IMAGES[@]}" -gt 0 ]; then
 fi
 python3 - "${PY_ARGS[@]}" <<'PY'
 import math
+import lzma
 import os
 import struct
 import sys
@@ -513,7 +514,13 @@ def make_smoke_windows_wimboot_files(helper):
         raise SystemExit("windows wimboot smoke helper is missing")
     with open(helper, "rb") as src:
         helper_data = src.read()
-    return [("/ventoy/wimboot.x86_64", helper_data)]
+    compressed = lzma.compress(
+        helper_data,
+        format=lzma.FORMAT_XZ,
+        check=lzma.CHECK_CRC32,
+        preset=0,
+    )
+    return [("/ventoy/wimboot.x86_64.xz", compressed)]
 
 extra_files = []
 if smoke_linux_plugins:
@@ -1587,7 +1594,7 @@ if [ "$SMOKE" -eq 1 ]; then
                             --expect "device_type: DvdRom"
                             --expect "Booting Windows ISO"
                             --expect "Windows default EFI chain-load paths failed"
-                            --expect "Loaded WIMBOOT helper /ventoy/wimboot.x86_64"
+                            --expect "Loaded compressed WIMBOOT helper /ventoy/wimboot.x86_64"
                             --expect "Prepared Windows ISO WIMBOOT fallback"
                             --expect "pfsize=0x"
                             --expect "pfread=0x"
