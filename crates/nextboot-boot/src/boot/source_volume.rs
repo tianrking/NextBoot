@@ -13,6 +13,7 @@ use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::ntfs::Ntfs;
 use nextboot_fs::udf::Udf;
+use nextboot_fs::xfs::Xfs;
 use nextboot_fs::{
     detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError, SharedBlockIo,
 };
@@ -175,6 +176,7 @@ pub(super) enum SourceVolumeFileSystem {
     Ext4(Ext4),
     Ntfs(Ntfs),
     Udf(Udf),
+    Xfs(Xfs),
     Iso9660(Iso9660),
 }
 
@@ -210,6 +212,9 @@ impl SourceVolumeFileSystem {
                 .map_err(fs_error_to_uefi_status)?),
             FileSystemType::Ntfs => Ok(Ntfs::open(shared)
                 .map(Self::Ntfs)
+                .map_err(fs_error_to_uefi_status)?),
+            FileSystemType::Xfs => Ok(Xfs::open(shared)
+                .map(Self::Xfs)
                 .map_err(fs_error_to_uefi_status)?),
             _ => Ok(Udf::open(shared.clone())
                 .map(Self::Udf)
@@ -265,6 +270,7 @@ impl SourceVolumeFileSystem {
             Self::Ext4(fs) => fs.stat(path),
             Self::Ntfs(fs) => fs.stat(path),
             Self::Udf(fs) => fs.stat(path),
+            Self::Xfs(fs) => fs.stat(path),
             Self::Iso9660(fs) => fs.stat(path),
         }
         .map_err(fs_error_to_uefi_status)?)
@@ -277,6 +283,7 @@ impl SourceVolumeFileSystem {
             Self::Ext4(fs) => fs.read_file(path, offset, buf),
             Self::Ntfs(fs) => fs.read_file(path, offset, buf),
             Self::Udf(fs) => fs.read_file(path, offset, buf),
+            Self::Xfs(fs) => fs.read_file(path, offset, buf),
             Self::Iso9660(fs) => fs.read_file(path, offset, buf),
         }
         .map_err(fs_error_to_uefi_status)?)
@@ -289,6 +296,7 @@ impl SourceVolumeFileSystem {
             Self::Ext4(fs) => fs.file_extents(path),
             Self::Ntfs(fs) => fs.file_extents(path),
             Self::Udf(fs) => fs.file_extents(path),
+            Self::Xfs(fs) => fs.file_extents(path),
             Self::Iso9660(fs) => fs.file_extents(path),
         }
         .map_err(fs_error_to_uefi_status)?)
@@ -301,6 +309,7 @@ impl SourceVolumeFileSystem {
             Self::Ext4(fs) => fs.block_size(),
             Self::Ntfs(fs) => fs.block_size(),
             Self::Udf(fs) => fs.block_size(),
+            Self::Xfs(fs) => fs.block_size(),
             Self::Iso9660(fs) => fs.block_size(),
         }
     }

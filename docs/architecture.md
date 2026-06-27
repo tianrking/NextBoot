@@ -87,11 +87,12 @@ Virtual LBA N → Physical LBA (ISO_Start + N)
 | ext2/ext3/ext4 | Data 分区 | 4K QEMU 覆盖 | 无限制 |
 | NTFS | Data 分区 | 512B/4K | 无限制 |
 | UDF | Data 分区 | 512B/4K | 无限制 |
+| XFS | Data 分区 | 4K QEMU 受限子集 | 无限制 |
 | ISO9660 | ISO 镜像内部 | 2048B | 无限制 |
 
 **ISO 文件扫描流程:**
 ```
-1. 挂载或 raw BlockIO 扫描 Data 分区 (FAT32/exFAT/ext2/ext3/ext4/NTFS/UDF)
+1. 挂载或 raw BlockIO 扫描 Data 分区 (FAT32/exFAT/ext2/ext3/ext4/NTFS/UDF/XFS)
 2. 遍历 /ISO 目录
 3. 过滤扩展名: .iso, .img, .wim, .vhd
 4. 读取文件信息: 名称、大小、起始 LBA
@@ -193,9 +194,9 @@ UEFI Memory Map:
 - **风险**: uefi-rs 生态较小
 
 ### ADR-002: 默认 exFAT，同时扩展 Data 文件系统
-- **决策**: Data 分区默认使用 exFAT；raw BlockIO 扫描路径同时支持 FAT32/exFAT/ext2/ext3/ext4/NTFS/UDF
-- **原因**: exFAT 更简单，适合作为默认写盘格式；NTFS 覆盖 Windows 用户和大文件盘的常见布局；ext2/3/4 与 UDF 覆盖 Linux SSD 与 Ventoy 风格数据盘
-- **风险**: 某些固件不会暴露 NTFS/ext/UDF SimpleFS，因此这些格式依赖 NextBoot 自带只读解析器；macOS 无可靠内置 ext 写挂载
+- **决策**: Data 分区默认使用 exFAT；raw BlockIO 扫描路径同时支持 FAT32/exFAT/ext2/ext3/ext4/NTFS/UDF/XFS
+- **原因**: exFAT 更简单，适合作为默认写盘格式；NTFS 覆盖 Windows 用户和大文件盘的常见布局；ext2/3/4、UDF 与 XFS 覆盖 Linux SSD 与 Ventoy 风格数据盘
+- **风险**: 某些固件不会暴露 NTFS/ext/UDF/XFS SimpleFS，因此这些格式依赖 NextBoot 自带只读解析器；macOS 无可靠内置 ext/XFS 写挂载；XFS 当前只覆盖 QEMU 受限目录子集
 
 ### ADR-003: 标准 GPT 而非混合分区
 - **决策**: 严格使用标准 GPT

@@ -21,6 +21,7 @@ from .ext4 import Ext4Volume
 from .fat32 import Fat32Volume
 from .ntfs import NtfsVolume
 from .udf import UdfVolume
+from .xfs import XfsVolume
 
 def make_volume(image: DiskImage, partition: Partition, expected_fs: str):
     if expected_fs == "fat32":
@@ -33,6 +34,8 @@ def make_volume(image: DiskImage, partition: Partition, expected_fs: str):
         return NtfsVolume(image, partition)
     if expected_fs == "udf":
         return UdfVolume(image, partition)
+    if expected_fs == "xfs":
+        return XfsVolume(image, partition)
     raise VerifyError(f"unsupported expected filesystem {expected_fs}")
 
 

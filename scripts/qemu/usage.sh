@@ -15,7 +15,7 @@ Options:
   --sector-size BYTES
                      Logical and physical disk sector size: 512 or 4096
   --layout LAYOUT    Disk layout: single or split (default: single)
-  --data-fs FS       Data filesystem for split layout: exfat, ext2, ext3, ext4, fat32, ntfs, or udf (default: exfat)
+  --data-fs FS       Data filesystem for split layout: exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs (default: exfat)
   --disk-image PATH  Output disk image path
   --memory SIZE      QEMU guest memory (default: 1024M)
   --skip-verify      Do not verify the generated GPT/filesystem image
@@ -50,6 +50,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs ext3 --sector-size 4096 --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs ext4 --sector-size 4096 --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs udf --sector-size 4096 --smoke-efi-iso
+  $0 --bus nvme --layout split --data-fs xfs --sector-size 4096 --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
   $0 --bus usb --no-run
   $0 --bus sd --layout split --data-fs fat32 --smoke-efi-iso

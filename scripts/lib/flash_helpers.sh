@@ -57,6 +57,11 @@ find_udf_mkfs() {
     fi
 }
 
+find_xfs_mkfs() {
+    command_exists mkfs.xfs || return 1
+    printf 'mkfs.xfs\n'
+}
+
 ntfs_mkfs_command() {
     if [ "$DRY_RUN" -eq 1 ]; then
         printf 'mkfs.ntfs\n'
@@ -115,6 +120,14 @@ run_udf_mkfs() {
             die "Unsupported UDF formatter: $mkfs_cmd"
             ;;
     esac
+}
+
+xfs_mkfs_command() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf 'mkfs.xfs\n'
+    else
+        find_xfs_mkfs
+    fi
 }
 
 detect_ventoy_assets_dir() {
@@ -197,6 +210,9 @@ require_linux_tools() {
     if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "udf" ]; then
         find_udf_mkfs >/dev/null || die "mkudffs is required for --data-fs udf"
     fi
+    if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "xfs" ]; then
+        find_xfs_mkfs >/dev/null || die "mkfs.xfs is required for --data-fs xfs"
+    fi
 }
 
 require_macos_tools() {
@@ -213,6 +229,10 @@ require_macos_tools() {
     fi
     if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "udf" ]; then
         find_udf_mkfs >/dev/null || die "newfs_udf or mkudffs is required for --data-fs udf on macOS"
+    fi
+    if [ "$LAYOUT" = "split" ] && [ "$DATA_FS" = "xfs" ]; then
+        find_xfs_mkfs >/dev/null || die "mkfs.xfs is required for --data-fs xfs on macOS"
+        warn "macOS cannot reliably write-mount XFS; the Data partition will be formatted but /ISO and /ventoy must be populated from Linux."
     fi
 }
 

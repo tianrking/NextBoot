@@ -13,6 +13,7 @@ use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::ntfs::Ntfs;
 use nextboot_fs::udf::Udf;
+use nextboot_fs::xfs::Xfs;
 use nextboot_fs::{detect_fs_type, BlockIoOps, FileSystemType};
 use uefi::proto::media::block::BlockIO;
 use uefi::table::boot::SearchType;
@@ -178,6 +179,27 @@ impl<'a> IsoScanner<'a> {
                         &mut files,
                     );
                 }
+                FileSystemType::Xfs => {
+                    let fs = match Xfs::open(shared) {
+                        Ok(fs) => fs,
+                        Err(err) => {
+                            log::warn!("Ignoring XFS BlockIO volume {:?}: {:?}", handle, err);
+                            continue;
+                        }
+                    };
+                    self.scan_block_filesystem_paths(
+                        handle,
+                        volume_index,
+                        source_disk,
+                        source_disk_size,
+                        &block_io,
+                        &fs,
+                        default_search_paths,
+                        extensions,
+                        0,
+                        &mut files,
+                    );
+                }
                 _ => {}
             }
             block_volume_index += 1;
@@ -216,6 +238,22 @@ impl<'a> IsoScanner<'a> {
         }
 
         if let Ok(fs) = Ext4::open(shared.clone()) {
+            self.scan_block_filesystem_paths(
+                volume_handle,
+                volume_index,
+                source_disk,
+                source_disk_size,
+                block_io,
+                &fs,
+                default_search_paths,
+                extensions,
+                extent_lba_offset,
+                files,
+            );
+            return true;
+        }
+
+        if let Ok(fs) = Xfs::open(shared.clone()) {
             self.scan_block_filesystem_paths(
                 volume_handle,
                 volume_index,

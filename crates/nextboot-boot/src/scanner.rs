@@ -29,6 +29,7 @@ use nextboot_fs::fat32::Fat32;
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::ntfs::Ntfs;
 use nextboot_fs::udf::Udf;
+use nextboot_fs::xfs::Xfs;
 use nextboot_fs::{FileExtent, FileSystem, FileSystemType};
 use paths::{is_ventoy_plugin_tree_path, normalize_scan_path, open_directory};
 use uefi::data_types::CString16;
@@ -297,6 +298,12 @@ fn source_file_extents_from_detected_fs(
             })
             .ok(),
         FileSystemType::Ntfs => Ntfs::open(shared)
+            .and_then(|fs| {
+                let block_size = fs.block_size();
+                fs.file_extents(path).map(|extents| (block_size, extents))
+            })
+            .ok(),
+        FileSystemType::Xfs => Xfs::open(shared)
             .and_then(|fs| {
                 let block_size = fs.block_size();
                 fs.file_extents(path).map(|extents| (block_size, extents))

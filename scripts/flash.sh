@@ -38,7 +38,7 @@ Usage:
 
 Options:
   --layout LAYOUT   Disk layout: split or single (default: split)
-  --data-fs FS      Data partition filesystem for split layout: exfat, ext2, ext3, ext4, fat32, ntfs, or udf (default: exfat)
+  --data-fs FS      Data partition filesystem for split layout: exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs (default: exfat)
   --esp-size MB     ESP size for split layout in MiB (default: 260)
   --ventoy-assets DIR
                     Install WIMBOOT assets from DIR into /ventoy
@@ -55,6 +55,7 @@ Examples:
   $0 --layout split --data-fs ext4 /dev/nvme0n1
   $0 --layout split --data-fs ntfs /dev/diskX
   $0 --layout split --data-fs udf /dev/sdX
+  $0 --layout split --data-fs xfs /dev/nvme0n1
   $0 --layout split --ventoy-assets ../Ventoy/INSTALL/ventoy /dev/diskX
   $0 --layout split --data-fs fat32 /dev/sdX
   $0 --layout single /dev/sdX
@@ -193,8 +194,8 @@ case "$LAYOUT" in
 esac
 
 case "$DATA_FS" in
-    exfat|ext2|ext3|ext4|fat32|ntfs|udf) ;;
-    *) die "--data-fs must be exfat, ext2, ext3, ext4, fat32, ntfs, or udf" ;;
+    exfat|ext2|ext3|ext4|fat32|ntfs|udf|xfs) ;;
+    *) die "--data-fs must be exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs" ;;
 esac
 
 case "$ESP_SIZE_MB" in
@@ -280,7 +281,7 @@ if [[ "$HOST_OS" == "darwin"* ]]; then
             # diskutil on stock macOS cannot format NTFS.  Create a Microsoft
             # Basic Data placeholder, then reformat it with mkfs.ntfs/mkntfs.
             MAC_DATA_FS="ExFAT"
-        elif [[ "$DATA_FS" == ext* ]] || [ "$DATA_FS" = "udf" ]; then
+        elif [[ "$DATA_FS" == ext* ]] || [ "$DATA_FS" = "udf" ] || [ "$DATA_FS" = "xfs" ]; then
             # Create a mountable placeholder, then reformat it with the selected
             # external formatter so GPT geometry stays under diskutil control.
             MAC_DATA_FS="ExFAT"
@@ -299,6 +300,10 @@ if [[ "$HOST_OS" == "darwin"* ]]; then
         elif [ "$DATA_FS" = "udf" ]; then
             run_cmd diskutil unmount "$DATA_PART" || true
             run_udf_mkfs "$DATA_PART"
+        elif [ "$DATA_FS" = "xfs" ]; then
+            run_cmd diskutil unmount "$DATA_PART" || true
+            XFS_MKFS="$(xfs_mkfs_command)"
+            run_sudo "$XFS_MKFS" -f -L NEXTDATA "$DATA_PART"
         fi
     else
         run_sudo diskutil partitionDisk "$DEVICE" GPT FAT32 NEXBOOT 100%
@@ -311,6 +316,8 @@ else
             parted_data_type="ntfs"
         elif [[ "$DATA_FS" == ext* ]]; then
             parted_data_type="$DATA_FS"
+        elif [ "$DATA_FS" = "xfs" ]; then
+            parted_data_type="xfs"
         else
             parted_data_type="fat32"
         fi
@@ -344,6 +351,9 @@ else
             run_sudo "$NTFS_MKFS" -Q -F -L NEXTDATA "$DATA_PART"
         elif [ "$DATA_FS" = "udf" ]; then
             run_udf_mkfs "$DATA_PART"
+        elif [ "$DATA_FS" = "xfs" ]; then
+            XFS_MKFS="$(xfs_mkfs_command)"
+            run_sudo "$XFS_MKFS" -f -L NEXTDATA "$DATA_PART"
         else
             run_sudo mkfs.vfat -F 32 -n NEXTDATA "$DATA_PART"
         fi
@@ -364,7 +374,7 @@ if [[ "$HOST_OS" == "darwin"* ]]; then
 
     if [ "$LAYOUT" = "split" ]; then
         DATA_PART="${DEVICE}s2"
-        if [[ "$DATA_FS" == ext* ]]; then
+        if [[ "$DATA_FS" == ext* ]] || [ "$DATA_FS" = "xfs" ]; then
             warn "Skipping Data partition population on macOS ${DATA_FS}; copy ISO files into the Data partition from Linux."
         elif [ "$DATA_FS" = "ntfs" ] && command_exists ntfs-3g; then
             DATA_MOUNT="/tmp/nextboot_flash_data"

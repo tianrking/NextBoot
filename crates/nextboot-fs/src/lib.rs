@@ -22,6 +22,7 @@ pub mod gpt;
 pub mod iso9660;
 pub mod ntfs;
 pub mod udf;
+pub mod xfs;
 
 /// 文件系统错误类型
 #[derive(Debug, Clone, Copy)]
@@ -82,6 +83,7 @@ pub enum FileSystemType {
     Iso9660,
     Udf,
     Ext4,
+    Xfs,
     Ntfs, // P2 阶段支持
     Unknown,
 }
@@ -94,6 +96,7 @@ impl core::fmt::Display for FileSystemType {
             FileSystemType::Iso9660 => write!(f, "ISO9660"),
             FileSystemType::Udf => write!(f, "UDF"),
             FileSystemType::Ext4 => write!(f, "ext4"),
+            FileSystemType::Xfs => write!(f, "XFS"),
             FileSystemType::Ntfs => write!(f, "NTFS"),
             FileSystemType::Unknown => write!(f, "Unknown"),
         }
@@ -396,6 +399,11 @@ pub fn detect_fs_type(data: &[u8]) -> FileSystemType {
     // NTFS 检测
     if data.len() >= 11 && &data[3..11] == b"NTFS    " {
         return FileSystemType::Ntfs;
+    }
+
+    // XFS 检测
+    if data.len() >= 4 && &data[0..4] == b"XFSB" {
+        return FileSystemType::Xfs;
     }
 
     // ISO9660 检测
