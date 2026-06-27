@@ -4,12 +4,17 @@
 
 use crate::init::StorageDevice;
 use crate::scanner::{IsoFile, OsType};
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ptr::NonNull;
 use log::{info, warn};
+use nextboot_fs::iso9660::Iso9660;
+use nextboot_fs::{BlockIoOps, FileSystem, FsError};
 use nextboot_virtio::protocol::append_file_path_device_path;
-use nextboot_virtio::{PhysicalReader, VirtIoError};
+use nextboot_virtio::{
+    PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
+};
 use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::media::block::BlockIO;
 use uefi::table::boot::{BootServices, LoadImageSource};
@@ -195,25 +200,67 @@ impl<'a> BootManager<'a> {
     fn load_file(&self, path: &str) -> uefi::Result<Vec<u8>> {
         info!("Loading file: {}", path);
 
-        // TODO: 实现文件加载
-        // 1. 使用文件系统驱动打开 ISO
-        // 2. 定位文件
-        // 3. 读取文件内容
+        let source_block_io = self
+            .bt
+            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+        let config = self.iso9660_virtual_config();
+        let vbio = self.build_virtual_block_io(config, &source_block_io)?;
+        let iso = Iso9660::open(Rc::new(VirtualIsoBlockIo::new(vbio)))
+            .map_err(fs_error_to_uefi_status)?;
 
-        // 简化实现：返回空数据
-        Ok(Vec::new())
+        let path = normalize_iso_path(path);
+        let info = iso.stat(&path).map_err(fs_error_to_uefi_status)?;
+        if info.is_dir {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let file_size = usize::try_from(info.size).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(file_size)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        data.resize(file_size, 0);
+
+        let read = iso
+            .read_file(&path, 0, &mut data)
+            .map_err(fs_error_to_uefi_status)?;
+        data.truncate(read);
+        info!("Loaded {} bytes from ISO path {}", read, path);
+
+        Ok(data)
     }
 
     /// 创建虚拟 Block IO
     fn create_virtual_block_io(&self) -> uefi::Result<VirtualBootDevice> {
         use nextboot_virtio::protocol::VirtualBlockIoProtocol;
-        use nextboot_virtio::{
-            CdRomBootInfo, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
-        };
 
         info!("Creating virtual Block IO...");
 
-        // 确定设备类型
+        let source_block_io = self
+            .bt
+            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+        let vbio = self.build_virtual_block_io(self.boot_virtual_config(), &source_block_io)?;
+        let virtual_info = vbio.device_info();
+        let registered = VirtualBlockIoProtocol::new(vbio).install(self.bt)?;
+        let virtual_handle = registered.handle();
+        let device_path = registered.device_path().to_vec();
+        registered.leak();
+
+        info!(
+            "Virtual Block IO installed on {:?}: {:?}, source extents: {}",
+            virtual_handle,
+            virtual_info,
+            self.iso.extents.len()
+        );
+
+        Ok(VirtualBootDevice {
+            handle: virtual_handle,
+            device_path,
+        })
+    }
+
+    fn boot_virtual_config(&self) -> VirtualDeviceConfig {
+        use nextboot_virtio::CdRomBootInfo;
+
         let device_type = match self.iso.os_type {
             OsType::Windows | OsType::WinPE => VirtualDeviceType::DvdRom,
             _ => VirtualDeviceType::HardDisk,
@@ -223,7 +270,6 @@ impl<'a> BootManager<'a> {
             _ => self.iso.block_size,
         };
 
-        // 创建配置
         let mut config = VirtualDeviceConfig::new(
             device_type,
             self.iso.start_lba,
@@ -232,6 +278,7 @@ impl<'a> BootManager<'a> {
         )
         .with_physical_block_size(self.iso.block_size)
         .with_name(&self.iso.path);
+
         if let Some(boot) = self.iso.boot_info {
             config = config.with_cdrom_boot(CdRomBootInfo::new(
                 boot.boot_entry,
@@ -246,7 +293,25 @@ impl<'a> BootManager<'a> {
             warn!("No EFI El Torito boot image found for {}", self.iso.path);
         }
 
-        // 创建虚拟 Block IO
+        config
+    }
+
+    fn iso9660_virtual_config(&self) -> VirtualDeviceConfig {
+        VirtualDeviceConfig::new(
+            VirtualDeviceType::DvdRom,
+            self.iso.start_lba,
+            self.iso.size,
+            2048,
+        )
+        .with_physical_block_size(self.iso.block_size)
+        .with_name(&self.iso.path)
+    }
+
+    fn build_virtual_block_io(
+        &self,
+        config: VirtualDeviceConfig,
+        source_block_io: &BlockIO,
+    ) -> uefi::Result<VirtualBlockIo> {
         let mut vbio = if self.iso.extents.is_empty() {
             warn!(
                 "No extent map for {}, falling back to contiguous LBA {}",
@@ -269,29 +334,10 @@ impl<'a> BootManager<'a> {
             VirtualBlockIo::from_file_extents(config, &extents)
         };
 
-        let source_block_io = self
-            .bt
-            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
-        let reader = UefiPhysicalReader::new(&source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+        let reader = UefiPhysicalReader::new(source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
         vbio.set_physical_reader(reader);
 
-        let virtual_info = vbio.device_info();
-        let registered = VirtualBlockIoProtocol::new(vbio).install(self.bt)?;
-        let virtual_handle = registered.handle();
-        let device_path = registered.device_path().to_vec();
-        registered.leak();
-
-        info!(
-            "Virtual Block IO installed on {:?}: {:?}, source extents: {}",
-            virtual_handle,
-            virtual_info,
-            self.iso.extents.len()
-        );
-
-        Ok(VirtualBootDevice {
-            handle: virtual_handle,
-            device_path,
-        })
+        Ok(vbio)
     }
 
     fn boot_virtual_device(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
@@ -395,6 +441,81 @@ impl PhysicalReader for UefiPhysicalReader {
                 _ => VirtIoError::ReadFailed,
             })
     }
+}
+
+struct VirtualIsoBlockIo {
+    vbio: VirtualBlockIo,
+    media_id: u32,
+}
+
+impl VirtualIsoBlockIo {
+    fn new(vbio: VirtualBlockIo) -> Self {
+        let media_id = vbio.media_id();
+        Self { vbio, media_id }
+    }
+}
+
+impl BlockIoOps for VirtualIsoBlockIo {
+    fn block_size(&self) -> u32 {
+        self.vbio.block_size()
+    }
+
+    fn total_blocks(&self) -> u64 {
+        self.vbio.block_count()
+    }
+
+    fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        self.vbio
+            .read_blocks(self.media_id, lba, buf)
+            .map_err(virtio_error_to_fs_error)
+    }
+}
+
+fn virtio_error_to_fs_error(err: VirtIoError) -> FsError {
+    match err {
+        VirtIoError::InvalidArgument | VirtIoError::InvalidBufferSize => FsError::InvalidArgument,
+        VirtIoError::OutOfBounds
+        | VirtIoError::MediaChanged
+        | VirtIoError::InvalidMapping
+        | VirtIoError::NoPhysicalRead
+        | VirtIoError::ReadFailed
+        | VirtIoError::DeviceError
+        | VirtIoError::CrcError => FsError::ReadError,
+        VirtIoError::WriteProtected => FsError::UnsupportedFs,
+    }
+}
+
+fn fs_error_to_uefi_status(err: FsError) -> Status {
+    match err {
+        FsError::FileNotFound | FsError::DirectoryNotFound => Status::NOT_FOUND,
+        FsError::InvalidPath | FsError::InvalidArgument => Status::INVALID_PARAMETER,
+        FsError::OutOfMemory | FsError::FileTooLarge => Status::OUT_OF_RESOURCES,
+        FsError::NotDirectory | FsError::NotFile | FsError::UnsupportedFs => Status::UNSUPPORTED,
+        FsError::InvalidSignature | FsError::BlockSizeMismatch | FsError::Corrupted => {
+            Status::LOAD_ERROR
+        }
+        FsError::ReadError => Status::DEVICE_ERROR,
+    }
+}
+
+fn normalize_iso_path(path: &str) -> String {
+    let trimmed = path.trim();
+    let trimmed = trimmed.trim_start_matches(['/', '\\']);
+    let mut normalized = String::from("/");
+    let mut first = true;
+
+    for part in trimmed
+        .split(|ch| ch == '/' || ch == '\\')
+        .filter(|part| !part.is_empty())
+    {
+        if !first {
+            normalized.push('/');
+        }
+        normalized.push_str(part);
+        first = false;
+    }
+
+    normalized
 }
 
 /// 引导模式
