@@ -3,7 +3,7 @@
 //! 负责准备和执行 ISO 引导
 
 use crate::scanner::{ImageFormat, IsoExtent, IsoFile, OsType};
-use crate::source_disk::SourceDiskIdentity;
+use crate::source_disk::{source_volume_range, SourceDiskIdentity};
 use crate::vdi;
 use crate::ventoy_linux::{VentoyDudFile, VentoyLinuxInitrdInput};
 use crate::vhdx;
@@ -3920,17 +3920,7 @@ struct SourceVolumeReader {
 impl SourceVolumeReader {
     fn new(block_io: &BlockIO, source_disk: Option<SourceDiskIdentity>) -> Option<Self> {
         let base = UefiPhysicalReader::new(block_io)?;
-        let (lba_offset, total_blocks) = source_disk
-            .filter(|disk| disk.partition_size_blocks > 0)
-            .map(|disk| (disk.partition_start_lba, disk.partition_size_blocks))
-            .unwrap_or((0, base.total_blocks));
-
-        if lba_offset
-            .checked_add(total_blocks)
-            .map_or(true, |end| end > base.total_blocks)
-        {
-            return None;
-        }
+        let (lba_offset, total_blocks) = source_volume_range(base.total_blocks, source_disk)?;
 
         Some(Self {
             base,

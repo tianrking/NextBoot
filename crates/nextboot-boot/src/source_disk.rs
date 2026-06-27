@@ -1,5 +1,8 @@
 //! Source disk identity helpers for Ventoy-compatible OS parameters.
 
+#[cfg(test)]
+extern crate alloc;
+
 use alloc::vec::Vec;
 
 const DEVICE_PATH_TYPE_MEDIA: u8 = 0x04;
@@ -141,6 +144,32 @@ pub fn build_source_disk_identity(
     })
 }
 
+pub fn source_volume_range(
+    base_total_blocks: u64,
+    source_disk: Option<SourceDiskIdentity>,
+) -> Option<(u64, u64)> {
+    let Some(disk) = source_disk.filter(|disk| disk.partition_size_blocks > 0) else {
+        return Some((0, base_total_blocks));
+    };
+
+    if disk
+        .partition_start_lba
+        .checked_add(disk.partition_size_blocks)
+        .map_or(false, |end| end <= base_total_blocks)
+    {
+        return Some((disk.partition_start_lba, disk.partition_size_blocks));
+    }
+
+    // Some firmware exposes a filesystem partition as its own BlockIO.  That
+    // child handle is already partition-relative, while Ventoy-compatible OS
+    // parameters still need the parent disk offset stored in SourceDiskIdentity.
+    if disk.partition_size_blocks == base_total_blocks {
+        return Some((0, base_total_blocks));
+    }
+
+    None
+}
+
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(
         bytes.get(offset..offset + 4)?.try_into().ok()?,
@@ -174,6 +203,19 @@ mod tests {
         path.push(0x02);
         path.extend_from_slice(&DEVICE_PATH_END_ENTIRE);
         path
+    }
+
+    fn source_identity(start_lba: u64, blocks: u64) -> SourceDiskIdentity {
+        SourceDiskIdentity {
+            disk_guid: [0x42; 16],
+            disk_signature: [0xaa, 0xbb, 0xcc, 0xdd],
+            disk_size: 0,
+            block_size: 512,
+            partition_number: 1,
+            partition_start_lba: start_lba,
+            partition_size_blocks: blocks,
+            partition_format: PartitionFormat::Gpt,
+        }
     }
 
     #[test]
@@ -216,5 +258,34 @@ mod tests {
         assert_eq!(identity.partition_number, 2);
         assert_eq!(identity.partition_start_lba, 4096);
         assert_eq!(identity.partition_format, PartitionFormat::Mbr);
+    }
+
+    #[test]
+    fn source_volume_range_uses_parent_disk_partition_offset() {
+        assert_eq!(
+            source_volume_range(20_000, Some(source_identity(2048, 4096))),
+            Some((2048, 4096))
+        );
+    }
+
+    #[test]
+    fn source_volume_range_accepts_partition_relative_child_block_io() {
+        assert_eq!(
+            source_volume_range(4096, Some(source_identity(2048, 4096))),
+            Some((0, 4096))
+        );
+    }
+
+    #[test]
+    fn source_volume_range_uses_whole_device_without_partition_identity() {
+        assert_eq!(source_volume_range(8192, None), Some((0, 8192)));
+    }
+
+    #[test]
+    fn source_volume_range_rejects_inconsistent_partition_identity() {
+        assert_eq!(
+            source_volume_range(4095, Some(source_identity(2048, 4096))),
+            None
+        );
     }
 }
