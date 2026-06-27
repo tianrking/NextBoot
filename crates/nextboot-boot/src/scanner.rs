@@ -6,6 +6,7 @@ mod block_devices;
 mod block_io;
 mod block_paths;
 mod config;
+mod exposed_partitions;
 mod helpers;
 mod metadata;
 mod model;
