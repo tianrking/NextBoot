@@ -12,6 +12,12 @@ import sys
 import time
 
 
+SEND_KEY_BYTES = {
+    "enter": b"\r",
+    "escape": b"\x1b",
+}
+
+
 def terminate(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
@@ -28,9 +34,15 @@ def run_smoke(args: argparse.Namespace) -> int:
         print("qemu-boot-smoke: missing command after --", file=sys.stderr)
         return 2
 
+    send_bytes = bytes(args.send_text, "utf-8") if args.send_text is not None else b""
+    if args.send_key:
+        send_bytes += SEND_KEY_BYTES[args.send_key]
+    send_after = args.send_after
+    send_done = not send_after
+
     process = subprocess.Popen(
         args.command,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE if send_after else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
@@ -51,6 +63,22 @@ def run_smoke(args: argparse.Namespace) -> int:
                 found[item] = True
         return all(found.values())
 
+    def maybe_send_input() -> None:
+        nonlocal send_done
+        if send_done or not send_after:
+            return
+        text = captured.decode("utf-8", errors="replace")
+        if send_after not in text:
+            return
+        if args.send_delay > 0:
+            time.sleep(args.send_delay)
+        if process.stdin is not None and send_bytes:
+            try:
+                os.write(process.stdin.fileno(), send_bytes)
+            except BrokenPipeError:
+                pass
+        send_done = True
+
     def report_success() -> int:
         if args.log:
             with open(args.log, "wb") as out:
@@ -66,8 +94,10 @@ def run_smoke(args: argparse.Namespace) -> int:
                 remaining = process.stdout.read()
                 if remaining:
                     captured.extend(remaining)
+                maybe_send_input()
                 if update_found():
-                    return report_success()
+                    if send_done:
+                        return report_success()
                 break
 
             timeout = max(0.05, min(0.5, deadline - time.monotonic()))
@@ -76,9 +106,11 @@ def run_smoke(args: argparse.Namespace) -> int:
                 if not chunk:
                     continue
                 captured.extend(chunk)
+                maybe_send_input()
                 if update_found():
-                    terminate(process)
-                    return report_success()
+                    if send_done:
+                        terminate(process)
+                        return report_success()
         terminate(process)
     except KeyboardInterrupt:
         terminate(process)
@@ -109,6 +141,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeout", type=float, default=20.0, help="seconds to wait")
     parser.add_argument("--log", help="optional path to write captured QEMU output")
+    parser.add_argument("--send-after", help="output marker after which input is sent")
+    parser.add_argument("--send-delay", type=float, default=0.25, help="seconds to wait before sending input")
+    parser.add_argument("--send-text", help="literal text to send to QEMU stdin")
+    parser.add_argument("--send-key", choices=sorted(SEND_KEY_BYTES), help="named key to send to QEMU stdin")
     parser.add_argument(
         "--expect",
         action="append",

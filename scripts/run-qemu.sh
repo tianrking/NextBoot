@@ -36,6 +36,7 @@ DISK_IMG=""
 NO_RUN=0
 VERIFY_IMAGE=1
 SMOKE=0
+SMOKE_BOOT=0
 SMOKE_TIMEOUT=20
 MEMORY="1024M"
 IMAGES=()
@@ -60,6 +61,7 @@ Options:
   --memory SIZE      QEMU guest memory (default: 1024M)
   --skip-verify      Do not verify the generated GPT/filesystem image
   --smoke            Run QEMU until NextBoot scan/menu log markers appear
+  --smoke-boot       With --smoke, press Enter and verify boot preparation starts
   --smoke-timeout S  Seconds to wait for --smoke markers (default: 20)
   --no-run           Create the disk image and print the QEMU command only
   -h, --help         Show this help
@@ -150,6 +152,11 @@ while [ $# -gt 0 ]; do
             SMOKE=1
             shift
             ;;
+        --smoke-boot)
+            SMOKE=1
+            SMOKE_BOOT=1
+            shift
+            ;;
         --smoke-timeout)
             [ $# -ge 2 ] || die "--smoke-timeout requires a value"
             SMOKE_TIMEOUT="$2"
@@ -208,6 +215,10 @@ fi
 
 if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ]; then
     die "--smoke cannot be combined with --no-run"
+fi
+
+if [ "$SMOKE_BOOT" -eq 1 ] && [ "${#IMAGES[@]}" -eq 0 ]; then
+    die "--smoke-boot requires at least one --image"
 fi
 
 if [ "$DISK_SIZE_SET" -eq 0 ]; then
@@ -1002,6 +1013,16 @@ if [ "$SMOKE" -eq 1 ]; then
             EXPECT_ARGS+=(--expect "$(basename "$image")")
         done
         EXPECT_ARGS+=(--expect "Phase 3: Displaying boot menu")
+        if [ "$SMOKE_BOOT" -eq 1 ]; then
+            EXPECT_ARGS+=(
+                --send-after "Phase 3: Displaying boot menu"
+                --send-key enter
+                --expect "Selected:"
+                --expect "Phase 4: Booting selected ISO"
+                --expect "Preparing to boot:"
+                --expect "Creating virtual Block IO"
+            )
+        fi
     else
         EXPECT_ARGS+=(--expect "No ISO files found")
     fi
