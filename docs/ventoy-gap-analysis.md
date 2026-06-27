@@ -38,9 +38,10 @@ workflows and which gaps are still worth pursuing.
   differencing VHDX/VDI parent chains and partially present sparse states still
   need a compatibility story.
 - More filesystems: Ventoy covers a broader set of user storage formats. UDF,
-  ext2/3/4, and a first XFS extent-reading framework are now covered in the
-  QEMU data partition and flash paths; real `mkfs.xfs` directory formats still
-  need broader compatibility work.
+  ext2/3/4, and XFS extent/local-directory/dir2-directory reads are now covered
+  in the QEMU data partition and flash paths, including 512B and 4K-sector XFS
+  smoke coverage; real `mkfs.xfs` btree-scale directories still need broader
+  compatibility work.
 - Cross-architecture boot: current build and QEMU scripts target x86_64 UEFI.
   AArch64 UEFI support would need its own build artifact, smoke EFI, and QEMU
   firmware path.

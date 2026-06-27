@@ -38,9 +38,10 @@ def write_u64(data, offset, value):
 
 
 def write_xfs_volume(f, part, deps):
-    block_size = deps["sector_size"]
-    if block_size != 4096:
-        raise SystemExit("test XFS volumes require 4096 byte sectors")
+    sector_size = deps["sector_size"]
+    block_size = 4096
+    if block_size % sector_size != 0:
+        raise SystemExit("test XFS block size must be aligned to the device sector size")
 
     efi_file = deps["efi_file"]
     smoke_vlnk_iso = deps["smoke_vlnk_iso"]
@@ -49,7 +50,8 @@ def write_xfs_volume(f, part, deps):
     split_virtual_path = deps["split_virtual_path"]
 
     part_start_lba = part["start_lba"]
-    part_blocks = part["end_lba"] - part["start_lba"] + 1
+    part_sectors = part["end_lba"] - part["start_lba"] + 1
+    part_blocks = part_sectors * sector_size // block_size
     if part_blocks < 256:
         raise SystemExit("partition is too small for XFS")
 
@@ -116,7 +118,7 @@ def write_xfs_volume(f, part, deps):
         raise SystemExit(f"{part['name']} is too small for requested XFS files")
 
     def disk_offset(fs_block):
-        return (part_start_lba + fs_block) * block_size
+        return part_start_lba * sector_size + fs_block * block_size
 
     def write_block(fs_block, data):
         if len(data) > block_size:
@@ -197,7 +199,7 @@ def write_xfs_volume(f, part, deps):
     write_u32(superblock, 84, part_blocks)
     write_u32(superblock, 88, 1)
     write_u16(superblock, 100, 0x0004)
-    write_u16(superblock, 102, block_size)
+    write_u16(superblock, 102, sector_size)
     write_u16(superblock, 104, 256)
     write_u16(superblock, 106, block_size // 256)
     write_block(0, superblock)

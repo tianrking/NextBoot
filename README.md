@@ -162,8 +162,9 @@ size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异�
 固定盘上“引导分区与镜像分区分离”的真实部署路径；`--data-fs exfat|ext2|ext3|ext4|fat32|ntfs|udf|xfs` 可覆盖
 默认写盘布局、Linux ext 系列数据盘、FAT32 兼容布局、NTFS 大文件布局和 UDF 数据盘布局。生成后脚本会调用
 `verify-qemu-image.py` 校验 GPT CRC、分区布局、FAT32/exFAT/ext2/3/4/NTFS/UDF/XFS 目录、`BOOTX64.EFI`、
-`/ISO` 文件和物理 extent。当前 XFS QEMU 路径覆盖 superblock、dinode、extent 和
-NextBoot 小目录子集，真实 `mkfs.xfs` 目录兼容仍在 gap 列表中；`--smoke`
+`/ISO` 文件和物理 extent。XFS QEMU 路径覆盖 512B/4K 设备扇区上的 4K XFS 文件系统块、
+真实 inode 编号映射、shortform 目录、dir2/dir3 block/data 目录和 NextBoot 小目录子集；真实
+`mkfs.xfs` 更复杂的大目录/btree 形态仍在 gap 列表中；`--smoke`
 会继续启动 QEMU 并检查 NextBoot 日志里是否进入扫描/菜单阶段；`--smoke-boot` 会
 自动按 Enter 并检查是否安装虚拟 Block IO；`--smoke-efi-iso` 会生成一个带 EFI
 El Torito boot catalog、内含 `/EFI/BOOT/BOOTX64.EFI` 的最小 ISO，并继续验证该 EFI
@@ -191,7 +192,7 @@ WIMBOOT fallback 入口；
 `qemu-smoke-matrix.sh` 默认执行最关键的固定盘与可移动盘组合：NVMe 4K split/exFAT
 真实启动、USB 512 split/FAT32 真实启动，以及 SD 512 split/FAT32 带小 ISO 的镜像
 生成与校验。`NEXTBOOT_FULL_QEMU_MATRIX=1 ./scripts/qemu-smoke-matrix.sh` 会继续覆盖
-virtio、SATA/NTFS、NVMe/UDF、NVMe/ext3、NVMe/XFS、NVMe/XFS VLNK、NVMe raw IMG、NVMe fixed/dynamic VHD、NVMe VHDX、NVMe sparse VHDX、NVMe dynamic/sparse VDI 和 NVMe/ext4 Linux 插件载荷。SD 目前限制为 512B 扇区，因为 QEMU `sd-card` 设备没有提供和
+virtio、SATA/NTFS、NVMe/UDF、NVMe/ext3、NVMe/XFS、NVMe 512B/XFS、NVMe/XFS VLNK、NVMe raw IMG、NVMe fixed/dynamic VHD、NVMe VHDX、NVMe sparse VHDX、NVMe dynamic/sparse VDI 和 NVMe/ext4 Linux 插件载荷。SD 目前限制为 512B 扇区，因为 QEMU `sd-card` 设备没有提供和
 NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B，因为 QEMU
 `ide-hd` 要求 512B discard granularity。当前 macOS Homebrew OVMF 也不会直接从
 `sdhci-pci` 启动，所以 SD 启动 smoke 需要显式设置 `NEXTBOOT_QEMU_SD_BOOT_SMOKE=1`

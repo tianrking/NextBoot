@@ -32,8 +32,8 @@ validate_qemu_args() {
         *) die "--data-fs must be exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs" ;;
     esac
 
-    if { [[ "$DATA_FS" == ext* ]] || [ "$DATA_FS" = "xfs" ]; } && [ "$SECTOR_SIZE" -ne 4096 ]; then
-        die "--data-fs ext2/ext3/ext4/xfs currently requires --sector-size 4096 in the QEMU generator"
+    if [[ "$DATA_FS" == ext* ]] && [ "$SECTOR_SIZE" -ne 4096 ]; then
+        die "--data-fs ext2/ext3/ext4 currently requires --sector-size 4096 in the QEMU generator"
     fi
 
     if [ "$LAYOUT" = "single" ] && [ "$DATA_FS" != "exfat" ]; then

@@ -250,9 +250,7 @@ def make_partition(name, label, fs_type, type_guid, start_lba, end_lba, include_
         if part_sectors <= 512:
             raise SystemExit("partition is too small for UDF")
     elif fs_type == "xfs":
-        if sector_size != 4096:
-            raise SystemExit("test XFS volumes require 4096 byte sectors")
-        if part_sectors <= 256:
+        if part_sectors * sector_size <= 256 * 4096:
             raise SystemExit("partition is too small for XFS")
     else:
         raise SystemExit(f"unsupported test partition filesystem: {fs_type}")

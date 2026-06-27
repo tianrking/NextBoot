@@ -17,17 +17,22 @@ class XfsVolume:
     def __init__(self, image, partition: Partition):
         self.image = image
         self.partition = partition
-        self.block_size = image.sector_size
-        require(self.block_size == 4096, f"{partition.name}: verifier expects 4096 byte XFS blocks")
-        superblock = self.read_block(0)
+        superblock = image.read_blocks(partition.start_lba)
         require(superblock[0:4] == b"XFSB", f"{partition.name}: missing XFS signature")
-        require(be32(superblock, 4) == self.block_size, f"{partition.name}: XFS block size mismatch")
+        self.block_size = be32(superblock, 4)
+        require(self.block_size >= image.sector_size, f"{partition.name}: XFS block is smaller than sector")
+        require(self.block_size % image.sector_size == 0, f"{partition.name}: XFS block is not sector aligned")
         self.root_inode = be64(superblock, 56)
         self.inode_size = be16(superblock, 104)
         require(self.inode_size >= 128, f"{partition.name}: invalid XFS inode size")
 
+    @property
+    def sectors_per_block(self) -> int:
+        return self.block_size // self.image.sector_size
+
     def read_block(self, fs_block: int) -> bytes:
-        return self.image.read_blocks(self.partition.start_lba + fs_block)
+        offset = self.partition.start_lba * self.image.sector_size + fs_block * self.block_size
+        return self.image.read_at(offset, self.block_size)
 
     def read_inode(self, inode_number: int) -> bytes:
         require(inode_number > 0, f"{self.partition.name}: invalid XFS inode")
@@ -57,7 +62,13 @@ class XfsVolume:
             physical = ((l0 & 0x1FF) << 43) | (l1 >> 21)
             block_count = l1 & ((1 << 21) - 1)
             require(block_count > 0, f"{self.partition.name}: empty XFS extent")
-            extents.append(FileExtent(file_block, self.partition.start_lba + physical, block_count))
+            extents.append(
+                FileExtent(
+                    file_block * self.sectors_per_block,
+                    self.partition.start_lba + physical * self.sectors_per_block,
+                    block_count * self.sectors_per_block,
+                )
+            )
         return extents
 
     def file_extents(self, record: FileRecord) -> list[FileExtent]:
