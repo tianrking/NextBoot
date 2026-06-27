@@ -19,8 +19,11 @@ use alloc::vec::Vec;
 use core::ptr::{self, NonNull};
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::fat32::Fat32;
-use nextboot_fs::iso9660::{detect_udf_volume, read_efi_eltorito_boot_info, ElToritoBootInfo};
+use nextboot_fs::iso9660::{
+    detect_udf_volume, read_efi_eltorito_boot_info, ElToritoBootInfo, Iso9660,
+};
 use nextboot_fs::ntfs::Ntfs;
+use nextboot_fs::udf::Udf;
 use nextboot_fs::{detect_fs_type, BlockIoOps, FileExtent, FileSystem, FileSystemType, FsError};
 use nextboot_virtio::{
     PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
@@ -624,14 +627,35 @@ impl<'a> IsoScanner<'a> {
                     volume_index_base,
                     &mut block_volume_index,
                     &block_io,
-                    shared,
+                    shared.clone(),
                     &boot_sector,
                     default_search_paths,
                     extensions,
                     &mut files,
                 );
-                if scanned == 0 {
+                if scanned > 0 {
                     continue;
+                }
+
+                let volume_index = volume_index_base + block_volume_index;
+                let source_disk = self.resolve_source_disk_identity(handle);
+                let source_disk_size = source_disk
+                    .map(|disk| disk.disk_size)
+                    .or_else(|| block_io_info(&block_io).map(|info| info.total_size))
+                    .unwrap_or(0);
+                if self.scan_unknown_block_filesystem_volume(
+                    handle,
+                    volume_index,
+                    source_disk,
+                    source_disk_size,
+                    &block_io,
+                    shared,
+                    default_search_paths,
+                    extensions,
+                    0,
+                    &mut files,
+                ) {
+                    block_volume_index += 1;
                 }
                 continue;
             }
@@ -715,6 +739,54 @@ impl<'a> IsoScanner<'a> {
         Ok(files)
     }
 
+    fn scan_unknown_block_filesystem_volume(
+        &self,
+        volume_handle: Handle,
+        volume_index: usize,
+        source_disk: Option<SourceDiskIdentity>,
+        source_disk_size: u64,
+        block_io: &BlockIO,
+        shared: nextboot_fs::SharedBlockIo,
+        default_search_paths: &[&str],
+        extensions: &[&str],
+        extent_lba_offset: u64,
+        files: &mut Vec<IsoFile>,
+    ) -> bool {
+        if let Ok(fs) = Udf::open(shared.clone()) {
+            self.scan_block_filesystem_paths(
+                volume_handle,
+                volume_index,
+                source_disk,
+                source_disk_size,
+                block_io,
+                &fs,
+                default_search_paths,
+                extensions,
+                extent_lba_offset,
+                files,
+            );
+            return true;
+        }
+
+        if let Ok(fs) = Iso9660::open(shared) {
+            self.scan_block_filesystem_paths(
+                volume_handle,
+                volume_index,
+                source_disk,
+                source_disk_size,
+                block_io,
+                &fs,
+                default_search_paths,
+                extensions,
+                extent_lba_offset,
+                files,
+            );
+            return true;
+        }
+
+        false
+    }
+
     fn scan_partitioned_block_device(
         &self,
         physical_handle: Handle,
@@ -767,12 +839,6 @@ impl<'a> IsoScanner<'a> {
                 continue;
             }
             let fs_type = detect_fs_type(&boot_sector);
-            if !matches!(
-                fs_type,
-                FileSystemType::Fat32 | FileSystemType::ExFat | FileSystemType::Ntfs
-            ) {
-                continue;
-            }
 
             let volume_index = volume_index_base + *block_volume_index;
             let source_disk = partition_source_disk_identity(first_block, volume_info, partition);
@@ -859,7 +925,22 @@ impl<'a> IsoScanner<'a> {
                         files,
                     );
                 }
-                _ => continue,
+                _ => {
+                    if !self.scan_unknown_block_filesystem_volume(
+                        physical_handle,
+                        volume_index,
+                        source_disk,
+                        source_disk_size,
+                        block_io,
+                        partition_io,
+                        default_search_paths,
+                        extensions,
+                        partition.start_lba,
+                        files,
+                    ) {
+                        continue;
+                    }
+                }
             }
 
             *block_volume_index += 1;
@@ -1310,18 +1391,8 @@ impl<'a> IsoScanner<'a> {
         let mut boot_sector = alloc::vec![0u8; block_size as usize];
         shared.read_blocks(0, &mut boot_sector).ok()?;
 
-        let extents = match detect_fs_type(&boot_sector) {
-            FileSystemType::Fat32 => Fat32::open(shared)
-                .and_then(|fs| fs.file_extents(path))
-                .ok()?,
-            FileSystemType::ExFat => ExFat::open(shared)
-                .and_then(|fs| fs.file_extents(path))
-                .ok()?,
-            FileSystemType::Ntfs => Ntfs::open(shared)
-                .and_then(|fs| fs.file_extents(path))
-                .ok()?,
-            _ => return None,
-        };
+        let (block_size, extents) =
+            source_file_extents_from_detected_fs(shared, detect_fs_type(&boot_sector), path)?;
 
         let extents: Vec<IsoExtent> = extents.into_iter().map(IsoExtent::from).collect();
         let (image_format, virtual_size, virtual_block_size) =
@@ -1717,6 +1788,45 @@ fn block_io_info(block_io: &BlockIO) -> Option<VolumeBlockInfo> {
         block_size,
         total_size,
     })
+}
+
+fn source_file_extents_from_detected_fs(
+    shared: nextboot_fs::SharedBlockIo,
+    fs_type: FileSystemType,
+    path: &str,
+) -> Option<(u32, Vec<FileExtent>)> {
+    match fs_type {
+        FileSystemType::Fat32 => Fat32::open(shared)
+            .and_then(|fs| {
+                let block_size = fs.block_size();
+                fs.file_extents(path).map(|extents| (block_size, extents))
+            })
+            .ok(),
+        FileSystemType::ExFat => ExFat::open(shared)
+            .and_then(|fs| {
+                let block_size = fs.block_size();
+                fs.file_extents(path).map(|extents| (block_size, extents))
+            })
+            .ok(),
+        FileSystemType::Ntfs => Ntfs::open(shared)
+            .and_then(|fs| {
+                let block_size = fs.block_size();
+                fs.file_extents(path).map(|extents| (block_size, extents))
+            })
+            .ok(),
+        _ => Udf::open(shared.clone())
+            .and_then(|fs| {
+                let block_size = fs.block_size();
+                fs.file_extents(path).map(|extents| (block_size, extents))
+            })
+            .or_else(|_| {
+                Iso9660::open(shared).and_then(|fs| {
+                    let block_size = fs.block_size();
+                    fs.file_extents(path).map(|extents| (block_size, extents))
+                })
+            })
+            .ok(),
+    }
 }
 
 fn discover_partition_candidates(

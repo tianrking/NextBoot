@@ -14,6 +14,7 @@ pub const VENTOY_IMAGE_LOCATION_HEADER_SIZE: usize = 28;
 pub const VENTOY_IMAGE_LOCATION_REGION_SIZE: usize = 16;
 pub const VENTOY_PART_TYPE_EXFAT: u16 = 0;
 pub const VENTOY_PART_TYPE_NTFS: u16 = 1;
+pub const VENTOY_PART_TYPE_UDF: u16 = 4;
 pub const VENTOY_PART_TYPE_FAT: u16 = 5;
 pub const VENTOY_PART_TYPE_OTHER: u16 = 6;
 pub const VENTOY_CHAIN_LINUX: u8 = 0;

@@ -2497,8 +2497,9 @@ impl<'a> BootManager<'a> {
             .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
         let reader = SourceVolumeReader::new(&source_block_io, self.iso.source_disk)
             .ok_or(uefi::Status::DEVICE_ERROR)?;
+        let shared: SharedBlockIo = Rc::new(reader);
         let block_size =
-            usize::try_from(reader.block_size()).map_err(|_| uefi::Status::INVALID_PARAMETER)?;
+            usize::try_from(shared.block_size()).map_err(|_| uefi::Status::INVALID_PARAMETER)?;
         if block_size == 0 {
             return Err(Status::INVALID_PARAMETER.into());
         }
@@ -2508,14 +2509,19 @@ impl<'a> BootManager<'a> {
             .try_reserve_exact(block_size)
             .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
         boot_sector.resize(block_size, 0);
-        PhysicalReader::read_blocks(&reader, 0, &mut boot_sector)
-            .map_err(virtio_error_to_fs_error)
+        shared
+            .read_blocks(0, &mut boot_sector)
             .map_err(fs_error_to_uefi_status)?;
 
-        Ok(match detect_fs_type(&boot_sector) {
+        let fs_type = detect_fs_type(&boot_sector);
+        let source_is_udf = matches!(fs_type, FileSystemType::Unknown | FileSystemType::Iso9660)
+            && Udf::open(shared).is_ok();
+
+        Ok(match fs_type {
             FileSystemType::ExFat => crate::ventoy::VENTOY_PART_TYPE_EXFAT,
             FileSystemType::Fat32 => crate::ventoy::VENTOY_PART_TYPE_FAT,
             FileSystemType::Ntfs => crate::ventoy::VENTOY_PART_TYPE_NTFS,
+            _ if source_is_udf => crate::ventoy::VENTOY_PART_TYPE_UDF,
             _ => crate::ventoy::VENTOY_PART_TYPE_OTHER,
         })
     }
@@ -3760,6 +3766,8 @@ enum SourceVolumeFileSystem {
     Fat32(Fat32),
     ExFat(ExFat),
     Ntfs(Ntfs),
+    Udf(Udf),
+    Iso9660(Iso9660),
 }
 
 impl SourceVolumeFileSystem {
@@ -3792,7 +3800,10 @@ impl SourceVolumeFileSystem {
             FileSystemType::Ntfs => Ok(Ntfs::open(shared)
                 .map(Self::Ntfs)
                 .map_err(fs_error_to_uefi_status)?),
-            _ => Err(Status::UNSUPPORTED.into()),
+            _ => Ok(Udf::open(shared.clone())
+                .map(Self::Udf)
+                .or_else(|_| Iso9660::open(shared).map(Self::Iso9660))
+                .map_err(fs_error_to_uefi_status)?),
         }
     }
 
@@ -3840,6 +3851,8 @@ impl SourceVolumeFileSystem {
             Self::Fat32(fs) => fs.stat(path),
             Self::ExFat(fs) => fs.stat(path),
             Self::Ntfs(fs) => fs.stat(path),
+            Self::Udf(fs) => fs.stat(path),
+            Self::Iso9660(fs) => fs.stat(path),
         }
         .map_err(fs_error_to_uefi_status)?)
     }
@@ -3849,6 +3862,8 @@ impl SourceVolumeFileSystem {
             Self::Fat32(fs) => fs.read_file(path, offset, buf),
             Self::ExFat(fs) => fs.read_file(path, offset, buf),
             Self::Ntfs(fs) => fs.read_file(path, offset, buf),
+            Self::Udf(fs) => fs.read_file(path, offset, buf),
+            Self::Iso9660(fs) => fs.read_file(path, offset, buf),
         }
         .map_err(fs_error_to_uefi_status)?)
     }
@@ -3858,6 +3873,8 @@ impl SourceVolumeFileSystem {
             Self::Fat32(fs) => fs.file_extents(path),
             Self::ExFat(fs) => fs.file_extents(path),
             Self::Ntfs(fs) => fs.file_extents(path),
+            Self::Udf(fs) => fs.file_extents(path),
+            Self::Iso9660(fs) => fs.file_extents(path),
         }
         .map_err(fs_error_to_uefi_status)?)
     }
@@ -3867,6 +3884,8 @@ impl SourceVolumeFileSystem {
             Self::Fat32(fs) => fs.block_size(),
             Self::ExFat(fs) => fs.block_size(),
             Self::Ntfs(fs) => fs.block_size(),
+            Self::Udf(fs) => fs.block_size(),
+            Self::Iso9660(fs) => fs.block_size(),
         }
     }
 }
