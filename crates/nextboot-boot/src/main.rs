@@ -227,7 +227,8 @@ fn show_menu(
             Some(input) => input,
             None => {
                 if state.selected_item().is_some() {
-                    if let Some(iso) = prepare_selected_iso(st, &iso_files[state.selected])? {
+                    if let Some(iso) = prepare_selected_iso(st, &iso_files[state.selected], false)?
+                    {
                         return Ok(Some(iso));
                     }
                 }
@@ -244,7 +245,15 @@ fn show_menu(
                 if state.selected_item().is_some() {
                     // 查找对应的 ISO 文件
                     let idx = state.selected;
-                    if let Some(iso) = prepare_selected_iso(st, &iso_files[idx])? {
+                    if let Some(iso) = prepare_selected_iso(st, &iso_files[idx], false)? {
+                        return Ok(Some(iso));
+                    }
+                }
+            }
+            Input::Char('m') | Input::Char('M') => {
+                if state.selected_item().is_some() {
+                    let idx = state.selected;
+                    if let Some(iso) = prepare_selected_iso(st, &iso_files[idx], true)? {
                         return Ok(Some(iso));
                     }
                 }
@@ -258,6 +267,7 @@ fn show_menu(
 fn prepare_selected_iso(
     st: &mut SystemTable<Boot>,
     iso: &scanner::IsoFile,
+    force_memdisk: bool,
 ) -> uefi::Result<Option<scanner::IsoFile>> {
     if !authorize_iso(st, iso)? {
         return Ok(None);
@@ -267,8 +277,19 @@ fn prepare_selected_iso(
     if !configure_ventoy_plugin_choices(st, &mut selected)? {
         return Ok(None);
     }
+    if force_memdisk {
+        force_ventoy_memdisk_mode(&mut selected);
+        info!("Manual Ventoy memdisk mode requested for {}", selected.path);
+    }
 
     Ok(Some(selected))
+}
+
+fn force_ventoy_memdisk_mode(iso: &mut scanner::IsoFile) {
+    let plugin = iso
+        .ventoy_plugin
+        .get_or_insert_with(ventoy_config::VentoyImagePlugin::default);
+    plugin.auto_memdisk = true;
 }
 
 fn configure_ventoy_plugin_choices(
@@ -611,12 +632,15 @@ fn display_menu(
         output_text(
             stdout,
             &format!(
-                "  ↑↓: Select  Enter: Boot  Esc: Exit  Auto boot in {}s\r\n",
+                "  ↑↓: Select  Enter: Boot  M: Memdisk  Esc: Exit  Auto boot in {}s\r\n",
                 timeout
             ),
         )?;
     } else {
-        output_text(stdout, "  ↑↓: Select  Enter: Boot  Esc: Exit\r\n")?;
+        output_text(
+            stdout,
+            "  ↑↓: Select  Enter: Boot  M: Memdisk  Esc: Exit\r\n",
+        )?;
     }
 
     if let Some(tip) = iso_files

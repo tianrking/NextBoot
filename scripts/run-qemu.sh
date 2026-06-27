@@ -45,6 +45,7 @@ SMOKE_BOOT=0
 SMOKE_EFI_ISO=0
 SMOKE_VLNK_ISO=0
 SMOKE_AUTO_MEMDISK=0
+SMOKE_MENU_MEMDISK=0
 SMOKE_WINDOWS_ISO=0
 SMOKE_WINDOWS_WIMBOOT=0
 SMOKE_LINUX_ISO=0
@@ -79,6 +80,8 @@ Options:
   --smoke-vlnk-iso   Generate a minimal UEFI ISO behind a Ventoy .vlnk pointer
   --smoke-auto-memdisk
                      Generate a minimal UEFI ISO and force Ventoy auto_memdisk
+  --smoke-menu-memdisk
+                     Generate a minimal UEFI ISO and press M for menu memdisk mode
   --smoke-windows-iso
                      Generate a Windows-style smoke ISO and verify bootmgfw starts
   --smoke-windows-wimboot
@@ -204,6 +207,13 @@ while [ $# -gt 0 ]; do
             SMOKE_BOOT=1
             SMOKE_EFI_ISO=1
             SMOKE_AUTO_MEMDISK=1
+            shift
+            ;;
+        --smoke-menu-memdisk)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_EFI_ISO=1
+            SMOKE_MENU_MEMDISK=1
             shift
             ;;
         --smoke-windows-iso)
@@ -1688,18 +1698,25 @@ if [ "$SMOKE" -eq 1 ]; then
         if [ "$SMOKE_BOOT" -eq 1 ]; then
             EXPECT_ARGS+=(
                 --send-after "Phase 3: Displaying boot menu"
-                --send-key enter
                 --expect "Selected:"
                 --expect "Phase 4: Booting selected ISO"
                 --expect "Preparing to boot:"
                 --expect "Creating virtual Block IO"
                 --expect "Virtual Block IO installed"
             )
+            if [ "$SMOKE_MENU_MEMDISK" -eq 1 ]; then
+                EXPECT_ARGS+=(
+                    --send-text "m"
+                    --expect "Manual Ventoy memdisk mode requested for /ISO/nextboot-smoke-efi.iso"
+                )
+            else
+                EXPECT_ARGS+=(--send-key enter)
+            fi
             if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
                 EXPECT_ARGS+=(
                     --expect "Using EFI El Torito boot image"
                 )
-                if [ "$SMOKE_AUTO_MEMDISK" -eq 1 ]; then
+                if [ "$SMOKE_AUTO_MEMDISK" -eq 1 ] || [ "$SMOKE_MENU_MEMDISK" -eq 1 ]; then
                     EXPECT_ARGS+=(
                         --expect "Using Ventoy auto_memdisk for /ISO/nextboot-smoke-efi.iso"
                     )
