@@ -22,6 +22,7 @@ pub const WIM_DIRECTORY_ENTRY_FIXED_SIZE: usize = 102;
 pub const WIM_SECURITY_HEADER_SIZE: usize = 8;
 pub const WIM_ATTR_NORMAL: u32 = 0x0000_0080;
 pub const WIM_NO_SECURITY: u32 = 0xffff_ffff;
+pub const WIM_MAX_U32_RESOURCE_SIZE: u64 = 0xffff_ffff;
 
 const HEADER_LEN_OFFSET: usize = 8;
 const VERSION_OFFSET: usize = 12;
@@ -118,6 +119,19 @@ pub enum WimPathError {
     MalformedMetadata,
     NotFound,
     ResourceNotFound,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WimReadError {
+    InvalidChunkLength,
+    InvalidRange,
+    InvalidChunkTable,
+    ResourceOutOfBounds,
+    UnsupportedCompressedChunk {
+        chunk_index: u64,
+        compressed_size: u64,
+        uncompressed_size: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,6 +264,81 @@ pub fn file_resource_for_path(
         .ok_or(WimPathError::ResourceNotFound)
 }
 
+pub fn read_resource_range(
+    metadata: &WimMetadata,
+    wim_file: &[u8],
+    resource: &WimResourceHeader,
+    offset: u64,
+    out: &mut [u8],
+) -> Result<(), WimReadError> {
+    if out.is_empty() {
+        return Ok(());
+    }
+    validate_resource_range(wim_file, resource)?;
+
+    let read_end = offset
+        .checked_add(out.len() as u64)
+        .ok_or(WimReadError::InvalidRange)?;
+    if read_end > resource.uncompressed_size {
+        return Err(WimReadError::InvalidRange);
+    }
+
+    if !resource.is_compressed() && !resource.uses_packed_streams() {
+        let start = resource
+            .offset
+            .checked_add(offset)
+            .ok_or(WimReadError::ResourceOutOfBounds)?;
+        let start = usize::try_from(start).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+        let end = start
+            .checked_add(out.len())
+            .ok_or(WimReadError::ResourceOutOfBounds)?;
+        let source = wim_file
+            .get(start..end)
+            .ok_or(WimReadError::ResourceOutOfBounds)?;
+        out.copy_from_slice(source);
+        return Ok(());
+    }
+
+    let mut remaining = out.len();
+    let mut resource_offset = offset;
+    let mut output_offset = 0usize;
+
+    while remaining > 0 {
+        let chunk = resource_chunk_span(metadata, wim_file, resource, resource_offset)?;
+        let skip = resource_offset
+            .checked_sub(chunk.uncompressed_offset)
+            .ok_or(WimReadError::InvalidRange)?;
+        let available = chunk
+            .uncompressed_size
+            .checked_sub(skip)
+            .ok_or(WimReadError::InvalidRange)?;
+        let copy_len = core::cmp::min(remaining as u64, available);
+        let source_start = chunk
+            .compressed_offset
+            .checked_add(skip)
+            .ok_or(WimReadError::ResourceOutOfBounds)?;
+        let source_start =
+            usize::try_from(source_start).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+        let copy_len_usize =
+            usize::try_from(copy_len).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+        let source_end = source_start
+            .checked_add(copy_len_usize)
+            .ok_or(WimReadError::ResourceOutOfBounds)?;
+        let source = wim_file
+            .get(source_start..source_end)
+            .ok_or(WimReadError::ResourceOutOfBounds)?;
+        out[output_offset..output_offset + copy_len_usize].copy_from_slice(source);
+
+        remaining -= copy_len_usize;
+        output_offset += copy_len_usize;
+        resource_offset = resource_offset
+            .checked_add(copy_len)
+            .ok_or(WimReadError::InvalidRange)?;
+    }
+
+    Ok(())
+}
+
 pub fn parse_wim_metadata(header: &[u8]) -> Option<WimMetadata> {
     if header.len() < WIM_HEADER_SIZE || header.get(0..8)? != WIM_SIGNATURE {
         return None;
@@ -313,6 +402,149 @@ fn parse_resource_header(data: &[u8], offset: usize) -> Option<WimResourceHeader
         offset: read_le_u64(resource, 8)?,
         uncompressed_size: read_le_u64(resource, 16)?,
     })
+}
+
+struct WimChunkSpan {
+    uncompressed_offset: u64,
+    uncompressed_size: u64,
+    compressed_offset: u64,
+}
+
+fn validate_resource_range(
+    wim_file: &[u8],
+    resource: &WimResourceHeader,
+) -> Result<(), WimReadError> {
+    let end = resource
+        .offset
+        .checked_add(resource.compressed_size)
+        .ok_or(WimReadError::ResourceOutOfBounds)?;
+    if end > wim_file.len() as u64 {
+        return Err(WimReadError::ResourceOutOfBounds);
+    }
+    Ok(())
+}
+
+fn resource_chunk_span(
+    metadata: &WimMetadata,
+    wim_file: &[u8],
+    resource: &WimResourceHeader,
+    uncompressed_offset: u64,
+) -> Result<WimChunkSpan, WimReadError> {
+    let chunk_len = u64::from(metadata.chunk_len);
+    if chunk_len == 0 {
+        return Err(WimReadError::InvalidChunkLength);
+    }
+    if uncompressed_offset >= resource.uncompressed_size {
+        return Err(WimReadError::InvalidRange);
+    }
+
+    let chunk_index = uncompressed_offset / chunk_len;
+    let chunk_uncompressed_offset = chunk_index
+        .checked_mul(chunk_len)
+        .ok_or(WimReadError::InvalidRange)?;
+    let chunk_uncompressed_size = core::cmp::min(
+        chunk_len,
+        resource
+            .uncompressed_size
+            .checked_sub(chunk_uncompressed_offset)
+            .ok_or(WimReadError::InvalidRange)?,
+    );
+    let chunk_start = resource_chunk_data_offset(wim_file, resource, chunk_len, chunk_index)?;
+    let chunk_end = resource_chunk_data_offset(wim_file, resource, chunk_len, chunk_index + 1)?;
+    if chunk_end < chunk_start || chunk_end > resource.compressed_size {
+        return Err(WimReadError::InvalidChunkTable);
+    }
+
+    let compressed_size = chunk_end - chunk_start;
+    if compressed_size != chunk_uncompressed_size {
+        return Err(WimReadError::UnsupportedCompressedChunk {
+            chunk_index,
+            compressed_size,
+            uncompressed_size: chunk_uncompressed_size,
+        });
+    }
+
+    Ok(WimChunkSpan {
+        uncompressed_offset: chunk_uncompressed_offset,
+        uncompressed_size: chunk_uncompressed_size,
+        compressed_offset: resource
+            .offset
+            .checked_add(chunk_start)
+            .ok_or(WimReadError::ResourceOutOfBounds)?,
+    })
+}
+
+fn resource_chunk_data_offset(
+    wim_file: &[u8],
+    resource: &WimResourceHeader,
+    chunk_len: u64,
+    chunk_index: u64,
+) -> Result<u64, WimReadError> {
+    if resource.uncompressed_size == 0 {
+        return Ok(0);
+    }
+    if chunk_len == 0 {
+        return Err(WimReadError::InvalidChunkLength);
+    }
+
+    let offset_entry_len = if resource.uncompressed_size > WIM_MAX_U32_RESOURCE_SIZE {
+        8
+    } else {
+        4
+    };
+    let chunk_count = div_round_up(resource.uncompressed_size, chunk_len)
+        .ok_or(WimReadError::InvalidChunkTable)?;
+    let chunks_len = chunk_count
+        .saturating_sub(1)
+        .checked_mul(offset_entry_len)
+        .ok_or(WimReadError::InvalidChunkTable)?;
+    if chunks_len > resource.compressed_size {
+        return Err(WimReadError::InvalidChunkTable);
+    }
+
+    if chunk_index == 0 {
+        return Ok(chunks_len);
+    }
+    if chunk_index >= chunk_count {
+        return Ok(resource.compressed_size);
+    }
+
+    let table_entry_offset = resource
+        .offset
+        .checked_add(
+            chunk_index
+                .checked_sub(1)
+                .ok_or(WimReadError::InvalidChunkTable)?
+                .checked_mul(offset_entry_len)
+                .ok_or(WimReadError::InvalidChunkTable)?,
+        )
+        .ok_or(WimReadError::ResourceOutOfBounds)?;
+    let table_entry_offset =
+        usize::try_from(table_entry_offset).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+    let raw_offset = match offset_entry_len {
+        4 => u64::from(
+            read_le_u32(wim_file, table_entry_offset).ok_or(WimReadError::InvalidChunkTable)?,
+        ),
+        8 => read_le_u64(wim_file, table_entry_offset).ok_or(WimReadError::InvalidChunkTable)?,
+        _ => return Err(WimReadError::InvalidChunkTable),
+    };
+    let offset = chunks_len
+        .checked_add(raw_offset)
+        .ok_or(WimReadError::InvalidChunkTable)?;
+    if offset > resource.compressed_size {
+        return Err(WimReadError::InvalidChunkTable);
+    }
+
+    Ok(offset)
+}
+
+fn div_round_up(value: u64, divisor: u64) -> Option<u64> {
+    if divisor == 0 {
+        return None;
+    }
+    value
+        .checked_add(divisor.checked_sub(1)?)?
+        .checked_div(divisor)
 }
 
 fn root_directory_offset(metadata: &[u8]) -> Result<usize, WimPathError> {
@@ -657,6 +889,93 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reads_uncompressed_resource_ranges() {
+        let metadata = make_wim_metadata_with_chunk_len(4);
+        let mut wim_file = [0u8; 16];
+        wim_file[4..12].copy_from_slice(b"abcdefgh");
+        let resource = WimResourceHeader {
+            compressed_size: 8,
+            flags: 0,
+            offset: 4,
+            uncompressed_size: 8,
+        };
+        let mut out = [0u8; 4];
+
+        read_resource_range(&metadata, &wim_file, &resource, 2, &mut out).expect("resource range");
+
+        assert_eq!(&out, b"cdef");
+    }
+
+    #[test]
+    fn reads_stored_chunks_from_compressed_resource() {
+        let metadata = make_wim_metadata_with_chunk_len(4);
+        let mut wim_file = [0u8; 64];
+        let resource = WimResourceHeader {
+            compressed_size: 18,
+            flags: WIM_RESHDR_COMPRESSED,
+            offset: 16,
+            uncompressed_size: 10,
+        };
+
+        write_le_u32(&mut wim_file, 16, 4);
+        write_le_u32(&mut wim_file, 20, 8);
+        wim_file[24..28].copy_from_slice(b"abcd");
+        wim_file[28..32].copy_from_slice(b"efgh");
+        wim_file[32..34].copy_from_slice(b"ij");
+        let mut out = [0u8; 6];
+
+        read_resource_range(&metadata, &wim_file, &resource, 2, &mut out).expect("stored chunks");
+
+        assert_eq!(&out, b"cdefgh");
+    }
+
+    #[test]
+    fn reports_compressed_chunks_until_decompressors_are_available() {
+        let metadata = make_wim_metadata_with_chunk_len(4);
+        let mut wim_file = [0u8; 64];
+        let resource = WimResourceHeader {
+            compressed_size: 17,
+            flags: WIM_RESHDR_COMPRESSED,
+            offset: 16,
+            uncompressed_size: 10,
+        };
+
+        write_le_u32(&mut wim_file, 16, 4);
+        write_le_u32(&mut wim_file, 20, 7);
+        wim_file[24..28].copy_from_slice(b"abcd");
+        wim_file[28..31].copy_from_slice(b"xyz");
+        wim_file[31..33].copy_from_slice(b"ij");
+        let mut out = [0u8; 1];
+
+        assert_eq!(
+            read_resource_range(&metadata, &wim_file, &resource, 4, &mut out),
+            Err(WimReadError::UnsupportedCompressedChunk {
+                chunk_index: 1,
+                compressed_size: 3,
+                uncompressed_size: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_compressed_resource_chunk_tables() {
+        let metadata = make_wim_metadata_with_chunk_len(4);
+        let wim_file = [0u8; 64];
+        let resource = WimResourceHeader {
+            compressed_size: 4,
+            flags: WIM_RESHDR_COMPRESSED,
+            offset: 16,
+            uncompressed_size: 10,
+        };
+        let mut out = [0u8; 1];
+
+        assert_eq!(
+            read_resource_range(&metadata, &wim_file, &resource, 0, &mut out),
+            Err(WimReadError::InvalidChunkTable)
+        );
+    }
+
     fn make_wim_header(flags: u32, image_count: u32, boot_index: u32) -> [u8; WIM_HEADER_SIZE] {
         let mut header = [0u8; WIM_HEADER_SIZE];
         header[0..8].copy_from_slice(WIM_SIGNATURE);
@@ -688,6 +1007,12 @@ mod tests {
         write_le_u32(&mut header, BOOT_INDEX_OFFSET, boot_index);
         write_resource_header(&mut header, INTEGRITY_RESOURCE_OFFSET, 0, 0, 0, 0);
         header
+    }
+
+    fn make_wim_metadata_with_chunk_len(chunk_len: u32) -> WimMetadata {
+        let mut header = make_wim_header(WIM_HDR_XPRESS, 1, 1);
+        write_le_u32(&mut header, CHUNK_LEN_OFFSET, chunk_len);
+        parse_wim_metadata(&header).expect("metadata")
     }
 
     #[allow(clippy::too_many_arguments)]
