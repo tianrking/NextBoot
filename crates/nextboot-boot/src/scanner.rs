@@ -1127,6 +1127,10 @@ impl<'a> IsoScanner<'a> {
                 continue;
             }
 
+            if is_default_uefi_bootloader_path(&full_path) {
+                continue;
+            }
+
             if has_supported_extension(&entry.name, extensions)
                 && config.supports_image_name(&entry.name)
                 && config.allows_image_path(&full_path)
@@ -1253,6 +1257,10 @@ impl<'a> IsoScanner<'a> {
             }
 
             if config.filter_dot_underscore && is_dot_underscore_file(&name) {
+                continue;
+            }
+
+            if is_default_uefi_bootloader_path(&full_path) {
                 continue;
             }
 
@@ -2387,6 +2395,14 @@ mod tests {
         assert!(!is_ventoy_plugin_tree_path("/ISO/ventoy-linux.iso"));
         assert!(!is_ventoy_plugin_tree_path("/persistence/ventoy.dat"));
     }
+
+    #[test]
+    fn treats_default_uefi_bootloader_paths_as_non_images() {
+        assert!(is_default_uefi_bootloader_path("/EFI/BOOT/BOOTX64.EFI"));
+        assert!(is_default_uefi_bootloader_path("/efi/boot/bootaa64.efi"));
+        assert!(!is_default_uefi_bootloader_path("/ISO/tools.efi"));
+        assert!(!is_default_uefi_bootloader_path("/EFI/tools.efi"));
+    }
 }
 
 fn has_mbr_signature(block: &[u8]) -> bool {
@@ -2796,6 +2812,30 @@ fn is_ventoy_plugin_tree_path(path: &str) -> bool {
         .split('/')
         .next()
         .is_some_and(|part| part.eq_ignore_ascii_case("ventoy"))
+}
+
+fn is_default_uefi_bootloader_path(path: &str) -> bool {
+    let mut parts = path.trim_matches('/').split('/');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    let Some(second) = parts.next() else {
+        return false;
+    };
+    let Some(filename) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    if !first.eq_ignore_ascii_case("efi") || !second.eq_ignore_ascii_case("boot") {
+        return false;
+    }
+
+    filename.eq_ignore_ascii_case("bootx64.efi")
+        || filename.eq_ignore_ascii_case("bootaa64.efi")
+        || filename.eq_ignore_ascii_case("bootia32.efi")
+        || filename.eq_ignore_ascii_case("bootarm.efi")
 }
 
 fn is_dot_underscore_file(name: &str) -> bool {

@@ -365,8 +365,8 @@ pub fn detect_fs_type(data: &[u8]) -> FileSystemType {
     if data.len() >= 510 {
         // 检查引导签名
         if data[510] == 0x55 && data[511] == 0xAA {
-            // FAT 签名在偏移 0x52 (FAT32) 或 0x03 (FAT12/16)
-            if data.len() >= 0x56 && &data[0x52..0x56] == b"FAT32" {
+            // FAT32 filesystem type is an 8-byte field at offset 0x52.
+            if data.len() >= 0x5A && data[0x52..0x5A].starts_with(b"FAT32") {
                 return FileSystemType::Fat32;
             }
             // FAT12/16 签名
@@ -957,6 +957,17 @@ mod tests {
             extents,
             vec![FileExtent::new(0, 3, 1), FileExtent::new(1, 5, 1),]
         );
+    }
+
+    #[test]
+    fn detects_standard_fat32_filesystem_type_field() {
+        let mut boot = [0u8; 512];
+        boot[82..90].copy_from_slice(b"FAT32   ");
+        boot[510] = 0x55;
+        boot[511] = 0xAA;
+
+        assert_eq!(detect_fs_type(&boot), FileSystemType::Fat32);
+        assert!(crate::fat32::is_fat32(&boot));
     }
 
     #[test]

@@ -568,7 +568,7 @@ pub fn is_fat32(data: &[u8]) -> bool {
     }
 
     // 检查 FAT32 签名
-    &data[0x52..0x56] == b"FAT32"
+    data.len() >= 0x5A && data[0x52..0x5A].starts_with(b"FAT32")
 }
 
 /// FAT32 文件系统信息
