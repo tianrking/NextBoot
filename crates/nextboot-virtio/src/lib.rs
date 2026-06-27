@@ -346,7 +346,7 @@ impl VirtualBlockIo {
         let readable = (self.config.iso_size - virtual_offset).min(buf.len() as u64);
         let ranges = self
             .byte_mapping
-            .translate_range(virtual_offset, readable)
+            .translate_range_sparse(virtual_offset, readable)
             .ok_or(VirtIoError::InvalidMapping)?;
 
         let physical_block_size = self.config.physical_block_size as usize;
@@ -354,11 +354,14 @@ impl VirtualBlockIo {
             return Err(VirtIoError::InvalidArgument);
         }
 
-        let mut dst_offset = 0usize;
         let mut scratch = alloc::vec![0u8; physical_block_size];
 
-        for (physical_byte_start, byte_count) in ranges {
-            let mut remaining = byte_count as usize;
+        for (dst_offset, physical_byte_start, byte_count) in ranges {
+            let dst_offset =
+                usize::try_from(dst_offset).map_err(|_| VirtIoError::InvalidArgument)?;
+            let mut copied = 0usize;
+            let mut remaining =
+                usize::try_from(byte_count).map_err(|_| VirtIoError::InvalidArgument)?;
             let mut physical_byte = physical_byte_start;
 
             while remaining > 0 {
@@ -368,10 +371,11 @@ impl VirtualBlockIo {
 
                 reader.read_blocks(physical_lba, &mut scratch)?;
 
-                buf[dst_offset..dst_offset + copy_size]
+                let write_start = dst_offset + copied;
+                buf[write_start..write_start + copy_size]
                     .copy_from_slice(&scratch[in_block_offset..in_block_offset + copy_size]);
 
-                dst_offset += copy_size;
+                copied += copy_size;
                 physical_byte += copy_size as u64;
                 remaining -= copy_size;
             }
@@ -770,6 +774,25 @@ mod tests {
         assert!(buf[..512].iter().all(|b| *b == 7));
         assert!(buf[512..600].iter().all(|b| *b == 8));
         assert!(buf[600..].iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn test_virtual_block_io_zero_fills_sparse_byte_mapping() {
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::HardDisk, 0, 1536, 512);
+        let mut byte_mapping = ByteMappingTable::empty();
+        byte_mapping.add_segment(0, 512, 10 * 512);
+        byte_mapping.add_segment(1024, 512, 20 * 512);
+        byte_mapping.truncate(1536);
+        let mut vbio = VirtualBlockIo::with_byte_mapping(config, byte_mapping);
+        vbio.set_physical_read(fill_lba_read);
+
+        let mut buf = [0xFFu8; 1536];
+        vbio.read_blocks(vbio.media_id(), 0, &mut buf)
+            .expect("sparse byte mapping read");
+
+        assert!(buf[..512].iter().all(|b| *b == 10));
+        assert!(buf[512..1024].iter().all(|b| *b == 0));
+        assert!(buf[1024..].iter().all(|b| *b == 20));
     }
 
     #[test]

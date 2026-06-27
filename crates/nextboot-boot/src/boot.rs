@@ -3,7 +3,7 @@
 //! 负责准备和执行 ISO 引导
 
 use crate::init::StorageDevice;
-use crate::scanner::{IsoFile, OsType};
+use crate::scanner::{ImageFormat, IsoFile, OsType};
 use crate::virtual_fs::{IsoSimpleFileSystemProtocol, RegisteredIsoSimpleFileSystem};
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -13,6 +13,7 @@ use core::ptr::{self, NonNull};
 use log::{info, warn};
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::{BlockIoOps, FileSystem, FsError};
+use nextboot_virtio::mapping::ByteMappingTable;
 use nextboot_virtio::protocol::append_file_path_device_path;
 use nextboot_virtio::{
     PhysicalReader, VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType,
@@ -94,6 +95,10 @@ const NEXTBOOT_OS_PARAM_HEADER_SIZE: usize = 80;
 const NEXTBOOT_OS_PARAM_EXTENT_RECORD_SIZE: usize = 24;
 const NEXTBOOT_OS_PARAM_FLAG_SYNTHETIC_EXTENT: u16 = 0x0001;
 const NEXTBOOT_OS_PARAM_FLAG_EL_TORITO: u16 = 0x0002;
+const VHD_SECTOR_SIZE: u64 = 512;
+const VHD_FOOTER_SIZE: usize = 512;
+const VHD_DYNAMIC_HEADER_SIZE: usize = 1024;
+const VHD_UNUSED_BAT_ENTRY: u32 = 0xFFFF_FFFF;
 
 fn default_efi_boot_paths() -> &'static [&'static str] {
     #[cfg(target_arch = "aarch64")]
@@ -655,7 +660,9 @@ impl<'a> BootManager<'a> {
         config: VirtualDeviceConfig,
         source_block_io: &BlockIO,
     ) -> uefi::Result<VirtualBlockIo> {
-        let mut vbio = if self.iso.extents.is_empty() {
+        let mut vbio = if self.iso.image_format == ImageFormat::DynamicVhd {
+            self.build_dynamic_vhd_block_io(config, source_block_io)?
+        } else if self.iso.extents.is_empty() {
             warn!(
                 "No extent map for {}, falling back to contiguous LBA {}",
                 self.iso.path, self.iso.start_lba
@@ -681,6 +688,227 @@ impl<'a> BootManager<'a> {
         vbio.set_physical_reader(reader);
 
         Ok(vbio)
+    }
+
+    fn build_dynamic_vhd_block_io(
+        &self,
+        config: VirtualDeviceConfig,
+        source_block_io: &BlockIO,
+    ) -> uefi::Result<VirtualBlockIo> {
+        let file_vbio = self.build_image_file_block_io(source_block_io)?;
+        let mut footer = [0u8; VHD_FOOTER_SIZE];
+        let footer_offset = self
+            .iso
+            .size
+            .checked_sub(VHD_FOOTER_SIZE as u64)
+            .ok_or(uefi::Status::LOAD_ERROR)?;
+        read_vhd_file_bytes(&file_vbio, footer_offset, &mut footer)?;
+
+        let footer = parse_dynamic_vhd_footer(&footer).ok_or(uefi::Status::LOAD_ERROR)?;
+        let virtual_size = config.iso_size;
+        if footer.virtual_size != virtual_size {
+            warn!(
+                "Dynamic VHD virtual size mismatch for {}: scanner={} footer={}",
+                self.iso.path, virtual_size, footer.virtual_size
+            );
+        }
+
+        let mut header = alloc::vec![0u8; VHD_DYNAMIC_HEADER_SIZE];
+        read_vhd_file_bytes(&file_vbio, footer.data_offset, &mut header)?;
+        let header = parse_dynamic_vhd_header(&header).ok_or(uefi::Status::LOAD_ERROR)?;
+        if header.header_version != 0x0001_0000 {
+            warn!(
+                "Dynamic VHD header version for {} is 0x{:08x}",
+                self.iso.path, header.header_version
+            );
+        }
+
+        let block_size = u64::from(header.block_size);
+        if virtual_size == 0 || block_size == 0 || block_size % VHD_SECTOR_SIZE != 0 {
+            return Err(uefi::Status::LOAD_ERROR.into());
+        }
+
+        let sectors_per_block = block_size / VHD_SECTOR_SIZE;
+        let bitmap_bytes = div_round_up(sectors_per_block, 8)
+            .and_then(|bytes| align_up_u64(bytes, VHD_SECTOR_SIZE))
+            .ok_or(uefi::Status::LOAD_ERROR)?;
+        let entries_needed =
+            div_round_up(virtual_size, block_size).ok_or(uefi::Status::LOAD_ERROR)?;
+        if entries_needed == 0 || u64::from(header.max_table_entries) < entries_needed {
+            return Err(uefi::Status::LOAD_ERROR.into());
+        }
+        let entries_to_scan = entries_needed;
+
+        let bat_bytes = entries_to_scan
+            .checked_mul(4)
+            .and_then(|bytes| align_up_u64(bytes, VHD_SECTOR_SIZE))
+            .ok_or(uefi::Status::LOAD_ERROR)?;
+        let bat_len = usize::try_from(bat_bytes).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        let mut bat = Vec::new();
+        bat.try_reserve_exact(bat_len)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        bat.resize(bat_len, 0);
+        read_vhd_file_bytes(&file_vbio, header.table_offset, &mut bat)?;
+
+        let mut byte_mapping = ByteMappingTable::empty();
+        let mut allocated_blocks = 0u64;
+
+        for index in 0..entries_to_scan {
+            let bat_offset = usize::try_from(index.checked_mul(4).ok_or(uefi::Status::LOAD_ERROR)?)
+                .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+            let bat_entry = read_be_u32(&bat, bat_offset).ok_or(uefi::Status::LOAD_ERROR)?;
+            if bat_entry == VHD_UNUSED_BAT_ENTRY {
+                continue;
+            }
+
+            let virtual_start = index
+                .checked_mul(block_size)
+                .ok_or(uefi::Status::LOAD_ERROR)?;
+            if virtual_start >= virtual_size {
+                break;
+            }
+            let byte_count = block_size.min(virtual_size - virtual_start);
+            let file_offset = u64::from(bat_entry)
+                .checked_mul(VHD_SECTOR_SIZE)
+                .and_then(|offset| offset.checked_add(bitmap_bytes))
+                .ok_or(uefi::Status::LOAD_ERROR)?;
+
+            if file_offset
+                .checked_add(byte_count)
+                .map_or(true, |end| end > self.iso.size)
+            {
+                return Err(uefi::Status::DEVICE_ERROR.into());
+            }
+
+            self.map_image_file_range_to_physical(
+                &mut byte_mapping,
+                virtual_start,
+                file_offset,
+                byte_count,
+            )?;
+            allocated_blocks += 1;
+        }
+
+        byte_mapping.truncate(virtual_size);
+        byte_mapping.optimize();
+        info!(
+            "Mapped dynamic VHD {}: virtual={} bytes, block={} bytes, allocated BAT entries={}, physical segments={}",
+            self.iso.path,
+            virtual_size,
+            block_size,
+            allocated_blocks,
+            byte_mapping.segment_count()
+        );
+
+        Ok(VirtualBlockIo::with_byte_mapping(config, byte_mapping))
+    }
+
+    fn build_image_file_block_io(&self, source_block_io: &BlockIO) -> uefi::Result<VirtualBlockIo> {
+        let config = VirtualDeviceConfig::new(
+            VirtualDeviceType::HardDisk,
+            self.iso.start_lba,
+            self.iso.size,
+            VHD_SECTOR_SIZE as u32,
+        )
+        .with_physical_block_size(self.iso.block_size)
+        .with_name(&self.iso.path);
+
+        let mut vbio = if self.iso.extents.is_empty() {
+            let source_block_size = u64::from(self.iso.block_size);
+            let block_count =
+                div_round_up(self.iso.size, source_block_size).ok_or(uefi::Status::LOAD_ERROR)?;
+            let extents = [(0, self.iso.start_lba, block_count)];
+            VirtualBlockIo::from_file_extents(config, &extents)
+        } else {
+            let extents: Vec<(u64, u64, u64)> = self
+                .iso
+                .extents
+                .iter()
+                .map(|extent| {
+                    (
+                        extent.virtual_block_start,
+                        extent.physical_lba,
+                        extent.block_count,
+                    )
+                })
+                .collect();
+            VirtualBlockIo::from_file_extents(config, &extents)
+        };
+
+        let reader = UefiPhysicalReader::new(source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+        vbio.set_physical_reader(reader);
+        Ok(vbio)
+    }
+
+    fn map_image_file_range_to_physical(
+        &self,
+        table: &mut ByteMappingTable,
+        virtual_start: u64,
+        file_offset: u64,
+        byte_count: u64,
+    ) -> uefi::Result<()> {
+        let source_block_size = u64::from(self.iso.block_size);
+        if source_block_size == 0 {
+            return Err(uefi::Status::INVALID_PARAMETER.into());
+        }
+
+        if self.iso.extents.is_empty() {
+            let physical_start = self
+                .iso
+                .start_lba
+                .checked_mul(source_block_size)
+                .and_then(|start| start.checked_add(file_offset))
+                .ok_or(uefi::Status::LOAD_ERROR)?;
+            table.add_segment(virtual_start, byte_count, physical_start);
+            return Ok(());
+        }
+
+        let file_end = file_offset
+            .checked_add(byte_count)
+            .ok_or(uefi::Status::LOAD_ERROR)?;
+        let mut cursor = file_offset;
+
+        while cursor < file_end {
+            let mut mapped = false;
+            for extent in &self.iso.extents {
+                let extent_file_start = extent
+                    .virtual_block_start
+                    .checked_mul(source_block_size)
+                    .ok_or(uefi::Status::LOAD_ERROR)?;
+                let extent_bytes = extent
+                    .block_count
+                    .checked_mul(source_block_size)
+                    .ok_or(uefi::Status::LOAD_ERROR)?;
+                let extent_file_end = extent_file_start
+                    .checked_add(extent_bytes)
+                    .ok_or(uefi::Status::LOAD_ERROR)?;
+
+                if cursor < extent_file_start || cursor >= extent_file_end {
+                    continue;
+                }
+
+                let overlap_end = file_end.min(extent_file_end);
+                let overlap_len = overlap_end - cursor;
+                let physical_start = extent
+                    .physical_lba
+                    .checked_mul(source_block_size)
+                    .and_then(|start| start.checked_add(cursor - extent_file_start))
+                    .ok_or(uefi::Status::LOAD_ERROR)?;
+                let segment_virtual_start = virtual_start
+                    .checked_add(cursor - file_offset)
+                    .ok_or(uefi::Status::LOAD_ERROR)?;
+                table.add_segment(segment_virtual_start, overlap_len, physical_start);
+                cursor = overlap_end;
+                mapped = true;
+                break;
+            }
+
+            if !mapped {
+                return Err(uefi::Status::DEVICE_ERROR.into());
+            }
+        }
+
+        Ok(())
     }
 
     fn open_virtual_iso9660(&self, source_block_io: &BlockIO) -> uefi::Result<Iso9660> {
@@ -786,6 +1014,90 @@ impl<'a> BootManager<'a> {
 struct VirtualBootDevice {
     handle: Handle,
     device_path: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DynamicVhdFooter {
+    data_offset: u64,
+    virtual_size: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DynamicVhdHeader {
+    table_offset: u64,
+    header_version: u32,
+    max_table_entries: u32,
+    block_size: u32,
+}
+
+fn read_vhd_file_bytes(vbio: &VirtualBlockIo, offset: u64, buf: &mut [u8]) -> uefi::Result<()> {
+    vbio.read_bytes(vbio.media_id(), offset, buf)
+        .map_err(virtio_error_to_uefi_status)?;
+    Ok(())
+}
+
+fn parse_dynamic_vhd_footer(data: &[u8]) -> Option<DynamicVhdFooter> {
+    if data.len() < VHD_FOOTER_SIZE || data.get(0..8)? != b"conectix" {
+        return None;
+    }
+
+    let data_offset = read_be_u64(data, 16)?;
+    let virtual_size = read_be_u64(data, 48)?;
+    let disk_type = read_be_u32(data, 60)?;
+    if data_offset == u64::MAX || disk_type != 3 {
+        return None;
+    }
+
+    Some(DynamicVhdFooter {
+        data_offset,
+        virtual_size,
+    })
+}
+
+fn parse_dynamic_vhd_header(data: &[u8]) -> Option<DynamicVhdHeader> {
+    if data.len() < VHD_DYNAMIC_HEADER_SIZE || data.get(0..8)? != b"cxsparse" {
+        return None;
+    }
+
+    let table_offset = read_be_u64(data, 16)?;
+    let header_version = read_be_u32(data, 24)?;
+    let max_table_entries = read_be_u32(data, 28)?;
+    let block_size = read_be_u32(data, 32)?;
+
+    if table_offset == u64::MAX || max_table_entries == 0 || block_size == 0 {
+        return None;
+    }
+
+    Some(DynamicVhdHeader {
+        table_offset,
+        header_version,
+        max_table_entries,
+        block_size,
+    })
+}
+
+fn read_be_u32(data: &[u8], offset: usize) -> Option<u32> {
+    let bytes = data.get(offset..offset.checked_add(4)?)?;
+    Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn read_be_u64(data: &[u8], offset: usize) -> Option<u64> {
+    let bytes = data.get(offset..offset.checked_add(8)?)?;
+    Some(u64::from_be_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]))
+}
+
+fn virtio_error_to_uefi_status(err: VirtIoError) -> Status {
+    match err {
+        VirtIoError::OutOfBounds | VirtIoError::InvalidMapping => Status::LOAD_ERROR,
+        VirtIoError::WriteProtected => Status::WRITE_PROTECTED,
+        VirtIoError::InvalidArgument | VirtIoError::InvalidBufferSize => Status::INVALID_PARAMETER,
+        VirtIoError::MediaChanged => Status::MEDIA_CHANGED,
+        VirtIoError::NoPhysicalRead => Status::NO_MEDIA,
+        VirtIoError::CrcError => Status::CRC_ERROR,
+        VirtIoError::ReadFailed | VirtIoError::DeviceError => Status::DEVICE_ERROR,
+    }
 }
 
 struct UefiPhysicalReader {
@@ -1095,6 +1407,19 @@ fn div_round_up(value: u64, divisor: u64) -> Option<u64> {
     }
 
     value.checked_add(divisor - 1).map(|value| value / divisor)
+}
+
+fn align_up_u64(value: u64, align: u64) -> Option<u64> {
+    if align == 0 {
+        return None;
+    }
+
+    let remainder = value % align;
+    if remainder == 0 {
+        Some(value)
+    } else {
+        value.checked_add(align - remainder)
+    }
 }
 
 fn usize_to_u16(value: usize) -> uefi::Result<u16> {

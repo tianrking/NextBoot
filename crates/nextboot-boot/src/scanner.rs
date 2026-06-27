@@ -148,11 +148,14 @@ impl ImageFormat {
     }
 
     pub fn supports_virtual_disk_boot(self) -> bool {
-        matches!(self, Self::Iso | Self::RawDisk | Self::FixedVhd)
+        matches!(
+            self,
+            Self::Iso | Self::RawDisk | Self::FixedVhd | Self::DynamicVhd
+        )
     }
 
     pub fn uses_512_byte_virtual_sectors(self) -> bool {
-        matches!(self, Self::RawDisk | Self::FixedVhd)
+        matches!(self, Self::RawDisk | Self::FixedVhd | Self::DynamicVhd)
     }
 }
 

@@ -373,6 +373,58 @@ impl ByteMappingTable {
         Some(result)
     }
 
+    pub fn translate_range_sparse(
+        &self,
+        virtual_start: u64,
+        byte_count: u64,
+    ) -> Option<alloc::vec::Vec<(u64, u64, u64)>> {
+        let end = virtual_start.checked_add(byte_count)?;
+        if end > self.total_bytes {
+            return None;
+        }
+
+        let mut result = alloc::vec::Vec::new();
+        let mut current_virtual = virtual_start;
+
+        while current_virtual < end {
+            if let Some(mapping) = self
+                .mappings
+                .iter()
+                .find(|mapping| mapping.virtual_range.contains(&current_virtual))
+            {
+                let physical = mapping.translate(current_virtual)?;
+                let contiguous_count =
+                    (end - current_virtual).min(mapping.virtual_range.end - current_virtual);
+                let dst_offset = current_virtual - virtual_start;
+
+                if let Some((last_dst, last_physical, last_count)) = result.last_mut() {
+                    if *last_dst + *last_count == dst_offset
+                        && *last_physical + *last_count == physical
+                    {
+                        *last_count += contiguous_count;
+                    } else {
+                        result.push((dst_offset, physical, contiguous_count));
+                    }
+                } else {
+                    result.push((dst_offset, physical, contiguous_count));
+                }
+
+                current_virtual += contiguous_count;
+            } else {
+                let next_mapped_start = self
+                    .mappings
+                    .iter()
+                    .filter(|mapping| mapping.virtual_range.start > current_virtual)
+                    .map(|mapping| mapping.virtual_range.start)
+                    .min()
+                    .unwrap_or(end);
+                current_virtual = next_mapped_start.min(end);
+            }
+        }
+
+        Some(result)
+    }
+
     pub fn total_bytes(&self) -> u64 {
         self.total_bytes
     }
@@ -543,6 +595,20 @@ mod tests {
         assert_eq!(
             table.translate_range(0, 1024),
             Some(alloc::vec![(4096, 1024)])
+        );
+    }
+
+    #[test]
+    fn test_byte_mapping_sparse_translate_preserves_holes() {
+        let mut table = ByteMappingTable::empty();
+        table.add_segment(0, 512, 4096);
+        table.add_segment(1024, 512, 8192);
+        table.truncate(1536);
+
+        assert_eq!(table.translate_range(0, 1536), None);
+        assert_eq!(
+            table.translate_range_sparse(0, 1536),
+            Some(alloc::vec![(0, 4096, 512), (1024, 8192, 512)])
         );
     }
 }
