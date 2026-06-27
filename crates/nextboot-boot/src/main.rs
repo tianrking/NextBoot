@@ -20,6 +20,7 @@ use uefi::ResultExt;
 mod boot;
 mod init;
 mod scanner;
+mod vhdx;
 mod virtual_fs;
 
 use boot::BootManager;

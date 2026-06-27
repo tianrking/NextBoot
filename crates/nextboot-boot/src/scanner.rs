@@ -3,6 +3,7 @@
 //! 负责扫描存储设备上的 ISO 文件
 
 use crate::init::StorageDevice;
+use crate::vhdx;
 use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -33,6 +34,8 @@ pub struct IsoFile {
     pub size: u64,
     /// 启动时呈现给固件/系统的虚拟介质大小
     pub virtual_size: u64,
+    /// 启动时呈现给固件/系统的虚拟逻辑块大小
+    pub virtual_block_size: Option<u32>,
     /// 文件所在的 UEFI volume handle
     pub volume_handle: Handle,
     /// 扫描时分配的卷索引，用于区分不同卷上的同名镜像
@@ -150,7 +153,7 @@ impl ImageFormat {
     pub fn supports_virtual_disk_boot(self) -> bool {
         matches!(
             self,
-            Self::Iso | Self::RawDisk | Self::FixedVhd | Self::DynamicVhd
+            Self::Iso | Self::RawDisk | Self::FixedVhd | Self::DynamicVhd | Self::Vhdx
         )
     }
 
@@ -387,7 +390,14 @@ impl<'a> IsoScanner<'a> {
 
             if has_supported_extension(&name, extensions) {
                 let image_format = ImageFormat::detect_from_path(&full_path);
-                let (block_size, extents, boot_info, image_format, virtual_size) = self
+                let (
+                    block_size,
+                    extents,
+                    boot_info,
+                    image_format,
+                    virtual_size,
+                    virtual_block_size,
+                ) = self
                     .resolve_image_metadata(
                         volume_handle,
                         &full_path,
@@ -400,6 +410,7 @@ impl<'a> IsoScanner<'a> {
                         None,
                         image_format,
                         entry.file_size(),
+                        default_virtual_block_size(image_format),
                     ));
                 let start_lba = extents.first().map_or(0, |extent| extent.physical_lba);
 
@@ -407,6 +418,7 @@ impl<'a> IsoScanner<'a> {
                     path: full_path.clone(),
                     size: entry.file_size(),
                     virtual_size,
+                    virtual_block_size,
                     volume_handle,
                     volume_index,
                     block_size,
@@ -428,7 +440,14 @@ impl<'a> IsoScanner<'a> {
         path: &str,
         size: u64,
         image_format: ImageFormat,
-    ) -> Option<(u32, Vec<IsoExtent>, Option<IsoBootInfo>, ImageFormat, u64)> {
+    ) -> Option<(
+        u32,
+        Vec<IsoExtent>,
+        Option<IsoBootInfo>,
+        ImageFormat,
+        u64,
+        Option<u32>,
+    )> {
         let block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(volume_handle)
@@ -455,7 +474,7 @@ impl<'a> IsoScanner<'a> {
         };
 
         let extents: Vec<IsoExtent> = extents.into_iter().map(IsoExtent::from).collect();
-        let (image_format, virtual_size) =
+        let (image_format, virtual_size, virtual_block_size) =
             self.detect_image_virtual_metadata(&block_io, block_size, size, &extents, image_format);
         let boot_info = if image_format.is_iso() {
             self.resolve_iso_boot_info(&block_io, block_size, size, &extents)
@@ -463,7 +482,14 @@ impl<'a> IsoScanner<'a> {
             None
         };
 
-        Some((block_size, extents, boot_info, image_format, virtual_size))
+        Some((
+            block_size,
+            extents,
+            boot_info,
+            image_format,
+            virtual_size,
+            virtual_block_size,
+        ))
     }
 
     fn detect_image_virtual_metadata(
@@ -473,24 +499,81 @@ impl<'a> IsoScanner<'a> {
         file_size: u64,
         extents: &[IsoExtent],
         image_format: ImageFormat,
-    ) -> (ImageFormat, u64) {
-        if !matches!(image_format, ImageFormat::Vhd) {
-            return (image_format, file_size);
-        }
-
-        match self.read_image_tail(block_io, source_block_size, file_size, extents, 512) {
-            Some(footer) => parse_vhd_footer(&footer)
-                .map(|info| {
-                    let virtual_size = if info.image_format == ImageFormat::FixedVhd {
-                        info.virtual_size.min(file_size.saturating_sub(512))
-                    } else {
-                        info.virtual_size
-                    };
-                    (info.image_format, virtual_size)
+    ) -> (ImageFormat, u64, Option<u32>) {
+        match image_format {
+            ImageFormat::Vhd => {
+                match self.read_image_tail(block_io, source_block_size, file_size, extents, 512) {
+                    Some(footer) => parse_vhd_footer(&footer)
+                        .map(|info| {
+                            let virtual_size = if info.image_format == ImageFormat::FixedVhd {
+                                info.virtual_size.min(file_size.saturating_sub(512))
+                            } else {
+                                info.virtual_size
+                            };
+                            (info.image_format, virtual_size, Some(512))
+                        })
+                        .unwrap_or((
+                            image_format,
+                            file_size,
+                            default_virtual_block_size(image_format),
+                        )),
+                    None => (
+                        image_format,
+                        file_size,
+                        default_virtual_block_size(image_format),
+                    ),
+                }
+            }
+            ImageFormat::Vhdx => self
+                .read_vhdx_virtual_metadata(block_io, source_block_size, file_size, extents)
+                .map(|metadata| {
+                    (
+                        image_format,
+                        metadata.virtual_disk_size,
+                        Some(metadata.logical_sector_size),
+                    )
                 })
-                .unwrap_or((image_format, file_size)),
-            None => (image_format, file_size),
+                .unwrap_or((
+                    image_format,
+                    file_size,
+                    default_virtual_block_size(image_format),
+                )),
+            _ => (
+                image_format,
+                file_size,
+                default_virtual_block_size(image_format),
+            ),
         }
+    }
+
+    fn read_vhdx_virtual_metadata(
+        &self,
+        block_io: &BlockIO,
+        source_block_size: u32,
+        file_size: u64,
+        extents: &[IsoExtent],
+    ) -> Option<vhdx::VhdxMetadata> {
+        let header = self.read_image_bytes(
+            block_io,
+            source_block_size,
+            file_size,
+            extents,
+            0,
+            vhdx::VHDX_HEADER_SECTION_SIZE,
+        )?;
+        let regions = vhdx::parse_vhdx_regions(&header)?;
+        if regions.metadata_length > usize::MAX as u64 {
+            return None;
+        }
+        let metadata = self.read_image_bytes(
+            block_io,
+            source_block_size,
+            file_size,
+            extents,
+            regions.metadata_offset,
+            regions.metadata_length as usize,
+        )?;
+        vhdx::parse_vhdx_metadata(&metadata)
     }
 
     fn read_image_tail(
@@ -528,6 +611,44 @@ impl<'a> IsoScanner<'a> {
         let mut data = alloc::vec![0u8; tail_len];
         vbio.read_blocks(vbio.media_id(), offset / 512, &mut data)
             .ok()?;
+        Some(data)
+    }
+
+    fn read_image_bytes(
+        &self,
+        block_io: &BlockIO,
+        source_block_size: u32,
+        file_size: u64,
+        extents: &[IsoExtent],
+        offset: u64,
+        len: usize,
+    ) -> Option<Vec<u8>> {
+        if extents.is_empty() || len == 0 {
+            return None;
+        }
+
+        let end = offset.checked_add(len as u64)?;
+        if end > file_size {
+            return None;
+        }
+
+        let config = VirtualDeviceConfig::new(VirtualDeviceType::HardDisk, 0, file_size, 512)
+            .with_physical_block_size(source_block_size);
+        let extent_map: Vec<(u64, u64, u64)> = extents
+            .iter()
+            .map(|extent| {
+                (
+                    extent.virtual_block_start,
+                    extent.physical_lba,
+                    extent.block_count,
+                )
+            })
+            .collect();
+        let mut vbio = VirtualBlockIo::from_file_extents(config, &extent_map);
+        vbio.set_physical_reader(UefiBlockIo::new(block_io)?);
+
+        let mut data = alloc::vec![0u8; len];
+        vbio.read_bytes(vbio.media_id(), offset, &mut data).ok()?;
         Some(data)
     }
 
@@ -753,6 +874,14 @@ fn parse_vhd_footer(footer: &[u8]) -> Option<VhdFooterInfo> {
         image_format: ImageFormat::from_vhd_disk_type(disk_type),
         virtual_size,
     })
+}
+
+fn default_virtual_block_size(image_format: ImageFormat) -> Option<u32> {
+    if image_format.uses_512_byte_virtual_sectors() {
+        Some(512)
+    } else {
+        None
+    }
 }
 
 fn is_hidden_tree(name: &str) -> bool {
