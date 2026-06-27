@@ -7,13 +7,15 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
-use log::{info, warn, error, debug};
+use core::fmt::Write;
+use log::{info, warn, error};
 use uefi::prelude::*;
 use uefi::table::boot::BootServices;
 use uefi::proto::console::text::Output;
+use uefi::ResultExt;
 
 mod init;
 mod scanner;
@@ -22,15 +24,16 @@ mod boot;
 use init::StorageDevice;
 use scanner::IsoScanner;
 use boot::BootManager;
+use nextboot_menu::{MenuConfig, MenuState};
 
 /// 应用版本
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// UEFI 入口点
 #[entry]
-fn efi_main(image: Handle, st: SystemTable<Boot>) -> Status {
+fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
     // 初始化 UEFI 服务
-    if let Err(e) = init::uefi_services(&image, &st) {
+    if let Err(_e) = init::uefi_services(&mut st) {
         // 无法使用日志，直接输出
         return Status::ABORTED;
     }
@@ -39,10 +42,8 @@ fn efi_main(image: Handle, st: SystemTable<Boot>) -> Status {
     info!("UEFI Revision: {:?}", st.uefi_revision());
 
     // 获取 Boot Services
-    let bt = st.boot_services();
-
     // 主启动流程
-    match main_flow(bt, &st) {
+    match main_flow(&mut st) {
         Ok(_) => {
             info!("Boot process completed successfully");
             Status::SUCCESS
@@ -50,17 +51,17 @@ fn efi_main(image: Handle, st: SystemTable<Boot>) -> Status {
         Err(e) => {
             error!("Boot failed: {:?}", e);
             // 显示错误信息给用户
-            show_error(&st, &format!("Boot failed: {:?}", e));
+            show_error(&mut st, &format!("Boot failed: {:?}", e));
             Status::ABORTED
         }
     }
 }
 
 /// 主启动流程
-fn main_flow(bt: &BootServices, st: &SystemTable<Boot>) -> uefi::Result<()> {
+fn main_flow(st: &mut SystemTable<Boot>) -> uefi::Result<()> {
     // Phase 1: 检测存储设备
     info!("Phase 1: Detecting storage devices...");
-    let devices = init::detect_storage_devices(bt)?;
+    let devices = init::detect_storage_devices(st.boot_services())?;
     info!("Found {} storage device(s)", devices.len());
 
     if devices.is_empty() {
@@ -81,18 +82,18 @@ fn main_flow(bt: &BootServices, st: &SystemTable<Boot>) -> uefi::Result<()> {
 
     // Phase 2: 查找包含 ISO 文件的设备
     info!("Phase 2: Locating data partition...");
-    let data_device = find_data_partition(bt, &devices)?;
+    let data_device = find_data_partition(st.boot_services(), &devices)?;
     info!("Data partition found on device {}", data_device);
 
     // Phase 3: 扫描 ISO 文件
     info!("Phase 3: Scanning for ISO files...");
-    let scanner = IsoScanner::new(bt, &devices[data_device]);
+    let scanner = IsoScanner::new(st.boot_services(), &devices[data_device]);
     let iso_files = scanner.scan("/")?;
 
     if iso_files.is_empty() {
         warn!("No ISO files found");
         show_message(st, "No ISO files found. Press any key to exit.");
-        wait_for_key(bt, st);
+        wait_for_key(st);
         return Err(uefi::Status::NOT_FOUND.into());
     }
 
@@ -103,7 +104,7 @@ fn main_flow(bt: &BootServices, st: &SystemTable<Boot>) -> uefi::Result<()> {
 
     // Phase 4: 显示菜单
     info!("Phase 4: Displaying boot menu...");
-    let selected_iso = show_menu(bt, st, &iso_files)?;
+    let selected_iso = show_menu(st, &iso_files)?;
 
     match selected_iso {
         Some(iso) => {
@@ -111,7 +112,7 @@ fn main_flow(bt: &BootServices, st: &SystemTable<Boot>) -> uefi::Result<()> {
 
             // Phase 5: 启动选中的 ISO
             info!("Phase 5: Booting selected ISO...");
-            let boot_manager = BootManager::new(bt, &devices[data_device], iso);
+            let boot_manager = BootManager::new(st.boot_services(), &devices[data_device], iso);
             boot_manager.prepare_and_boot()?;
         }
         None => {
@@ -141,8 +142,7 @@ fn find_data_partition(bt: &BootServices, devices: &[StorageDevice]) -> uefi::Re
 
 /// 显示菜单
 fn show_menu<'a>(
-    bt: &BootServices,
-    st: &SystemTable<Boot>,
+    st: &mut SystemTable<Boot>,
     iso_files: &'a [scanner::IsoFile],
 ) -> uefi::Result<Option<&'a scanner::IsoFile>> {
     use nextboot_menu::{MenuItem, MenuState, MenuConfig, IsoType, Input};
@@ -176,17 +176,13 @@ fn show_menu<'a>(
         ..Default::default()
     };
 
-    // 获取控制台
-    let stdout = st.stdout();
-    let stdin = st.stdin();
-
     // 简化的菜单循环
     loop {
         // 显示菜单
         display_menu(st, &state, &config)?;
 
         // 等待输入
-        let input = wait_for_key(bt, st);
+        let input = wait_for_key(st);
 
         match input {
             Input::Up => state.move_up(),
@@ -206,7 +202,7 @@ fn show_menu<'a>(
 
 /// 显示菜单
 fn display_menu(
-    st: &SystemTable<Boot>,
+    st: &mut SystemTable<Boot>,
     state: &MenuState,
     config: &MenuConfig,
 ) -> uefi::Result<()> {
@@ -245,45 +241,42 @@ fn display_menu(
 
 /// 输出文本
 fn output_text(stdout: &mut Output, text: &str) -> uefi::Result<()> {
-    use uefi::data_types::chars::Char;
-    for c in text.chars() {
-        if let Some(ch) = Char::try_from(c).ok() {
-            stdout.output_char(ch)?;
-        }
-    }
-    Ok(())
+    stdout.write_str(text).map_err(|_| uefi::Status::DEVICE_ERROR.into())
 }
 
 /// 显示消息
-fn show_message(st: &SystemTable<Boot>, msg: &str) {
+fn show_message(st: &mut SystemTable<Boot>, msg: &str) {
     let stdout = st.stdout();
     let _ = stdout.reset(false);
     let _ = output_text(stdout, &format!("\r\n  {}\r\n", msg));
 }
 
 /// 显示错误
-fn show_error(st: &SystemTable<Boot>, msg: &str) {
+fn show_error(st: &mut SystemTable<Boot>, msg: &str) {
     let stdout = st.stdout();
     let _ = stdout.reset(false);
     let _ = output_text(stdout, &format!("\r\n  ERROR: {}\r\n", msg));
     let _ = output_text(stdout, "\r\n  Press any key to exit...\r\n");
-    let _ = wait_for_key(st.boot_services(), st);
+    let _ = wait_for_key(st);
 }
 
 /// 等待按键
-fn wait_for_key(bt: &BootServices, st: &SystemTable<Boot>) -> nextboot_menu::Input {
+fn wait_for_key(st: &mut SystemTable<Boot>) -> nextboot_menu::Input {
     use nextboot_menu::Input;
 
     loop {
-        let events = [st.stdin().wait_for_key_event()];
-        if bt.wait_for_event(&events).is_ok() {
+        if let Some(event) = st.stdin().wait_for_key_event() {
+            let mut events = [event];
+            if st.boot_services().wait_for_event(&mut events).discard_errdata().is_err() {
+                continue;
+            }
             if let Ok(Some(key)) = st.stdin().read_key() {
                 match key {
                     uefi::proto::console::text::Key::Special(sc) => {
-                        return Input::from_uefi_key(sc as u16, None);
+                        return Input::from_uefi_key(sc.0, None);
                     }
-                    uefi::proto::console::text::Key::Char(c) => {
-                        return Input::from_uefi_key(0, Some(c));
+                    uefi::proto::console::text::Key::Printable(c) => {
+                        return Input::from_uefi_key(0, Some(char::from(c)));
                     }
                 }
             }
@@ -305,18 +298,5 @@ fn format_size(bytes: u64) -> alloc::string::String {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
         format!("{} B", bytes)
-    }
-}
-
-/// 全局 panic 处理
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    error!("PANIC: {}", info);
-
-    // 尝试在控制台显示 panic 信息
-    // (如果 UEFI 服务仍然可用)
-
-    loop {
-        core::hint::spin_loop();
     }
 }

@@ -3,16 +3,18 @@
 //! 负责 UEFI 服务初始化和设备检测
 
 use uefi::prelude::*;
-use uefi::table::boot::{BootServices, BlockIO};
+use uefi::proto::media::block::BlockIO;
+use uefi::table::boot::{BootServices, SearchType};
+use uefi::Identify;
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::format;
-use log::{info, debug};
+use log::debug;
 
 /// 初始化 UEFI 服务
-pub fn uefi_services(image: &Handle, st: &SystemTable<Boot>) -> uefi::Result<()> {
+pub fn uefi_services(st: &mut SystemTable<Boot>) -> uefi::Result<()> {
     // 初始化 uefi-services crate
-    uefi_services::init(image, st).map_err(|e| uefi::Status::from(e))?;
+    uefi_services::init(st).map(|_| ())?;
 
     // 初始化日志
     log::set_max_level(log::LevelFilter::Info);
@@ -60,14 +62,11 @@ pub fn detect_storage_devices(bt: &BootServices) -> uefi::Result<Vec<StorageDevi
     let mut devices = Vec::new();
 
     // 获取所有支持 BlockIO 的设备句柄
-    let handles = bt.find_handles::<BlockIO>()?;
+    let handles = bt.locate_handle_buffer(SearchType::ByProtocol(&BlockIO::GUID))?;
 
-    for (index, handle) in handles.into_iter().enumerate() {
+    for (index, handle) in handles.iter().copied().enumerate() {
         // 打开 BlockIO 协议
-        let block_io = match bt.open_protocol::<BlockIO>(
-            handle,
-            uefi::table::boot::OpenProtocolAttributes::Exclusive,
-        ) {
+        let block_io = match bt.open_protocol_exclusive::<BlockIO>(handle) {
             Ok(protocol) => protocol,
             Err(_) => continue,
         };
@@ -75,7 +74,7 @@ pub fn detect_storage_devices(bt: &BootServices) -> uefi::Result<Vec<StorageDevi
         let media = block_io.media();
 
         // 只处理有媒体的设备
-        if !media.has_media() {
+        if !media.is_media_present() {
             debug!("Skipping device without media");
             continue;
         }
@@ -95,16 +94,13 @@ pub fn detect_storage_devices(bt: &BootServices) -> uefi::Result<Vec<StorageDevi
 
         devices.push(StorageDevice {
             path,
-            removable: media.is_removable(),
+            removable: media.is_removable_media(),
             block_size,
             total_blocks,
             total_size,
             block_io: handle,
             index,
         });
-
-        // 关闭协议
-        bt.close_protocol(handle);
     }
 
     // 排序: 可移动设备优先
@@ -123,20 +119,17 @@ pub fn is_4k_native(device: &StorageDevice) -> bool {
 
 /// 查找 ESP 分区
 pub fn find_esp_partition(bt: &BootServices) -> uefi::Result<Option<Handle>> {
-    let handles = bt.find_handles::<BlockIO>()?;
+    let handles = bt.locate_handle_buffer(SearchType::ByProtocol(&BlockIO::GUID))?;
 
-    for handle in handles {
-        let block_io = match bt.open_protocol::<BlockIO>(
-            handle,
-            uefi::table::boot::OpenProtocolAttributes::Exclusive,
-        ) {
+    for handle in handles.iter().copied() {
+        let block_io = match bt.open_protocol_exclusive::<BlockIO>(handle) {
             Ok(protocol) => protocol,
             Err(_) => continue,
         };
 
         let media = block_io.media();
 
-        if !media.has_media() {
+        if !media.is_media_present() {
             continue;
         }
 
@@ -150,11 +143,8 @@ pub fn find_esp_partition(bt: &BootServices) -> uefi::Result<Option<Handle>> {
         // ESP 通常小于 1GB
         if total_size < 1024 * 1024 * 1024 {
             // TODO: 更精确的检测方法
-            bt.close_protocol(handle);
             return Ok(Some(handle));
         }
-
-        bt.close_protocol(handle);
     }
 
     Ok(None)
@@ -165,15 +155,10 @@ pub fn get_boot_device(bt: &BootServices, image: Handle) -> uefi::Result<Option<
     // 获取加载的镜像协议
     use uefi::proto::loaded_image::LoadedImage;
 
-    let loaded_image = bt.open_protocol::<LoadedImage>(
-        image,
-        uefi::table::boot::OpenProtocolAttributes::Exclusive,
-    )?;
+    let loaded_image = bt.open_protocol_exclusive::<LoadedImage>(image)?;
 
     // 获取设备句柄
     let device_handle = loaded_image.device();
-
-    bt.close_protocol(image);
 
     Ok(device_handle)
 }
@@ -211,14 +196,29 @@ pub struct MemoryInfo {
 
 /// 获取内存信息
 pub fn get_memory_info(bt: &BootServices) -> uefi::Result<MemoryInfo> {
-    use uefi::table::boot::MemoryType;
+    use core::mem;
+    use core::slice;
+    use uefi::table::boot::{MemoryDescriptor, MemoryType};
 
-    let memory_map = bt.memory_map()?;
+    let map_size = bt.memory_map_size();
+    let extra_entries = 8;
+    let buffer_size = map_size.map_size + map_size.entry_size * extra_entries;
+    let descriptor_count =
+        (buffer_size + mem::size_of::<MemoryDescriptor>() - 1) / mem::size_of::<MemoryDescriptor>();
+    let mut backing = alloc::vec![MemoryDescriptor::default(); descriptor_count];
+    let buffer = unsafe {
+        slice::from_raw_parts_mut(
+            backing.as_mut_ptr().cast::<u8>(),
+            backing.len() * mem::size_of::<MemoryDescriptor>(),
+        )
+    };
+
+    let memory_map = bt.memory_map(buffer)?;
     let mut total = 0u64;
     let mut available = 0u64;
 
     for descriptor in memory_map.entries() {
-        let size = descriptor.page_count() * 4096;
+        let size = descriptor.page_count * 4096;
         total += size;
 
         if descriptor.ty == MemoryType::CONVENTIONAL {
@@ -275,17 +275,17 @@ pub fn get_system_info(bt: &BootServices, st: &SystemTable<Boot>) -> uefi::Resul
 pub fn delay_ms(bt: &BootServices, milliseconds: u64) {
     use uefi::table::boot::TimerTrigger;
 
-    let events = [bt.create_event(
-        uefi::table::boot::EventType::TIMER,
-        uefi::table::boot::Tpl::APPLICATION,
-        None,
-        None,
-    ).unwrap()];
-
-    if let Ok(event) = events.first() {
-        bt.set_timer(*event, TimerTrigger::Relative(10_000_000 * milliseconds)).ok();
-        bt.wait_for_event(&events).ok();
-    }
+    let event = unsafe {
+        bt.create_event(
+            uefi::table::boot::EventType::TIMER,
+            uefi::table::boot::Tpl::APPLICATION,
+            None,
+            None,
+        )
+    }.unwrap();
+    bt.set_timer(&event, TimerTrigger::Relative(10_000_000 * milliseconds)).ok();
+    let mut events = [event];
+    bt.wait_for_event(&mut events).ok();
 }
 
 /// 延时 (秒)

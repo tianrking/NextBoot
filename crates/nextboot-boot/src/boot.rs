@@ -270,5 +270,5 @@ pub fn allocate_boot_memory(bt: &BootServices, size: usize) -> uefi::Result<*mut
 /// 释放引导内存
 pub fn free_boot_memory(bt: &BootServices, ptr: *mut u8, size: usize) -> uefi::Result<()> {
     let pages = (size + 4095) / 4096;
-    bt.free_pages(ptr as u64, pages)
+    unsafe { bt.free_pages(ptr as u64, pages) }
 }

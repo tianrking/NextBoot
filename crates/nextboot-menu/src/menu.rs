@@ -1,23 +1,22 @@
 //! 菜单渲染
 
-use crate::{MenuItem, MenuState, MenuConfig, MenuTheme, IsoType, format_size, Input};
-use crate::console::{ConsoleContext, draw_border, draw_double_border, clear_rect};
+use crate::{MenuItem, MenuState, MenuConfig, format_size, Input};
+use crate::console::{ConsoleContext, clear_rect};
 use crate::gop::{GopContext, Color};
 use alloc::string::String;
-use alloc::vec::Vec;
 use alloc::format;
 
 /// 菜单渲染器
-pub struct MenuRenderer<'a> {
-    console: &'a mut ConsoleContext<'a>,
+pub struct MenuRenderer<'a, 'c> {
+    console: &'a mut ConsoleContext<'c>,
     config: MenuConfig,
     width: usize,
     height: usize,
 }
 
-impl<'a> MenuRenderer<'a> {
+impl<'a, 'c> MenuRenderer<'a, 'c> {
     /// 创建渲染器
-    pub fn new(console: &'a mut ConsoleContext<'a>, config: MenuConfig) -> Self {
+    pub fn new(console: &'a mut ConsoleContext<'c>, config: MenuConfig) -> Self {
         let (width, height) = console.size();
         Self { console, config, width, height }
     }
@@ -41,7 +40,7 @@ impl<'a> MenuRenderer<'a> {
     }
 
     /// 仅更新选中状态 (更高效)
-    pub fn update_selection(&mut self, state: &MenuState, prev_selected: usize) {
+    pub fn update_selection(&mut self, state: &mut MenuState, prev_selected: usize) {
         let start_row = 4;
         let max_items = self.height - start_row - 3;
 
@@ -90,7 +89,7 @@ impl<'a> MenuRenderer<'a> {
     }
 
     /// 渲染菜单项
-    fn render_items(&mut self, state: &MenuState) {
+    fn render_items(&mut self, state: &mut MenuState) {
         let start_row = 4;
         let max_items = self.height - start_row - 3;
         let theme = &self.config.theme;
@@ -301,7 +300,7 @@ impl GraphicalMenuRenderer {
     }
 
     /// 渲染菜单
-    pub fn render(&mut self, state: &MenuState) {
+    pub fn render(&mut self, state: &mut MenuState) {
         let theme = &self.config.theme;
 
         // 清屏
@@ -334,7 +333,7 @@ impl GraphicalMenuRenderer {
     }
 
     /// 绘制菜单项
-    fn draw_items(&mut self, state: &MenuState) {
+    fn draw_items(&mut self, state: &mut MenuState) {
         let theme = &self.config.theme;
         let item_height = 24;
         let start_y = 80;
@@ -421,15 +420,15 @@ impl GraphicalMenuRenderer {
 
 /// 运行菜单交互循环
 pub fn run_menu_loop<'a>(
-    console: &'a mut ConsoleContext<'a>,
+    console: &mut ConsoleContext<'_>,
     bt: &uefi::table::boot::BootServices,
-    state: &mut MenuState,
+    state: &'a mut MenuState,
     config: MenuConfig,
 ) -> Option<&'a MenuItem> {
-    let mut renderer = MenuRenderer::new(console, config);
-
-    // 初始渲染
-    renderer.render(state);
+    {
+        let mut renderer = MenuRenderer::new(console, config.clone());
+        renderer.render(state);
+    }
 
     loop {
         // 等待输入
@@ -440,6 +439,7 @@ pub fn run_menu_loop<'a>(
                 let prev = state.selected;
                 state.move_up();
                 if state.dirty {
+                    let mut renderer = MenuRenderer::new(console, config.clone());
                     renderer.update_selection(state, prev);
                 }
             }
@@ -447,29 +447,32 @@ pub fn run_menu_loop<'a>(
                 let prev = state.selected;
                 state.move_down();
                 if state.dirty {
+                    let mut renderer = MenuRenderer::new(console, config.clone());
                     renderer.update_selection(state, prev);
                 }
             }
             Input::PageUp => {
-                let prev = state.selected;
                 state.page_up(10);
                 if state.dirty {
+                    let mut renderer = MenuRenderer::new(console, config.clone());
                     renderer.render(state);
                 }
             }
             Input::PageDown => {
-                let prev = state.selected;
                 state.page_down(10);
                 if state.dirty {
+                    let mut renderer = MenuRenderer::new(console, config.clone());
                     renderer.render(state);
                 }
             }
             Input::Home => {
                 state.move_first();
+                let mut renderer = MenuRenderer::new(console, config.clone());
                 renderer.render(state);
             }
             Input::End => {
                 state.move_last();
+                let mut renderer = MenuRenderer::new(console, config.clone());
                 renderer.render(state);
             }
             Input::Enter => {

@@ -1,8 +1,10 @@
 //! UEFI GOP (Graphics Output Protocol) 封装
 
-use uefi::proto::console::gop::{GraphicsOutput, PixelFormat, ModeInfo, BltPixel, BltOp};
-use uefi::table::boot::BootServices;
-use uefi_raw::protocol::console::GraphicsOutputProtocol;
+use uefi::proto::console::gop::{
+    BltOp, BltPixel, BltRegion, FrameBuffer, GraphicsOutput, PixelFormat,
+};
+use uefi::table::boot::{BootServices, ScopedProtocol, SearchType};
+use uefi::Identify;
 use alloc::vec::Vec;
 
 /// 颜色 (RGBA)
@@ -107,7 +109,7 @@ impl Color {
 
 /// GOP 上下文
 pub struct GopContext<'a> {
-    gop: &'a mut GraphicsOutput,
+    gop: ScopedProtocol<'a, GraphicsOutput>,
     width: usize,
     height: usize,
     format: PixelFormat,
@@ -116,27 +118,19 @@ pub struct GopContext<'a> {
 
 impl<'a> GopContext<'a> {
     /// 初始化 GOP
-    pub fn init(bt: &BootServices) -> uefi::Result<Self> {
-        use uefi::table::boot::SearchType;
-
-        let gop_handles = bt.locate_handle_buffer(SearchType::ByProtocol(&GraphicsOutputProtocol::GUID))?;
-        let gop_handle = gop_handles.handles().first()
+    pub fn init(bt: &'a BootServices) -> uefi::Result<Self> {
+        let gop_handles = bt.locate_handle_buffer(SearchType::ByProtocol(&GraphicsOutput::GUID))?;
+        let gop_handle = gop_handles.first()
             .ok_or(uefi::Status::UNSUPPORTED)?;
 
-        let mut gop = bt.open_protocol::<GraphicsOutput>(
-            *gop_handle,
-            uefi::table::boot::OpenProtocolAttributes::Exclusive,
-        )?;
-
-        // 尝试设置最佳分辨率
-        let (width, height) = Self::find_best_mode(&gop);
-
+        let gop = bt.open_protocol_exclusive::<GraphicsOutput>(*gop_handle)?;
         let format = gop.current_mode_info().pixel_format();
         let info = gop.current_mode_info();
+        let (width, height) = info.resolution();
         let stride = info.stride();
 
         Ok(Self {
-            gop: &mut gop,
+            gop,
             width,
             height,
             format,
@@ -144,30 +138,9 @@ impl<'a> GopContext<'a> {
         })
     }
 
-    /// 查找最佳分辨率
-    fn find_best_mode(gop: &GraphicsOutput) -> (usize, usize) {
-        // 尝试找到 1024x768 或更高的分辨率
-        let mut best_mode = gop.current_mode_info();
-        let mut best_resolution = best_mode.resolution();
-        let target_width = 1024;
-        let target_height = 768;
-
-        for mode in gop.modes() {
-            let res = mode.info().resolution();
-            if res.0 >= target_width && res.1 >= target_height {
-                if res.0 < best_resolution.0 || best_resolution.0 < target_width {
-                    best_resolution = res;
-                    best_mode = mode.info().clone();
-                }
-            }
-        }
-
-        (best_resolution.0, best_resolution.1)
-    }
-
     /// 获取帧缓冲区
-    pub fn frame_buffer(&mut self) -> &mut [u8] {
-        self.gop.frame_buffer().as_mut_ptr()
+    pub fn frame_buffer(&mut self) -> FrameBuffer<'_> {
+        self.gop.frame_buffer()
     }
 
     /// 获取分辨率
@@ -186,29 +159,38 @@ impl<'a> GopContext<'a> {
             return;
         }
 
-        let fb = self.gop.frame_buffer().as_mut_ptr();
+        let mut fb = self.gop.frame_buffer();
         let pixel_size = 4; // 32-bit pixels
         let offset = (y * self.stride + x) * pixel_size;
 
-        if offset + pixel_size <= fb.len() {
+        if offset + pixel_size <= fb.size() {
             let pixel = color.to_u32(self.format);
             let bytes = pixel.to_le_bytes();
-            fb[offset..offset + 4].copy_from_slice(&bytes);
+            for (i, byte) in bytes.iter().enumerate() {
+                unsafe {
+                    fb.write_byte(offset + i, *byte);
+                }
+            }
         }
     }
 
     /// 读取像素
-    pub fn read_pixel(&self, x: usize, y: usize) -> Option<Color> {
+    pub fn read_pixel(&mut self, x: usize, y: usize) -> Option<Color> {
         if x >= self.width || y >= self.height {
             return None;
         }
 
-        let fb = self.gop.frame_buffer().as_ptr();
+        let fb = self.gop.frame_buffer();
         let pixel_size = 4;
         let offset = (y * self.stride + x) * pixel_size;
 
-        if offset + pixel_size <= fb.len() {
-            let bytes: [u8; 4] = fb[offset..offset + 4].try_into().ok()?;
+        if offset + pixel_size <= fb.size() {
+            let bytes = [
+                unsafe { fb.read_byte(offset) },
+                unsafe { fb.read_byte(offset + 1) },
+                unsafe { fb.read_byte(offset + 2) },
+                unsafe { fb.read_byte(offset + 3) },
+            ];
             let pixel = u32::from_le_bytes(bytes);
 
             let (r, g, b) = match self.format {
@@ -278,11 +260,11 @@ impl<'a> GopContext<'a> {
 
     /// 使用 Blt 操作绘制矩形 (更高效)
     pub fn blt_fill(&mut self, x: usize, y: usize, w: usize, h: usize, color: Color) {
-        let mut pixels: Vec<BltPixel> = alloc::vec![color.to_blt_pixel(); w * h];
+        let pixels: Vec<BltPixel> = alloc::vec![color.to_blt_pixel(); w * h];
 
         let _ = self.gop.blt(BltOp::BufferToVideo {
             buffer: &pixels,
-            src: (0, 0),
+            src: BltRegion::Full,
             dest: (x, y),
             dims: (w, h),
         });
@@ -316,8 +298,6 @@ impl<'a> GopContext<'a> {
     pub fn draw_string(&mut self, x: usize, y: usize, s: &str, fg: Color, bg: Option<Color>) -> usize {
         let mut cursor_x = x;
         let char_width = 8;
-        let char_height = 16;
-
         for c in s.chars() {
             if cursor_x + char_width > self.width {
                 break;
@@ -351,7 +331,7 @@ fn get_font_bitmap(c: char) -> [u8; 16] {
         '!' => [0x00, 0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00],
         '"' => [0x00, 0x00, 0x6C, 0x6C, 0x6C, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
         '#' => [0x00, 0x00, 0x6C, 0x6C, 0xFE, 0x6C, 0x6C, 0x6C, 0xFE, 0x6C, 0x6C, 0x6C, 0x00, 0x00, 0x00, 0x00],
-        '$' => [0x00, 0x00, 0x18, 0x3E, 0x60, 0x60, 0x3C, 0x06, 0x06, 0x7C, 0x18, 0x00, 0x00, 0x00, 0x00],
+        '$' => [0x00, 0x00, 0x18, 0x3E, 0x60, 0x60, 0x3C, 0x06, 0x06, 0x7C, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00],
         '%' => [0x00, 0x00, 0x00, 0xC6, 0xCC, 0x18, 0x30, 0x60, 0xC6, 0xC6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
         '&' => [0x00, 0x00, 0x38, 0x6C, 0x6C, 0x38, 0x76, 0xDC, 0xCC, 0xCC, 0x76, 0x00, 0x00, 0x00, 0x00, 0x00],
         '\'' => [0x00, 0x00, 0x18, 0x18, 0x18, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],

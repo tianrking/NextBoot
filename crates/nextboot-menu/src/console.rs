@@ -1,11 +1,14 @@
 //! 控制台输出封装
 
-use uefi::proto::console::text::{Input as UefiInput, Output, ScanCode};
+use uefi::proto::console::text::{
+    Color as TextColor, Input as UefiInput, Key, Output,
+};
 use uefi::table::boot::BootServices;
+use uefi::ResultExt;
 use crate::Input as MenuInput;
 use crate::gop::Color;
 use alloc::vec::Vec;
-use alloc::string::ToString;
+use core::fmt::Write;
 
 /// 控制台上下文
 pub struct ConsoleContext<'a> {
@@ -34,7 +37,7 @@ impl<'a> ConsoleContext<'a> {
 
     /// 打印字符串
     pub fn print(&mut self, s: &str) {
-        let _ = self.stdout.output_string(s);
+        let _ = self.stdout.write_str(s);
     }
 
     /// 打印行
@@ -67,36 +70,35 @@ impl<'a> ConsoleContext<'a> {
     /// 设置颜色属性
     pub fn set_color(&mut self, fg: Color, bg: Color) {
         // UEFI 控制台颜色映射
-        let fg_attr = Self::color_to_attr(fg);
-        let bg_attr = Self::color_to_attr(bg) << 4;
-        let _ = self.stdout.set_attribute(fg_attr | bg_attr);
+        let _ = self.stdout.set_color(Self::color_to_attr(fg), Self::color_to_attr(bg));
     }
 
     /// 设置前景色
     pub fn set_fg(&mut self, color: Color) {
-        let attr = Self::color_to_attr(color);
-        let _ = self.stdout.set_attribute(attr);
+        let _ = self.stdout.set_color(Self::color_to_attr(color), TextColor::Black);
     }
 
     /// 颜色转控制台属性
-    fn color_to_attr(color: Color) -> usize {
+    fn color_to_attr(color: Color) -> TextColor {
         match (color.r > 128, color.g > 128, color.b > 128) {
-            (false, false, false) => 0, // Black
-            (false, false, true) => 1,  // Blue
-            (false, true, false) => 2,  // Green
-            (false, true, true) => 3,   // Cyan
-            (true, false, false) => 4,  // Red
-            (true, false, true) => 5,   // Magenta
-            (true, true, false) => 6,   // Brown
-            (true, true, true) => 7,    // Light Gray
+            (false, false, false) => TextColor::Black,
+            (false, false, true) => TextColor::Blue,
+            (false, true, false) => TextColor::Green,
+            (false, true, true) => TextColor::Cyan,
+            (true, false, false) => TextColor::Red,
+            (true, false, true) => TextColor::Magenta,
+            (true, true, false) => TextColor::Yellow,
+            (true, true, true) => TextColor::White,
         }
     }
 
     /// 等待并读取输入
     pub fn wait_for_key(&mut self, bt: &BootServices) -> MenuInput {
         // 等待按键事件
-        let events = [self.stdin.wait_for_key_event()];
-        let _ = bt.wait_for_event(&events);
+        if let Some(event) = self.stdin.wait_for_key_event() {
+            let mut events = [event];
+            let _ = bt.wait_for_event(&mut events).discard_errdata();
+        }
 
         self.read_key().unwrap_or(MenuInput::Other)
     }
@@ -105,12 +107,8 @@ impl<'a> ConsoleContext<'a> {
     pub fn read_key(&mut self) -> Option<MenuInput> {
         if let Ok(Some(key)) = self.stdin.read_key() {
             match key {
-                uefi::proto::console::text::Key::Special(sc) => {
-                    Some(MenuInput::from_uefi_key(sc as u16, None))
-                }
-                uefi::proto::console::text::Key::Char(ch) => {
-                    Some(MenuInput::from_uefi_key(0, Some(ch)))
-                }
+                Key::Special(sc) => Some(MenuInput::from_uefi_key(sc.0, None)),
+                Key::Printable(ch) => Some(MenuInput::from_uefi_key(0, Some(char::from(ch)))),
             }
         } else {
             None
@@ -146,9 +144,10 @@ impl<'a> ConsoleContext<'a> {
 
 /// 获取控制台尺寸
 pub fn get_console_size(stdout: &Output) -> (usize, usize) {
-    match stdout.query_mode(None) {
-        Ok((cols, rows)) => (cols, rows),
+    match stdout.current_mode() {
+        Ok(Some(mode)) => (mode.columns(), mode.rows()),
         Err(_) => (80, 25), // 默认值
+        Ok(None) => (80, 25),
     }
 }
 
@@ -304,18 +303,18 @@ pub fn read_password(console: &mut ConsoleContext, prompt: &str) -> alloc::strin
     loop {
         if let Some(key) = console.read_raw_key() {
             match key {
-                uefi::proto::console::text::Key::Char('\r') |
-                uefi::proto::console::text::Key::Char('\n') => {
+                Key::Printable(ch) if char::from(ch) == '\r' || char::from(ch) == '\n' => {
                     console.println("");
                     break;
                 }
-                uefi::proto::console::text::Key::Char(c) if c == '\x08' || c == '\x7f' => {
+                Key::Printable(ch) if char::from(ch) == '\x08' || char::from(ch) == '\x7f' => {
                     if !password.is_empty() {
                         password.pop();
                         console.print("\x08 \x08"); // Backspace, space, backspace
                     }
                 }
-                uefi::proto::console::text::Key::Char(c) if c >= ' ' && c <= '~' => {
+                Key::Printable(ch) if char::from(ch) >= ' ' && char::from(ch) <= '~' => {
+                    let c = char::from(ch);
                     password.push(c);
                     console.print("*");
                 }
@@ -336,18 +335,18 @@ pub fn read_line(console: &mut ConsoleContext, prompt: &str) -> alloc::string::S
     loop {
         if let Some(key) = console.read_raw_key() {
             match key {
-                uefi::proto::console::text::Key::Char('\r') |
-                uefi::proto::console::text::Key::Char('\n') => {
+                Key::Printable(ch) if char::from(ch) == '\r' || char::from(ch) == '\n' => {
                     console.println("");
                     break;
                 }
-                uefi::proto::console::text::Key::Char(c) if c == '\x08' || c == '\x7f' => {
+                Key::Printable(ch) if char::from(ch) == '\x08' || char::from(ch) == '\x7f' => {
                     if !line.is_empty() {
                         line.pop();
                         console.print("\x08 \x08");
                     }
                 }
-                uefi::proto::console::text::Key::Char(c) if c >= ' ' && c <= '~' => {
+                Key::Printable(ch) if char::from(ch) >= ' ' && char::from(ch) <= '~' => {
+                    let c = char::from(ch);
                     line.push(c);
                     console.print(&alloc::format!("{}", c));
                 }

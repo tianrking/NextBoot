@@ -11,7 +11,7 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
 
@@ -290,7 +290,7 @@ impl MenuState {
     }
 
     /// 获取可显示范围
-    pub fn visible_range(&self, max_items: usize) -> core::ops::Range<usize> {
+    pub fn visible_range(&mut self, max_items: usize) -> core::ops::Range<usize> {
         if self.items.is_empty() {
             return 0..0;
         }
