@@ -103,12 +103,14 @@ const EFI_BOOT_ARM: &str = "\\EFI\\BOOT\\BOOTARM.EFI";
 const WINDOWS_BOOTMGFW_PATH: &str = "/efi/microsoft/boot/bootmgfw.efi";
 const NEXTBOOT_OS_PARAM_NAME: &str = "NextBootOsParam";
 const NEXTBOOT_OS_PARAM_VENDOR_GUID: Guid = uefi::guid!("c1775af2-4211-4f55-9f6f-2cc5ef5667f0");
+const VENTOY_OS_PARAM_VENDOR_GUID: Guid = uefi::guid!("77772020-2e77-6576-6e74-6f792e6e6574");
 const NEXTBOOT_OS_PARAM_MAGIC: &[u8; 8] = b"NBOSPARM";
 const NEXTBOOT_OS_PARAM_VERSION: u16 = 1;
 const NEXTBOOT_OS_PARAM_HEADER_SIZE: usize = 80;
 const NEXTBOOT_OS_PARAM_EXTENT_RECORD_SIZE: usize = 24;
 const NEXTBOOT_OS_PARAM_FLAG_SYNTHETIC_EXTENT: u16 = 0x0001;
 const NEXTBOOT_OS_PARAM_FLAG_EL_TORITO: u16 = 0x0002;
+const VENTOY_RUNTIME_ALIGNMENT: usize = 4096;
 const VHD_SECTOR_SIZE: u64 = 512;
 const VHD_FOOTER_SIZE: usize = 512;
 const VHD_DYNAMIC_HEADER_SIZE: usize = 1024;
@@ -1070,7 +1072,178 @@ impl<'a> BootManager<'a> {
             runtime_extent_count(self.iso)
         );
 
+        if let Err(err) = self.publish_ventoy_os_param(config) {
+            warn!(
+                "Failed to publish {} for {}: {:?}",
+                crate::ventoy::VENTOY_OS_PARAM_NAME,
+                self.iso.path,
+                err.status()
+            );
+        }
+
         Ok(())
+    }
+
+    fn publish_ventoy_os_param(&self, config: &VirtualDeviceConfig) -> uefi::Result<()> {
+        let (image_sector_size, image_regions) = self.build_ventoy_image_regions(config)?;
+        let image_location = crate::ventoy::build_ventoy_image_location(
+            image_sector_size,
+            self.iso.block_size,
+            &image_regions,
+        )
+        .map_err(ventoy_error_to_uefi_status)?;
+        let image_location_addr =
+            self.copy_to_runtime_pool_aligned(&image_location, VENTOY_RUNTIME_ALIGNMENT)?;
+        let disk_part_type = self
+            .detect_ventoy_source_partition_type()
+            .unwrap_or(crate::ventoy::VENTOY_PART_TYPE_OTHER);
+        let input = crate::ventoy::VentoyOsParamInput {
+            disk_guid: [0; 16],
+            disk_size: self.device.total_size,
+            disk_part_id: usize_to_u16(self.iso.volume_index.saturating_add(1))?,
+            disk_part_type,
+            image_path: &self.iso.path,
+            image_size: self.iso.size,
+            image_location_addr: image_location_addr as u64,
+            image_location_len: usize_to_u32(image_location.len())?,
+            reserved: [0; 4],
+            disk_signature: [0; 4],
+        };
+        let data =
+            crate::ventoy::build_ventoy_os_param(&input).map_err(ventoy_error_to_uefi_status)?;
+        let name = CString16::try_from(crate::ventoy::VENTOY_OS_PARAM_NAME)
+            .map_err(|_| uefi::Status::INVALID_PARAMETER)?;
+        let vendor = VariableVendor(VENTOY_OS_PARAM_VENDOR_GUID);
+        let attributes =
+            VariableAttributes::BOOTSERVICE_ACCESS | VariableAttributes::RUNTIME_ACCESS;
+
+        self.rt
+            .set_variable(name.as_ref(), &vendor, attributes, &data)?;
+        info!(
+            "Published {} ({} bytes, {} image location region(s), location=0x{:x})",
+            crate::ventoy::VENTOY_OS_PARAM_NAME,
+            data.len(),
+            image_regions.len(),
+            image_location_addr
+        );
+
+        Ok(())
+    }
+
+    fn build_ventoy_image_regions(
+        &self,
+        config: &VirtualDeviceConfig,
+    ) -> uefi::Result<(u32, Vec<crate::ventoy::VentoyImageRegion>)> {
+        let extents = self.ventoy_source_extents()?;
+        let preferred_image_sector_size = if self.iso.image_format.is_iso() {
+            2048
+        } else {
+            config.block_size
+        };
+
+        match crate::ventoy::build_ventoy_image_regions(
+            &extents,
+            self.iso.block_size,
+            preferred_image_sector_size,
+        ) {
+            Ok(regions) => Ok((preferred_image_sector_size, regions)),
+            Err(crate::ventoy::VentoyParamError::UnalignedExtent)
+                if preferred_image_sector_size != self.iso.block_size =>
+            {
+                let regions = crate::ventoy::build_ventoy_image_regions(
+                    &extents,
+                    self.iso.block_size,
+                    self.iso.block_size,
+                )
+                .map_err(ventoy_error_to_uefi_status)?;
+                Ok((self.iso.block_size, regions))
+            }
+            Err(err) => Err(ventoy_error_to_uefi_status(err).into()),
+        }
+    }
+
+    fn ventoy_source_extents(&self) -> uefi::Result<Vec<crate::ventoy::VentoyExtent>> {
+        let mut extents = Vec::new();
+        let count = if self.iso.extents.is_empty() {
+            1
+        } else {
+            self.iso.extents.len()
+        };
+        extents
+            .try_reserve_exact(count)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+
+        if self.iso.extents.is_empty() {
+            let block_count = div_round_up(self.iso.size, u64::from(self.iso.block_size))
+                .ok_or(uefi::Status::INVALID_PARAMETER)?;
+            extents.push(crate::ventoy::VentoyExtent {
+                virtual_block_start: 0,
+                physical_lba: self.iso.start_lba,
+                block_count,
+            });
+        } else {
+            for extent in &self.iso.extents {
+                extents.push(crate::ventoy::VentoyExtent {
+                    virtual_block_start: extent.virtual_block_start,
+                    physical_lba: extent.physical_lba,
+                    block_count: extent.block_count,
+                });
+            }
+        }
+
+        Ok(extents)
+    }
+
+    fn copy_to_runtime_pool_aligned(&self, data: &[u8], alignment: usize) -> uefi::Result<usize> {
+        if data.is_empty() || !alignment.is_power_of_two() {
+            return Err(Status::INVALID_PARAMETER.into());
+        }
+
+        let allocation_size = data
+            .len()
+            .checked_add(
+                alignment
+                    .checked_mul(2)
+                    .ok_or(uefi::Status::OUT_OF_RESOURCES)?,
+            )
+            .ok_or(uefi::Status::OUT_OF_RESOURCES)?;
+        let raw = self
+            .bt
+            .allocate_pool(MemoryType::RUNTIME_SERVICES_DATA, allocation_size)?;
+        let aligned = align_up(raw as usize, alignment).ok_or(uefi::Status::OUT_OF_RESOURCES)?;
+        unsafe {
+            ptr::copy_nonoverlapping(data.as_ptr(), aligned as *mut u8, data.len());
+        }
+
+        Ok(aligned)
+    }
+
+    fn detect_ventoy_source_partition_type(&self) -> uefi::Result<u16> {
+        let source_block_io = self
+            .bt
+            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+        let reader = UefiPhysicalReader::new(&source_block_io).ok_or(uefi::Status::DEVICE_ERROR)?;
+        let block_size =
+            usize::try_from(reader.block_size()).map_err(|_| uefi::Status::INVALID_PARAMETER)?;
+        if block_size == 0 {
+            return Err(Status::INVALID_PARAMETER.into());
+        }
+
+        let mut boot_sector = Vec::new();
+        boot_sector
+            .try_reserve_exact(block_size)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        boot_sector.resize(block_size, 0);
+        PhysicalReader::read_blocks(&reader, 0, &mut boot_sector)
+            .map_err(virtio_error_to_fs_error)
+            .map_err(fs_error_to_uefi_status)?;
+
+        Ok(match detect_fs_type(&boot_sector) {
+            FileSystemType::ExFat => crate::ventoy::VENTOY_PART_TYPE_EXFAT,
+            FileSystemType::Fat32 => crate::ventoy::VENTOY_PART_TYPE_FAT,
+            FileSystemType::Ntfs => crate::ventoy::VENTOY_PART_TYPE_NTFS,
+            _ => crate::ventoy::VENTOY_PART_TYPE_OTHER,
+        })
     }
 
     fn build_os_param_payload(&self, config: &VirtualDeviceConfig) -> uefi::Result<Vec<u8>> {
@@ -2690,6 +2863,17 @@ fn xz_error_to_uefi_status(err: XzDecodeError) -> Status {
             Status::OUT_OF_RESOURCES
         }
         XzDecodeError::Decoder(_) | XzDecodeError::Stalled => Status::LOAD_ERROR,
+    }
+}
+
+fn ventoy_error_to_uefi_status(err: crate::ventoy::VentoyParamError) -> Status {
+    match err {
+        crate::ventoy::VentoyParamError::PathTooLong
+        | crate::ventoy::VentoyParamError::InvalidSectorSize => Status::INVALID_PARAMETER,
+        crate::ventoy::VentoyParamError::UnalignedExtent => Status::UNSUPPORTED,
+        crate::ventoy::VentoyParamError::ValueOutOfRange
+        | crate::ventoy::VentoyParamError::OutputTooLarge
+        | crate::ventoy::VentoyParamError::OutputReserveFailed => Status::OUT_OF_RESOURCES,
     }
 }
 

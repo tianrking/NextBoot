@@ -21,6 +21,7 @@ mod boot;
 mod init;
 mod scanner;
 mod vdi;
+mod ventoy;
 mod vhdx;
 mod virtual_fs;
 mod wim;
