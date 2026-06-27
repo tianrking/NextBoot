@@ -34,7 +34,7 @@ use uefi::proto::media::block::BlockIO;
 use uefi::proto::media::file::{Directory, File, FileAttribute, FileInfo, FileMode};
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::table::boot::{BootServices, SearchType};
-use uefi::{Handle, Identify};
+use uefi::{Handle, Identify, Status};
 
 const VENTOY_CONFIG_PATH: &str = "/ventoy/ventoy.json";
 const VENTOY_CONFIG_MAX_SIZE: usize = 256 * 1024;
@@ -430,11 +430,19 @@ impl<'a> IsoScanner<'a> {
             root, "/", "/ISO", "/iso", "/Images", "/images", "/Boot", "/boot",
         ];
 
-        let fs_handles = self
+        let simple_fs_handles: Vec<Handle> = match self
             .bt
-            .locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))?;
-
-        let simple_fs_handles: Vec<Handle> = fs_handles.iter().copied().collect();
+            .locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))
+        {
+            Ok(handles) => handles.iter().copied().collect(),
+            Err(err) if err.status() == Status::NOT_FOUND => {
+                log::warn!(
+                    "No SimpleFileSystem handles found; falling back to raw BlockIO scan"
+                );
+                Vec::new()
+            }
+            Err(err) => return Err(err),
+        };
 
         for (volume_index, handle) in simple_fs_handles.iter().copied().enumerate() {
             let mut fs = match self.bt.open_protocol_exclusive::<SimpleFileSystem>(handle) {
@@ -467,14 +475,18 @@ impl<'a> IsoScanner<'a> {
             iso_files.append(&mut block_files);
         }
 
-        // 去重。相同卷上的相同路径可能会被多个 search path 扫到；不同卷
-        // 上的同名镜像必须保留，这是固定盘/多 SSD 场景的关键差异。
+        // 去重。相同卷上的相同路径可能会被多个 search path 扫到；FAT/exFAT/NTFS
+        // 路径大小写不敏感，所以 /ISO 与 /iso 命中同一个文件时也要合并。
+        // 不同卷上的同名镜像必须保留，这是固定盘/多 SSD 场景的关键差异。
         iso_files.sort_by(|a, b| {
             a.volume_index
                 .cmp(&b.volume_index)
+                .then_with(|| a.path.to_lowercase().cmp(&b.path.to_lowercase()))
                 .then_with(|| a.path.cmp(&b.path))
         });
-        iso_files.dedup_by(|a, b| a.volume_index == b.volume_index && a.path == b.path);
+        iso_files.dedup_by(|a, b| {
+            a.volume_index == b.volume_index && a.path.eq_ignore_ascii_case(&b.path)
+        });
 
         // 按名称排序
         iso_files.sort_by(|a, b| {
@@ -492,11 +504,20 @@ impl<'a> IsoScanner<'a> {
 
     /// 扫描单个目录
     fn scan_directory(&self, path: &str, extensions: &[&str]) -> uefi::Result<Vec<IsoFile>> {
-        let fs_handles = self
+        let simple_fs_handles: Vec<Handle> = match self
             .bt
-            .locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))?;
+            .locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))
+        {
+            Ok(handles) => handles.iter().copied().collect(),
+            Err(err) if err.status() == Status::NOT_FOUND => {
+                log::warn!(
+                    "No SimpleFileSystem handles found; falling back to raw BlockIO scan"
+                );
+                Vec::new()
+            }
+            Err(err) => return Err(err),
+        };
         let mut files = Vec::new();
-        let simple_fs_handles: Vec<Handle> = fs_handles.iter().copied().collect();
 
         for (volume_index, handle) in simple_fs_handles.iter().copied().enumerate() {
             let mut fs = match self.bt.open_protocol_exclusive::<SimpleFileSystem>(handle) {

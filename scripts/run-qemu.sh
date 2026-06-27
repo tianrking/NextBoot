@@ -35,6 +35,8 @@ DATA_FS="exfat"
 DISK_IMG=""
 NO_RUN=0
 VERIFY_IMAGE=1
+SMOKE=0
+SMOKE_TIMEOUT=20
 MEMORY="1024M"
 IMAGES=()
 
@@ -57,6 +59,8 @@ Options:
   --disk-image PATH  Output disk image path
   --memory SIZE      QEMU guest memory (default: 1024M)
   --skip-verify      Do not verify the generated GPT/filesystem image
+  --smoke            Run QEMU until NextBoot scan/menu log markers appear
+  --smoke-timeout S  Seconds to wait for --smoke markers (default: 20)
   --no-run           Create the disk image and print the QEMU command only
   -h, --help         Show this help
 
@@ -142,6 +146,15 @@ while [ $# -gt 0 ]; do
             VERIFY_IMAGE=0
             shift
             ;;
+        --smoke)
+            SMOKE=1
+            shift
+            ;;
+        --smoke-timeout)
+            [ $# -ge 2 ] || die "--smoke-timeout requires a value"
+            SMOKE_TIMEOUT="$2"
+            shift 2
+            ;;
         --no-run)
             NO_RUN=1
             shift
@@ -175,6 +188,10 @@ case "$SECTOR_SIZE" in
     *) die "--sector-size must be 512 or 4096" ;;
 esac
 
+case "$SMOKE_TIMEOUT" in
+    ''|*[!0-9]*) die "--smoke-timeout must be an integer second value" ;;
+esac
+
 case "$LAYOUT" in
     single|split) ;;
     *) die "--layout must be single or split" ;;
@@ -187,6 +204,10 @@ esac
 
 if [ "$LAYOUT" = "single" ] && [ "$DATA_FS" != "exfat" ]; then
     warn "--data-fs is ignored for single layout"
+fi
+
+if [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 1 ]; then
+    die "--smoke cannot be combined with --no-run"
 fi
 
 if [ "$DISK_SIZE_SET" -eq 0 ]; then
@@ -967,6 +988,29 @@ require_command qemu-system-x86_64 "qemu-system-x86_64 is required to run the VM
 if [ -n "$OVMF_CODE" ]; then
     info "Using OVMF: ${OVMF_CODE}"
 fi
+
+if [ "$SMOKE" -eq 1 ]; then
+    SMOKE_SCRIPT="${SCRIPT_DIR}/qemu-boot-smoke.py"
+    [ -f "$SMOKE_SCRIPT" ] || die "QEMU smoke runner not found: ${SMOKE_SCRIPT}"
+    EXPECT_ARGS=(
+        --expect "NextBoot v"
+        --expect "Phase 2: Scanning for ISO files"
+    )
+    if [ "${#IMAGES[@]}" -gt 0 ]; then
+        EXPECT_ARGS+=(--expect "Found ${#IMAGES[@]} ISO file(s)")
+        for image in "${IMAGES[@]}"; do
+            EXPECT_ARGS+=(--expect "$(basename "$image")")
+        done
+        EXPECT_ARGS+=(--expect "Phase 3: Displaying boot menu")
+    else
+        EXPECT_ARGS+=(--expect "No ISO files found")
+    fi
+    warn "Running QEMU boot smoke for ${SMOKE_TIMEOUT}s..."
+    python3 "$SMOKE_SCRIPT" --timeout "$SMOKE_TIMEOUT" "${EXPECT_ARGS[@]}" -- \
+        qemu-system-x86_64 "${QEMU_OPTS[@]}"
+    exit 0
+fi
+
 warn "Starting QEMU. Press Ctrl+A then X to exit."
 qemu-system-x86_64 "${QEMU_OPTS[@]}"
 
