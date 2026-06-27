@@ -1,9 +1,9 @@
 use super::block_io::{alloc_buffer_for_block, PartitionBlockIo, UefiBlockIo};
 use super::model::{ImageFormat, IsoFile};
+use super::partitions::discover_partition_candidates;
 use super::{
-    block_io_info, discover_partition_candidates, normalize_vlnk_target_path,
-    partition_source_disk_identity, read_uefi_regular_file, vlnk_matches_partition,
-    vlnk_matches_source_disk, IsoScanner,
+    block_io_info, normalize_vlnk_target_path, partition_source_disk_identity,
+    read_uefi_regular_file, vlnk_matches_partition, vlnk_matches_source_disk, IsoScanner,
 };
 use crate::source_disk::SourceDiskIdentity;
 use crate::ventoy_config::VentoyConfig;

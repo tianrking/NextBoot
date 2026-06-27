@@ -1,5 +1,6 @@
+use super::block_io::alloc_buffer_for_block;
+use super::helpers;
 use super::model::{MbrPartitionEntry, PartitionCandidate, PartitionRange};
-use super::{alloc_buffer_for_block, helpers};
 use crate::source_disk::PartitionFormat;
 use alloc::vec::Vec;
 use nextboot_fs::BlockIoOps;
