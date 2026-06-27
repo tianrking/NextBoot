@@ -7,6 +7,10 @@
 
 #![allow(dead_code)]
 
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 pub const WIM_HEADER_SIZE: usize = 208;
 pub const WIM_SIGNATURE: &[u8; 8] = b"MSWIM\0\0\0";
 pub const WIM_RESHDR_ZLEN_MASK: u64 = 0x00ff_ffff_ffff_ffff;
@@ -23,6 +27,11 @@ pub const WIM_SECURITY_HEADER_SIZE: usize = 8;
 pub const WIM_ATTR_NORMAL: u32 = 0x0000_0080;
 pub const WIM_NO_SECURITY: u32 = 0xffff_ffff;
 pub const WIM_MAX_U32_RESOURCE_SIZE: u64 = 0xffff_ffff;
+pub const XPRESS_CODE_COUNT: usize = 512;
+pub const XPRESS_LENGTH_TABLE_SIZE: usize = XPRESS_CODE_COUNT / 2;
+pub const XPRESS_END_MARKER: u16 = 256;
+pub const XPRESS_BLOCK_SIZE: usize = 64 * 1024;
+pub const HUFFMAN_BITS: usize = 16;
 
 const HEADER_LEN_OFFSET: usize = 8;
 const VERSION_OFFSET: usize = 12;
@@ -127,11 +136,23 @@ pub enum WimReadError {
     InvalidRange,
     InvalidChunkTable,
     ResourceOutOfBounds,
+    OutputReserveFailed,
+    XpressDecodeFailed(XpressDecodeError),
     UnsupportedCompressedChunk {
         chunk_index: u64,
         compressed_size: u64,
         uncompressed_size: u64,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XpressDecodeError {
+    InputTooShort,
+    InvalidHuffmanLength,
+    IncompleteHuffmanAlphabet,
+    InvalidHuffmanCode,
+    OutputOverflow,
+    InvalidMatchOffset,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,21 +334,37 @@ pub fn read_resource_range(
             .checked_sub(skip)
             .ok_or(WimReadError::InvalidRange)?;
         let copy_len = core::cmp::min(remaining as u64, available);
-        let source_start = chunk
-            .compressed_offset
-            .checked_add(skip)
-            .ok_or(WimReadError::ResourceOutOfBounds)?;
-        let source_start =
-            usize::try_from(source_start).map_err(|_| WimReadError::ResourceOutOfBounds)?;
         let copy_len_usize =
             usize::try_from(copy_len).map_err(|_| WimReadError::ResourceOutOfBounds)?;
-        let source_end = source_start
-            .checked_add(copy_len_usize)
-            .ok_or(WimReadError::ResourceOutOfBounds)?;
-        let source = wim_file
-            .get(source_start..source_end)
-            .ok_or(WimReadError::ResourceOutOfBounds)?;
-        out[output_offset..output_offset + copy_len_usize].copy_from_slice(source);
+        if chunk.is_stored() {
+            let source_start = chunk
+                .compressed_offset
+                .checked_add(skip)
+                .ok_or(WimReadError::ResourceOutOfBounds)?;
+            let source_start =
+                usize::try_from(source_start).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+            let source_end = source_start
+                .checked_add(copy_len_usize)
+                .ok_or(WimReadError::ResourceOutOfBounds)?;
+            let source = wim_file
+                .get(source_start..source_end)
+                .ok_or(WimReadError::ResourceOutOfBounds)?;
+            out[output_offset..output_offset + copy_len_usize].copy_from_slice(source);
+        } else if metadata.compression == WimCompression::Xpress {
+            let decompressed = decompress_xpress_chunk(wim_file, &chunk)?;
+            let skip = usize::try_from(skip).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+            let end = skip
+                .checked_add(copy_len_usize)
+                .ok_or(WimReadError::ResourceOutOfBounds)?;
+            out[output_offset..output_offset + copy_len_usize]
+                .copy_from_slice(&decompressed[skip..end]);
+        } else {
+            return Err(WimReadError::UnsupportedCompressedChunk {
+                chunk_index: chunk.index,
+                compressed_size: chunk.compressed_size,
+                uncompressed_size: chunk.uncompressed_size,
+            });
+        }
 
         remaining -= copy_len_usize;
         output_offset += copy_len_usize;
@@ -405,9 +442,17 @@ fn parse_resource_header(data: &[u8], offset: usize) -> Option<WimResourceHeader
 }
 
 struct WimChunkSpan {
+    index: u64,
     uncompressed_offset: u64,
     uncompressed_size: u64,
     compressed_offset: u64,
+    compressed_size: u64,
+}
+
+impl WimChunkSpan {
+    fn is_stored(&self) -> bool {
+        self.compressed_size == self.uncompressed_size
+    }
 }
 
 fn validate_resource_range(
@@ -455,23 +500,313 @@ fn resource_chunk_span(
         return Err(WimReadError::InvalidChunkTable);
     }
 
-    let compressed_size = chunk_end - chunk_start;
-    if compressed_size != chunk_uncompressed_size {
-        return Err(WimReadError::UnsupportedCompressedChunk {
-            chunk_index,
-            compressed_size,
-            uncompressed_size: chunk_uncompressed_size,
-        });
-    }
-
     Ok(WimChunkSpan {
+        index: chunk_index,
         uncompressed_offset: chunk_uncompressed_offset,
         uncompressed_size: chunk_uncompressed_size,
         compressed_offset: resource
             .offset
             .checked_add(chunk_start)
             .ok_or(WimReadError::ResourceOutOfBounds)?,
+        compressed_size: chunk_end - chunk_start,
     })
+}
+
+fn decompress_xpress_chunk(wim_file: &[u8], chunk: &WimChunkSpan) -> Result<Vec<u8>, WimReadError> {
+    let start =
+        usize::try_from(chunk.compressed_offset).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+    let compressed_size =
+        usize::try_from(chunk.compressed_size).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+    let end = start
+        .checked_add(compressed_size)
+        .ok_or(WimReadError::ResourceOutOfBounds)?;
+    let compressed = wim_file
+        .get(start..end)
+        .ok_or(WimReadError::ResourceOutOfBounds)?;
+    let mut out = Vec::new();
+    let expected =
+        usize::try_from(chunk.uncompressed_size).map_err(|_| WimReadError::ResourceOutOfBounds)?;
+    out.try_reserve_exact(expected)
+        .map_err(|_| WimReadError::OutputReserveFailed)?;
+    out.resize(expected, 0);
+    let produced =
+        decompress_xpress(compressed, &mut out).map_err(WimReadError::XpressDecodeFailed)?;
+    if produced != expected {
+        return Err(WimReadError::XpressDecodeFailed(
+            XpressDecodeError::OutputOverflow,
+        ));
+    }
+    Ok(out)
+}
+
+pub fn decompress_xpress(input: &[u8], out: &mut [u8]) -> Result<usize, XpressDecodeError> {
+    if out.is_empty() {
+        return Ok(0);
+    }
+
+    let mut output_len = 0usize;
+    let mut next_block_at = 0usize;
+    let mut alphabet = XpressHuffman::empty();
+    let mut bitstream = XpressBitstream::empty(input);
+
+    loop {
+        if output_len >= out.len() {
+            return Ok(output_len);
+        }
+
+        if output_len >= next_block_at {
+            let position = bitstream.position;
+            let lengths_end = position
+                .checked_add(XPRESS_LENGTH_TABLE_SIZE)
+                .ok_or(XpressDecodeError::InputTooShort)?;
+            let length_bytes = input
+                .get(position..lengths_end)
+                .ok_or(XpressDecodeError::InputTooShort)?;
+            alphabet = XpressHuffman::from_length_bytes(length_bytes)?;
+            bitstream = XpressBitstream::new(input, lengths_end)?;
+            next_block_at = output_len
+                .checked_add(XPRESS_BLOCK_SIZE)
+                .ok_or(XpressDecodeError::OutputOverflow)?;
+        }
+
+        let (raw, len) = alphabet.decode(bitstream.peek())?;
+        bitstream.consume(len)?;
+
+        if raw < XPRESS_END_MARKER {
+            if output_len >= out.len() {
+                return Err(XpressDecodeError::OutputOverflow);
+            }
+            out[output_len] = raw as u8;
+            output_len += 1;
+            continue;
+        }
+
+        if raw == XPRESS_END_MARKER && bitstream.position >= input.len().saturating_sub(1) {
+            return Ok(output_len);
+        }
+
+        let raw = raw - XPRESS_END_MARKER;
+        let match_offset_bits = raw >> 4;
+        let mut match_len = usize::from(raw & 0x0f);
+        if match_len == 0x0f {
+            match_len = usize::from(bitstream.read_u8()?);
+            if match_len == 0xff {
+                match_len = usize::from(bitstream.read_u16()?);
+            } else {
+                match_len += 0x0f;
+            }
+        }
+        match_len = match_len
+            .checked_add(3)
+            .ok_or(XpressDecodeError::OutputOverflow)?;
+
+        let match_offset = if match_offset_bits == 0 {
+            1usize
+        } else {
+            let bits = u8::try_from(match_offset_bits)
+                .map_err(|_| XpressDecodeError::InvalidHuffmanCode)?;
+            bitstream.read_offset(bits)?
+        };
+
+        if match_offset == 0 || match_offset > output_len {
+            return Err(XpressDecodeError::InvalidMatchOffset);
+        }
+        let end = output_len
+            .checked_add(match_len)
+            .ok_or(XpressDecodeError::OutputOverflow)?;
+        if end > out.len() {
+            return Err(XpressDecodeError::OutputOverflow);
+        }
+        for _ in 0..match_len {
+            let byte = out[output_len - match_offset];
+            out[output_len] = byte;
+            output_len += 1;
+        }
+    }
+}
+
+struct XpressHuffman {
+    counts: [u16; HUFFMAN_BITS + 1],
+    starts: [u32; HUFFMAN_BITS + 1],
+    first_symbol: [usize; HUFFMAN_BITS + 1],
+    symbols: [u16; XPRESS_CODE_COUNT],
+}
+
+impl XpressHuffman {
+    fn empty() -> Self {
+        Self {
+            counts: [0; HUFFMAN_BITS + 1],
+            starts: [0; HUFFMAN_BITS + 1],
+            first_symbol: [0; HUFFMAN_BITS + 1],
+            symbols: [0; XPRESS_CODE_COUNT],
+        }
+    }
+
+    fn from_length_bytes(length_bytes: &[u8]) -> Result<Self, XpressDecodeError> {
+        if length_bytes.len() != XPRESS_LENGTH_TABLE_SIZE {
+            return Err(XpressDecodeError::InputTooShort);
+        }
+
+        let mut out = Self::empty();
+        let mut lengths = [0u8; XPRESS_CODE_COUNT];
+        let mut non_empty = false;
+        for symbol in 0..XPRESS_CODE_COUNT {
+            let byte = length_bytes[symbol / 2];
+            let len = if symbol % 2 == 0 {
+                byte & 0x0f
+            } else {
+                byte >> 4
+            };
+            if usize::from(len) > HUFFMAN_BITS {
+                return Err(XpressDecodeError::InvalidHuffmanLength);
+            }
+            lengths[symbol] = len;
+            if len != 0 {
+                out.counts[usize::from(len)] += 1;
+                non_empty = true;
+            }
+        }
+
+        if !non_empty {
+            return Err(XpressDecodeError::IncompleteHuffmanAlphabet);
+        }
+
+        let mut huf = 0u32;
+        let mut cumulative = 0usize;
+        for bits in 1..=HUFFMAN_BITS {
+            out.starts[bits] = huf << (HUFFMAN_BITS - bits);
+            out.first_symbol[bits] = cumulative;
+            huf = huf
+                .checked_add(u32::from(out.counts[bits]))
+                .ok_or(XpressDecodeError::IncompleteHuffmanAlphabet)?;
+            if huf > (1u32 << bits) {
+                return Err(XpressDecodeError::IncompleteHuffmanAlphabet);
+            }
+            huf <<= 1;
+            cumulative = cumulative
+                .checked_add(usize::from(out.counts[bits]))
+                .ok_or(XpressDecodeError::IncompleteHuffmanAlphabet)?;
+        }
+        if huf != (1u32 << (HUFFMAN_BITS + 1)) {
+            return Err(XpressDecodeError::IncompleteHuffmanAlphabet);
+        }
+
+        let mut cursor = out.first_symbol;
+        for (symbol, len) in lengths.iter().copied().enumerate() {
+            if len == 0 {
+                continue;
+            }
+            let len = usize::from(len);
+            out.symbols[cursor[len]] = symbol as u16;
+            cursor[len] += 1;
+        }
+
+        Ok(out)
+    }
+
+    fn decode(&self, huf: u32) -> Result<(u16, u8), XpressDecodeError> {
+        for bits in 1..=HUFFMAN_BITS {
+            let count = u32::from(self.counts[bits]);
+            if count == 0 {
+                continue;
+            }
+            let shift = HUFFMAN_BITS - bits;
+            let start = self.starts[bits];
+            let end = start + (count << shift);
+            if huf >= start && huf < end {
+                let index = self.first_symbol[bits] + ((huf - start) >> shift) as usize;
+                return Ok((self.symbols[index], bits as u8));
+            }
+        }
+
+        Err(XpressDecodeError::InvalidHuffmanCode)
+    }
+}
+
+struct XpressBitstream<'a> {
+    input: &'a [u8],
+    position: usize,
+    accum: u32,
+    extra_bits: i32,
+}
+
+impl<'a> XpressBitstream<'a> {
+    fn empty(input: &'a [u8]) -> Self {
+        Self {
+            input,
+            position: 0,
+            accum: 0,
+            extra_bits: 0,
+        }
+    }
+
+    fn new(input: &'a [u8], position: usize) -> Result<Self, XpressDecodeError> {
+        let mut out = Self {
+            input,
+            position,
+            accum: 0,
+            extra_bits: 16,
+        };
+        let high = u32::from(out.read_u16()?);
+        let low = u32::from(out.read_u16()?);
+        out.accum = (high << 16) | low;
+        Ok(out)
+    }
+
+    fn peek(&self) -> u32 {
+        self.accum >> (32 - HUFFMAN_BITS)
+    }
+
+    fn consume(&mut self, bits: u8) -> Result<(), XpressDecodeError> {
+        if bits == 0 || usize::from(bits) > HUFFMAN_BITS {
+            return Err(XpressDecodeError::InvalidHuffmanCode);
+        }
+        self.accum <<= u32::from(bits);
+        self.extra_bits -= i32::from(bits);
+        if self.extra_bits < 0 {
+            let shift = u32::try_from(-self.extra_bits)
+                .map_err(|_| XpressDecodeError::InvalidHuffmanCode)?;
+            let word = u32::from(self.read_u16()?);
+            self.accum |= word << shift;
+            self.extra_bits += 16;
+        }
+        Ok(())
+    }
+
+    fn read_offset(&mut self, bits: u8) -> Result<usize, XpressDecodeError> {
+        if bits == 0 || usize::from(bits) > HUFFMAN_BITS {
+            return Err(XpressDecodeError::InvalidHuffmanCode);
+        }
+        let value = (self.accum >> (32 - u32::from(bits))) + (1u32 << bits);
+        self.accum <<= u32::from(bits);
+        self.extra_bits -= i32::from(bits);
+        if self.extra_bits < 0 {
+            let shift = u32::try_from(-self.extra_bits)
+                .map_err(|_| XpressDecodeError::InvalidHuffmanCode)?;
+            let word = u32::from(self.read_u16()?);
+            self.accum |= word << shift;
+            self.extra_bits += 16;
+        }
+        usize::try_from(value).map_err(|_| XpressDecodeError::InvalidHuffmanCode)
+    }
+
+    fn read_u8(&mut self) -> Result<u8, XpressDecodeError> {
+        let byte = *self
+            .input
+            .get(self.position)
+            .ok_or(XpressDecodeError::InputTooShort)?;
+        self.position += 1;
+        Ok(byte)
+    }
+
+    fn read_u16(&mut self) -> Result<u16, XpressDecodeError> {
+        let bytes = self
+            .input
+            .get(self.position..self.position + 2)
+            .ok_or(XpressDecodeError::InputTooShort)?;
+        self.position += 2;
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+    }
 }
 
 fn resource_chunk_data_offset(
@@ -931,8 +1266,45 @@ mod tests {
     }
 
     #[test]
-    fn reports_compressed_chunks_until_decompressors_are_available() {
+    fn decompresses_xpress_literal_stream() {
+        let compressed = make_xpress_literal_stream(b"next");
+        let mut out = [0u8; 4];
+
+        assert_eq!(decompress_xpress(&compressed, &mut out), Ok(4));
+        assert_eq!(&out, b"next");
+    }
+
+    #[test]
+    fn decompresses_sparse_xpress_literal_stream() {
+        let compressed = make_sparse_xpress_literal_stream(b'A');
+        let mut out = [0u8; 1];
+
+        assert_eq!(decompress_xpress(&compressed, &mut out), Ok(1));
+        assert_eq!(&out, b"A");
+    }
+
+    #[test]
+    fn reads_xpress_chunks_from_compressed_resource() {
         let metadata = make_wim_metadata_with_chunk_len(4);
+        let compressed = make_xpress_literal_stream(b"wxyz");
+        let mut wim_file = alloc::vec![0u8; 16 + compressed.len()];
+        wim_file[16..].copy_from_slice(&compressed);
+        let resource = WimResourceHeader {
+            compressed_size: compressed.len() as u64,
+            flags: WIM_RESHDR_COMPRESSED,
+            offset: 16,
+            uncompressed_size: 4,
+        };
+        let mut out = [0u8; 2];
+
+        read_resource_range(&metadata, &wim_file, &resource, 1, &mut out).expect("xpress chunk");
+
+        assert_eq!(&out, b"xy");
+    }
+
+    #[test]
+    fn reports_lzx_chunks_until_lzx_decoder_is_available() {
+        let metadata = make_wim_metadata_with_flags(WIM_HDR_LZX, 4);
         let mut wim_file = [0u8; 64];
         let resource = WimResourceHeader {
             compressed_size: 17,
@@ -1010,9 +1382,62 @@ mod tests {
     }
 
     fn make_wim_metadata_with_chunk_len(chunk_len: u32) -> WimMetadata {
-        let mut header = make_wim_header(WIM_HDR_XPRESS, 1, 1);
+        make_wim_metadata_with_flags(WIM_HDR_XPRESS, chunk_len)
+    }
+
+    fn make_wim_metadata_with_flags(flags: u32, chunk_len: u32) -> WimMetadata {
+        let mut header = make_wim_header(flags, 1, 1);
         write_le_u32(&mut header, CHUNK_LEN_OFFSET, chunk_len);
         parse_wim_metadata(&header).expect("metadata")
+    }
+
+    fn make_xpress_literal_stream(bytes: &[u8]) -> Vec<u8> {
+        let mut out = alloc::vec![0x99u8; XPRESS_LENGTH_TABLE_SIZE];
+        let mut bits = Vec::new();
+        for byte in bytes {
+            push_bits(&mut bits, u16::from(*byte), 9);
+        }
+        push_bits(&mut bits, XPRESS_END_MARKER, 9);
+        while bits.len() < 32 || bits.len() % 16 != 0 {
+            bits.push(0);
+        }
+        for _ in 0..16 {
+            bits.push(0);
+        }
+
+        for chunk in bits.chunks_exact(16) {
+            let mut word = 0u16;
+            for bit in chunk {
+                word = (word << 1) | u16::from(*bit);
+            }
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+
+        out
+    }
+
+    fn make_sparse_xpress_literal_stream(byte: u8) -> Vec<u8> {
+        let mut out = alloc::vec![0u8; XPRESS_LENGTH_TABLE_SIZE];
+        set_xpress_code_len(&mut out, usize::from(byte), 1);
+        set_xpress_code_len(&mut out, usize::from(XPRESS_END_MARKER), 1);
+        out.extend_from_slice(&0x4000u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out
+    }
+
+    fn set_xpress_code_len(lengths: &mut [u8], symbol: usize, len: u8) {
+        let slot = &mut lengths[symbol / 2];
+        if symbol % 2 == 0 {
+            *slot = (*slot & 0xf0) | (len & 0x0f);
+        } else {
+            *slot = (*slot & 0x0f) | ((len & 0x0f) << 4);
+        }
+    }
+
+    fn push_bits(bits: &mut Vec<u8>, value: u16, count: usize) {
+        for index in (0..count).rev() {
+            bits.push(((value >> index) & 1) as u8);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
