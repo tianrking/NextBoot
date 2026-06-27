@@ -3,7 +3,7 @@
 #
 # Creates GPT test disk images with NextBoot installed as the removable/fallback
 # UEFI bootloader.  Split layouts use a FAT32 ESP plus an exFAT, FAT32, or NTFS
-# Data partition so fixed-disk, NVMe, SATA, USB, and virtio paths can be tested
+# Data partition so fixed-disk, NVMe, SATA, USB, SD, and virtio paths can be tested
 # without rewriting real media.
 #
 # Usage:
@@ -244,8 +244,8 @@ case "$LAYOUT" in
 esac
 
 case "$DATA_FS" in
-    exfat|fat32|ntfs) ;;
-    *) die "--data-fs must be exfat, fat32, or ntfs" ;;
+    exfat|fat32|ntfs|udf) ;;
+    *) die "--data-fs must be exfat, fat32, ntfs, or udf" ;;
 esac
 
 if [ "$LAYOUT" = "single" ] && [ "$DATA_FS" != "exfat" ]; then

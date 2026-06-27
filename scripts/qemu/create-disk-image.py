@@ -11,6 +11,7 @@ import zlib
 from disk_image.exfat import write_exfat_volume
 from disk_image.fat32 import write_fat32_volume
 from disk_image.ntfs import write_ntfs_volume
+from disk_image.udf import write_udf_volume
 from disk_image.smoke import (
     make_smoke_auto_memdisk_files,
     make_smoke_linux_plugin_files,
@@ -34,8 +35,8 @@ if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
     raise SystemExit("layout must be single or split")
-if data_fs not in ("exfat", "fat32", "ntfs"):
-    raise SystemExit("data filesystem must be exfat, fat32, or ntfs")
+if data_fs not in ("exfat", "fat32", "ntfs", "udf"):
+    raise SystemExit("data filesystem must be exfat, fat32, ntfs, or udf")
 total_bytes = size_mb * 1024 * 1024
 if total_bytes % sector_size != 0:
     raise SystemExit("disk size must be aligned to the sector size")
@@ -238,6 +239,9 @@ def make_partition(name, label, fs_type, type_guid, start_lba, end_lba, include_
         exfat_geometry(part_sectors)
     elif fs_type == "ntfs":
         ntfs_geometry(part_sectors)
+    elif fs_type == "udf":
+        if part_sectors <= 512:
+            raise SystemExit("partition is too small for UDF")
     else:
         raise SystemExit(f"unsupported test partition filesystem: {fs_type}")
     return {
@@ -431,5 +435,7 @@ with open(path, "wb") as f:
             write_exfat_volume(f, part, volume_deps)
         elif part["fs_type"] == "ntfs":
             write_ntfs_volume(f, part, volume_deps)
+        elif part["fs_type"] == "udf":
+            write_udf_volume(f, part, volume_deps)
         else:
             write_fat32_volume(f, part, volume_deps)
