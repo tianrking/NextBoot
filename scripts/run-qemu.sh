@@ -14,6 +14,7 @@
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --image ~/Downloads/ubuntu.iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
 #   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
+#   ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
 #   ./scripts/run-qemu.sh --bus usb --mode release --no-run
 
 set -eo pipefail
@@ -42,6 +43,7 @@ SMOKE_BOOT=0
 SMOKE_EFI_ISO=0
 SMOKE_WINDOWS_ISO=0
 SMOKE_LINUX_ISO=0
+SMOKE_LINUX_PLUGINS=0
 SMOKE_TIMEOUT=20
 MEMORY="1024M"
 IMAGES=()
@@ -71,6 +73,8 @@ Options:
   --smoke-windows-iso
                      Generate a Windows-style smoke ISO and verify bootmgfw starts
   --smoke-linux-iso  Generate a Linux-style smoke ISO and verify EFI stub/initrd starts
+  --smoke-linux-plugins
+                     Generate Linux smoke ISO plus Ventoy plugin payloads
   --smoke-timeout S  Seconds to wait for --smoke markers (default: 20)
   --no-run           Create the disk image and print the QEMU command only
   -h, --help         Show this help
@@ -82,6 +86,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --image ~/Downloads/Win11.iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
   $0 --bus usb --no-run
 USAGE
 }
@@ -186,6 +191,14 @@ while [ $# -gt 0 ]; do
             SMOKE_BOOT=1
             SMOKE_EFI_ISO=1
             SMOKE_LINUX_ISO=1
+            shift
+            ;;
+        --smoke-linux-plugins)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_EFI_ISO=1
+            SMOKE_LINUX_ISO=1
+            SMOKE_LINUX_PLUGINS=1
             shift
             ;;
         --smoke-timeout)
@@ -334,7 +347,15 @@ info "Disk image: ${DISK_IMG}"
 require_command python3 "python3 is required to create the GPT disk image"
 
 warn "Creating ${LAYOUT} GPT test disk image..."
-PY_ARGS=("$DISK_IMG" "$DISK_SIZE_MB" "$SECTOR_SIZE" "$LAYOUT" "$DATA_FS" "$EFI_FILE")
+PY_ARGS=(
+    "$DISK_IMG"
+    "$DISK_SIZE_MB"
+    "$SECTOR_SIZE"
+    "$LAYOUT"
+    "$DATA_FS"
+    "$EFI_FILE"
+    "$SMOKE_LINUX_PLUGINS"
+)
 if [ "${#IMAGES[@]}" -gt 0 ]; then
     PY_ARGS+=("${IMAGES[@]}")
 fi
@@ -353,7 +374,8 @@ sector_size = int(sys.argv[3])
 layout = sys.argv[4]
 data_fs = sys.argv[5]
 efi_file = sys.argv[6]
-image_files = sys.argv[7:]
+smoke_linux_plugins = sys.argv[7] == "1"
+image_files = sys.argv[8:]
 if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
@@ -402,6 +424,68 @@ def split_name(name):
     else:
         base, ext = name, ""
     return base, ext
+
+def split_virtual_path(path):
+    parts = [part for part in path.replace("\\", "/").split("/") if part]
+    if not parts:
+        raise SystemExit(f"invalid virtual path: {path}")
+    return parts
+
+def make_smoke_linux_plugin_files(images):
+    linux_image = next(
+        (
+            os.path.basename(image)
+            for image in images
+            if "linux" in os.path.basename(image).lower()
+        ),
+        "nextboot-smoke-linux.iso",
+    )
+    image_path = f"/ISO/{linux_image}"
+    ventoy_json = f"""{{
+  "auto_install": [
+    {{
+      "image": "{image_path}",
+      "template": "/ventoy/autoinstall/linux.ks",
+      "autosel": 1
+    }}
+  ],
+  "persistence": [
+    {{
+      "image": "{image_path}",
+      "backend": "/persistence/nextboot-linux.dat",
+      "autosel": 1
+    }}
+  ],
+  "injection": [
+    {{
+      "image": "{image_path}",
+      "archive": "/ventoy/injection/tools.tar"
+    }}
+  ],
+  "dud": [
+    {{
+      "image": "{image_path}",
+      "dud": ["/ventoy/dud/dd.iso"]
+    }}
+  ]
+}}
+""".encode("utf-8")
+    persistence_data = b"NEXTBOOT SMOKE PERSISTENCE\n"
+    return [
+        ("/ventoy/ventoy.json", ventoy_json),
+        (
+            "/ventoy/autoinstall/linux.ks",
+            b"# NextBoot smoke auto-install template\nlang en_US.UTF-8\n",
+        ),
+        ("/ventoy/injection/tools.tar", b"NEXTBOOT SMOKE INJECTION ARCHIVE\n"),
+        ("/ventoy/dud/dd.iso", b"NEXTBOOT SMOKE DUD IMAGE\n"),
+        (
+            "/persistence/nextboot-linux.dat",
+            persistence_data + bytes(8192 - len(persistence_data)),
+        ),
+    ]
+
+extra_files = make_smoke_linux_plugin_files(image_files) if smoke_linux_plugins else []
 
 def make_short_name(name, used):
     base, ext = split_name(name)
@@ -661,6 +745,16 @@ def write_fat32_volume(f, part):
         first = chain[0] if chain else 0
         target_dir.add(target_name, 0x20, first, size)
 
+    def copy_bytes(data, target_dir, target_name):
+        size = len(data)
+        clusters_needed = math.ceil(size / cluster_size) if size else 0
+        chain = allocate_chain(clusters_needed)
+        for index, cluster in enumerate(chain):
+            start = index * cluster_size
+            write_cluster(cluster, data[start : start + cluster_size])
+        first = chain[0] if chain else 0
+        target_dir.add(target_name, 0x20, first, size)
+
     def flush_directory(directory):
         content = b"".join(directory.entries)
         needed = max(1, math.ceil((len(content) + 32) / cluster_size))
@@ -686,21 +780,35 @@ def write_fat32_volume(f, part):
 
     root = Directory(allocate_cluster())
     directories = [root]
+    dirs_by_path = {"/": root}
+
+    def ensure_directory(path):
+        current = root
+        current_path = "/"
+        components = [] if path in ("", "/") else split_virtual_path(path)
+        for component in components:
+            next_path = current_path.rstrip("/") + "/" + component
+            if next_path not in dirs_by_path:
+                directory = Directory(allocate_cluster())
+                current.add(component, 0x10, directory.first_cluster, 0)
+                dirs_by_path[next_path] = directory
+                directories.append(directory)
+            current = dirs_by_path[next_path]
+            current_path = next_path
+        return current
 
     if part["include_efi"]:
-        efi = Directory(allocate_cluster())
-        boot = Directory(allocate_cluster())
+        boot = ensure_directory("/EFI/BOOT")
         copy_file(efi_file, boot, "BOOTX64.EFI")
-        efi.add("BOOT", 0x10, boot.first_cluster, 0)
-        root.add("EFI", 0x10, efi.first_cluster, 0)
-        directories.extend([efi, boot])
 
     if part["include_images"]:
-        iso = Directory(allocate_cluster())
+        iso = ensure_directory("/ISO")
         for image in image_files:
             copy_file(image, iso, os.path.basename(image))
-        root.add("ISO", 0x10, iso.first_cluster, 0)
-        directories.append(iso)
+        for virtual_path, data in extra_files:
+            parts = split_virtual_path(virtual_path)
+            target_dir = ensure_directory("/" + "/".join(parts[:-1]))
+            copy_bytes(data, target_dir, parts[-1])
 
     for directory in directories:
         flush_directory(directory)
@@ -835,6 +943,13 @@ def write_exfat_volume(f, part):
                 write_cluster(cluster, src.read(cluster_size))
         return (chain[0] if chain else 0, size)
 
+    def copy_bytes(data):
+        size = len(data)
+        clusters_needed = math.ceil(size / cluster_size) if size else 0
+        chain = allocate_chain(clusters_needed)
+        write_chain(chain, data)
+        return (chain[0] if chain else 0, size)
+
     def write_directory(entry_sets):
         content = b"".join(entry_sets)
         clusters_needed = max(1, math.ceil((len(content) + 32) / cluster_size))
@@ -845,29 +960,48 @@ def write_exfat_volume(f, part):
     set_fat(0, 0xFFFFFFF8)
     set_fat(1, 0xFFFFFFFF)
 
-    root_entries = []
+    class TreeDirectory:
+        def __init__(self):
+            self.directories = {}
+            self.files = []
+
+    root = TreeDirectory()
+
+    def ensure_tree_directory(path):
+        current = root
+        components = [] if path in ("", "/") else split_virtual_path(path)
+        for component in components:
+            current = current.directories.setdefault(component, TreeDirectory())
+        return current
+
+    def add_tree_file(path, source=None, data=None):
+        parts = split_virtual_path(path)
+        directory = ensure_tree_directory("/" + "/".join(parts[:-1]))
+        directory.files.append((parts[-1], source, data))
 
     if part["include_efi"]:
-        efi_file_cluster, efi_file_size = copy_file(efi_file)
-        boot_entries = [
-            exfat_entry_set("BOOTX64.EFI", 0x0020, efi_file_cluster, efi_file_size, True)
-        ]
-        boot_cluster, boot_size = write_directory(boot_entries)
-        efi_entries = [exfat_entry_set("BOOT", 0x0010, boot_cluster, boot_size, False)]
-        efi_cluster, efi_size = write_directory(efi_entries)
-        root_entries.append(exfat_entry_set("EFI", 0x0010, efi_cluster, efi_size, False))
+        add_tree_file("/EFI/BOOT/BOOTX64.EFI", source=efi_file)
 
     if part["include_images"]:
-        iso_entries = []
         for image in image_files:
-            file_cluster, file_size = copy_file(image)
-            iso_entries.append(
-                exfat_entry_set(os.path.basename(image), 0x0020, file_cluster, file_size, True)
-            )
-        iso_cluster, iso_size = write_directory(iso_entries)
-        root_entries.append(exfat_entry_set("ISO", 0x0010, iso_cluster, iso_size, False))
+            add_tree_file(f"/ISO/{os.path.basename(image)}", source=image)
+        for virtual_path, data in extra_files:
+            add_tree_file(virtual_path, data=data)
 
-    root_cluster, _root_size = write_directory(root_entries)
+    def write_tree_directory(directory):
+        entry_sets = []
+        for name, child in directory.directories.items():
+            child_cluster, child_size = write_tree_directory(child)
+            entry_sets.append(exfat_entry_set(name, 0x0010, child_cluster, child_size, False))
+        for name, source, data in directory.files:
+            if source is not None:
+                file_cluster, file_size = copy_file(source)
+            else:
+                file_cluster, file_size = copy_bytes(data or b"")
+            entry_sets.append(exfat_entry_set(name, 0x0020, file_cluster, file_size, True))
+        return write_directory(entry_sets)
+
+    root_cluster, _root_size = write_tree_directory(root)
 
     bytes_per_sector_shift = log2_power_of_two(sector_size)
     sectors_per_cluster_shift = log2_power_of_two(sectors_per_cluster)
@@ -1107,6 +1241,15 @@ if [ "$SMOKE" -eq 1 ]; then
                         --expect "Trying Linux EFI stub EFI loader path: /boot/vmlinuz"
                         --expect "Loaded EFI image"
                     )
+                    if [ "$SMOKE_LINUX_PLUGINS" -eq 1 ]; then
+                        EXPECT_ARGS+=(
+                            --expect "Mapped Ventoy persistence backend /persistence/nextboot-linux.dat"
+                            --expect "auto_install=true"
+                            --expect "persistence=1"
+                            --expect "injection=true"
+                            --expect "dud_files=1"
+                        )
+                    fi
                 else
                     EXPECT_ARGS+=(--expect "Loaded EFI image")
                 fi

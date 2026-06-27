@@ -119,6 +119,9 @@ CARGO="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo" \
 # 自动生成 Linux 风格 ISO，并断言 EFI stub/initrd LoadFile2 分支被启动
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
 
+# 自动生成 Linux ISO 和 Ventoy 插件载荷，并断言 persistence/injection/DUD/autoinstall 进入 initrd
+./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
+
 # 只生成 GPT/FAT32 测试盘，不启动虚拟机
 ./scripts/run-qemu.sh --bus sata --no-run
 ```
@@ -137,8 +140,10 @@ El Torito boot catalog、内含 `/EFI/BOOT/BOOTX64.EFI` 的最小 ISO，并继�
 loader 被链式启动；`--smoke-windows-iso` 会生成 Windows 风格 ISO，验证 Windows/WinPE
 的 DVD-ROM 虚拟设备与 `/efi/microsoft/boot/bootmgfw.efi` 链式启动路径；
 `--smoke-linux-iso` 会生成不含 `/EFI/BOOT/BOOTX64.EFI` 的 Linux 风格 ISO，验证内核
-候选发现、initrd LoadFile2 provider 和 EFI stub 启动路径；必要时可用 `--skip-verify`
-跳过镜像结构检查。
+候选发现、initrd LoadFile2 provider 和 EFI stub 启动路径；`--smoke-linux-plugins`
+会额外生成 `/ventoy/ventoy.json`、自动安装模板、注入包、DUD 镜像和 persistence 后端，
+验证 Ventoy Linux initrd overlay 能加载这些插件载荷；必要时可用 `--skip-verify` 跳过
+镜像结构检查。
 
 ### 写入 U 盘
 

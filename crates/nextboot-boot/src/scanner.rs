@@ -578,6 +578,9 @@ impl<'a> IsoScanner<'a> {
     ) -> uefi::Result<Vec<IsoFile>> {
         let mut root = fs.open_volume()?;
         let normalized = normalize_scan_path(path);
+        if is_ventoy_plugin_tree_path(&normalized) {
+            return Ok(Vec::new());
+        }
         let mut dir = if normalized == "/" {
             root
         } else {
@@ -1080,6 +1083,9 @@ impl<'a> IsoScanner<'a> {
         files: &mut Vec<IsoFile>,
     ) -> Result<(), FsError> {
         let normalized = normalize_scan_path(display_path);
+        if is_ventoy_plugin_tree_path(&normalized) {
+            return Ok(());
+        }
         let entries = fs.read_dir(&normalized)?;
 
         for entry in entries {
@@ -1091,6 +1097,7 @@ impl<'a> IsoScanner<'a> {
             if entry.is_dir {
                 if !should_descend_into_directory(depth, max_search_level)
                     || is_hidden_tree(&entry.name)
+                    || is_ventoy_plugin_tree_path(&full_path)
                 {
                     continue;
                 }
@@ -1205,6 +1212,10 @@ impl<'a> IsoScanner<'a> {
         depth: usize,
         files: &mut Vec<IsoFile>,
     ) -> uefi::Result<()> {
+        if is_ventoy_plugin_tree_path(display_path) {
+            return Ok(());
+        }
+
         while let Some(entry) = dir.read_entry_boxed()? {
             let name = cstr16_to_string(entry.file_name());
 
@@ -1215,7 +1226,9 @@ impl<'a> IsoScanner<'a> {
             let full_path = join_display_path(display_path, &name);
 
             if entry.is_directory() {
-                if !should_descend_into_directory(depth, max_search_level) || is_hidden_tree(&name)
+                if !should_descend_into_directory(depth, max_search_level)
+                    || is_hidden_tree(&name)
+                    || is_ventoy_plugin_tree_path(&full_path)
                 {
                     continue;
                 }
@@ -2366,6 +2379,14 @@ mod tests {
         assert_eq!(partitions[0].block_count, 48);
         assert_eq!(partitions[0].format, PartitionFormat::Gpt);
     }
+
+    #[test]
+    fn treats_ventoy_plugin_directory_as_non_image_tree() {
+        assert!(is_ventoy_plugin_tree_path("/ventoy"));
+        assert!(is_ventoy_plugin_tree_path("/Ventoy/dud/dd.iso"));
+        assert!(!is_ventoy_plugin_tree_path("/ISO/ventoy-linux.iso"));
+        assert!(!is_ventoy_plugin_tree_path("/persistence/ventoy.dat"));
+    }
 }
 
 fn has_mbr_signature(block: &[u8]) -> bool {
@@ -2768,6 +2789,13 @@ fn is_hidden_tree(name: &str) -> bool {
         name,
         "$RECYCLE.BIN" | "System Volume Information" | ".Trash" | ".Spotlight-V100" | ".fseventsd"
     )
+}
+
+fn is_ventoy_plugin_tree_path(path: &str) -> bool {
+    path.trim_matches('/')
+        .split('/')
+        .next()
+        .is_some_and(|part| part.eq_ignore_ascii_case("ventoy"))
 }
 
 fn is_dot_underscore_file(name: &str) -> bool {
