@@ -5,6 +5,7 @@
 use crate::init::StorageDevice;
 use crate::vdi;
 use crate::vhdx;
+use crate::wim;
 use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -53,6 +54,8 @@ pub struct IsoFile {
     pub image_format: ImageFormat,
     /// ISO 内的 EFI El Torito 启动镜像信息
     pub boot_info: Option<IsoBootInfo>,
+    /// WIM/ESD 启动元数据。
+    pub wim_info: Option<WimBootInfo>,
 }
 
 /// ISO 文件在所在卷上的物理区段。
@@ -93,6 +96,61 @@ impl From<ElToritoBootInfo> for IsoBootInfo {
     }
 }
 
+/// WIM/ESD 启动元数据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WimBootInfo {
+    pub header_len: u32,
+    pub version: u32,
+    pub flags: u32,
+    pub compression: WimCompression,
+    pub chunk_len: u32,
+    pub image_count: u32,
+    pub boot_index: u32,
+    pub boot_index_in_range: bool,
+    pub wimboot_supported: bool,
+}
+
+impl WimBootInfo {
+    pub fn is_bootable(&self) -> bool {
+        self.boot_index != 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WimCompression {
+    None,
+    Xpress,
+    Lzx,
+    Lzms,
+}
+
+impl From<wim::WimCompression> for WimCompression {
+    fn from(compression: wim::WimCompression) -> Self {
+        match compression {
+            wim::WimCompression::None => Self::None,
+            wim::WimCompression::Xpress => Self::Xpress,
+            wim::WimCompression::Lzx => Self::Lzx,
+            wim::WimCompression::Lzms => Self::Lzms,
+        }
+    }
+}
+
+impl From<wim::WimMetadata> for WimBootInfo {
+    fn from(metadata: wim::WimMetadata) -> Self {
+        Self {
+            header_len: metadata.header_len,
+            version: metadata.version,
+            flags: metadata.flags,
+            compression: metadata.compression.into(),
+            chunk_len: metadata.chunk_len,
+            image_count: metadata.image_count,
+            boot_index: metadata.boot_index,
+            boot_index_in_range: metadata.boot_index_in_range(),
+            wimboot_supported: metadata.is_wimboot_supported(),
+        }
+    }
+}
+
 impl From<FileExtent> for IsoExtent {
     fn from(extent: FileExtent) -> Self {
         Self {
@@ -101,6 +159,16 @@ impl From<FileExtent> for IsoExtent {
             block_count: extent.block_count,
         }
     }
+}
+
+struct ResolvedImageMetadata {
+    block_size: u32,
+    extents: Vec<IsoExtent>,
+    boot_info: Option<IsoBootInfo>,
+    wim_info: Option<WimBootInfo>,
+    image_format: ImageFormat,
+    virtual_size: u64,
+    virtual_block_size: Option<u32>,
 }
 
 /// 可启动镜像格式。
@@ -159,6 +227,10 @@ impl ImageFormat {
 
     pub fn is_efi_executable(self) -> bool {
         self == Self::EfiExecutable
+    }
+
+    pub fn is_wim_container(self) -> bool {
+        matches!(self, Self::Wim | Self::Esd)
     }
 
     pub fn supports_virtual_disk_boot(self) -> bool {
@@ -336,6 +408,23 @@ impl<'a> IsoScanner<'a> {
         OsType::detect_from_path(path)
     }
 
+    fn detect_image_os_type(
+        &self,
+        path: &str,
+        image_format: ImageFormat,
+        wim_info: Option<WimBootInfo>,
+    ) -> OsType {
+        if image_format.is_wim_container() {
+            if let Some(info) = wim_info {
+                if info.is_bootable() {
+                    return OsType::WinPE;
+                }
+            }
+        }
+
+        self.detect_iso_type(path)
+    }
+
     fn scan_volume_path(
         &self,
         volume_index: usize,
@@ -408,29 +497,32 @@ impl<'a> IsoScanner<'a> {
 
             if has_supported_extension(&name, extensions) {
                 let image_format = ImageFormat::detect_from_path(&full_path);
-                let (
+                let ResolvedImageMetadata {
                     block_size,
                     extents,
                     boot_info,
+                    wim_info,
                     image_format,
                     virtual_size,
                     virtual_block_size,
-                ) = self
+                } = self
                     .resolve_image_metadata(
                         volume_handle,
                         &full_path,
                         entry.file_size(),
                         image_format,
                     )
-                    .unwrap_or((
-                        self.device.block_size,
-                        Vec::new(),
-                        None,
+                    .unwrap_or_else(|| ResolvedImageMetadata {
+                        block_size: self.device.block_size,
+                        extents: Vec::new(),
+                        boot_info: None,
+                        wim_info: None,
                         image_format,
-                        entry.file_size(),
-                        default_virtual_block_size(image_format),
-                    ));
+                        virtual_size: entry.file_size(),
+                        virtual_block_size: default_virtual_block_size(image_format),
+                    });
                 let start_lba = extents.first().map_or(0, |extent| extent.physical_lba);
+                let os_type = self.detect_image_os_type(&full_path, image_format, wim_info);
 
                 files.push(IsoFile {
                     path: full_path.clone(),
@@ -442,9 +534,10 @@ impl<'a> IsoScanner<'a> {
                     block_size,
                     start_lba,
                     extents,
-                    os_type: self.detect_iso_type(&full_path),
+                    os_type,
                     image_format,
                     boot_info,
+                    wim_info,
                 });
             }
         }
@@ -458,14 +551,7 @@ impl<'a> IsoScanner<'a> {
         path: &str,
         size: u64,
         image_format: ImageFormat,
-    ) -> Option<(
-        u32,
-        Vec<IsoExtent>,
-        Option<IsoBootInfo>,
-        ImageFormat,
-        u64,
-        Option<u32>,
-    )> {
+    ) -> Option<ResolvedImageMetadata> {
         let block_io = self
             .bt
             .open_protocol_exclusive::<BlockIO>(volume_handle)
@@ -499,15 +585,21 @@ impl<'a> IsoScanner<'a> {
         } else {
             None
         };
+        let wim_info = if image_format.is_wim_container() {
+            self.read_wim_boot_info(&block_io, block_size, size, &extents)
+        } else {
+            None
+        };
 
-        Some((
+        Some(ResolvedImageMetadata {
             block_size,
             extents,
             boot_info,
+            wim_info,
             image_format,
             virtual_size,
             virtual_block_size,
-        ))
+        })
     }
 
     fn detect_image_virtual_metadata(
@@ -624,6 +716,24 @@ impl<'a> IsoScanner<'a> {
             vdi::VDI_HEADER_SIZE,
         )?;
         vdi::parse_vdi_metadata(&header)
+    }
+
+    fn read_wim_boot_info(
+        &self,
+        block_io: &BlockIO,
+        source_block_size: u32,
+        file_size: u64,
+        extents: &[IsoExtent],
+    ) -> Option<WimBootInfo> {
+        let header = self.read_image_bytes(
+            block_io,
+            source_block_size,
+            file_size,
+            extents,
+            0,
+            wim::WIM_HEADER_SIZE,
+        )?;
+        wim::parse_wim_metadata(&header).map(WimBootInfo::from)
     }
 
     fn read_image_tail(

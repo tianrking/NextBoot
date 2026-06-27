@@ -23,6 +23,7 @@ mod scanner;
 mod vdi;
 mod vhdx;
 mod virtual_fs;
+mod wim;
 
 use boot::BootManager;
 use init::StorageDevice;
@@ -110,14 +111,24 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
 
     info!("Found {} ISO file(s)", iso_files.len());
     for (i, iso) in iso_files.iter().enumerate() {
+        let wim_detail = iso
+            .wim_info
+            .map(|info| {
+                format!(
+                    " wim_boot={} compression={:?} wimboot_supported={}",
+                    info.boot_index, info.compression, info.wimboot_supported
+                )
+            })
+            .unwrap_or_default();
         info!(
-            "  [{}] vol{}:{} [{}] file={} virtual={}",
+            "  [{}] vol{}:{} [{}] file={} virtual={}{}",
             i,
             iso.volume_index,
             iso.path,
             iso.image_format,
             format_size(iso.size),
-            format_size(iso.virtual_size)
+            format_size(iso.virtual_size),
+            wim_detail
         );
     }
 
