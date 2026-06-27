@@ -1,5 +1,6 @@
 use super::errors::{fs_error_to_uefi_status, virtio_error_to_fs_error};
 use super::normalize_iso_path;
+use super::wimboot_runtime::WimbootMappedSegment;
 use crate::scanner::IsoExtent;
 use crate::source_disk::{source_volume_range, SourceDiskIdentity};
 use alloc::rc::Rc;
@@ -157,7 +158,7 @@ pub(super) struct SourceVolumeFile {
 pub(super) struct IsoMappedFileMetadata {
     pub(super) path: String,
     pub(super) size: u64,
-    pub(super) segments: Vec<super::WimbootMappedSegment>,
+    pub(super) segments: Vec<WimbootMappedSegment>,
 }
 
 pub(super) struct SourceVolumeFileMetadata {
