@@ -13,6 +13,7 @@ use crate::virtual_fs::{
 use crate::wimboot::{self, WimbootCallbacks, WimbootVirtualFile};
 use crate::xz::{self, XzDecodeError};
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -131,6 +132,95 @@ const WIMBOOT_BOOT_SDI_CALLBACK_PATH: &str = "nb-boot-sdi";
 const WIMBOOT_SELF_CALLBACK_PATH: &str = "nb-wimboot";
 const WIMBOOT_XZ_MAX_OUTPUT_SIZE: usize = 2 * 1024 * 1024;
 const VENTOY_COMMON_CPIO_CANDIDATES: &[&str] = &["/ventoy/ventoy.cpio"];
+const LINUX_CONFIG_MAX_SIZE: usize = 512 * 1024;
+const LINUX_GRUB_CONFIG_CANDIDATES: &[&str] = &[
+    "/boot/grub/grub.cfg",
+    "/boot/grub/loopback.cfg",
+    "/grub/grub.cfg",
+    "/EFI/BOOT/grub.cfg",
+    "/efi/boot/grub.cfg",
+    "/boot/grub/kernels.cfg",
+];
+const LINUX_ISOLINUX_CONFIG_CANDIDATES: &[&str] = &[
+    "/isolinux/isolinux.cfg",
+    "/isolinux/syslinux.cfg",
+    "/syslinux/syslinux.cfg",
+    "/boot/isolinux/isolinux.cfg",
+    "/boot/syslinux/syslinux.cfg",
+    "/boot/isolinux/syslinux.cfg",
+];
+const LINUX_LOADER_ENTRY_DIRS: &[&str] = &["/loader/entries", "/boot/loader/entries"];
+const LINUX_KERNEL_CANDIDATES: &[&str] = &[
+    "/casper/vmlinuz",
+    "/casper/vmlinuz.efi",
+    "/live/vmlinuz",
+    "/boot/vmlinuz",
+    "/boot/vmlinuz-x86_64",
+    "/arch/boot/x86_64/vmlinuz-linux",
+    "/blackarch/boot/x86_64/vmlinuz-linux",
+    "/images/pxeboot/vmlinuz",
+    "/boot/x86_64/loader/linux",
+    "/isolinux/vmlinuz",
+    "/boot/isolinux/vmlinuz",
+    "/syslinux/vmlinuz",
+    "/EFI/BOOT/vmlinuz",
+];
+const LINUX_INITRD_CANDIDATES: &[&str] = &[
+    "/boot/all.rdz",
+    "/casper/initrd",
+    "/casper/initrd.gz",
+    "/casper/initrd-oem",
+    "/boot/grub/initrd.xz",
+    "/initrd.gz",
+    "/slax/boot/initrfs.img",
+    "/minios/boot/initrfs.img",
+    "/pmagic/initrd.img",
+    "/boot/initrd.xz",
+    "/boot/initrd.gz",
+    "/boot/initrd",
+    "/boot/x86_64/loader/initrd",
+    "/boot/initramfs-x86_64.img",
+    "/boot/isolinux/initramfs_data64.cpio.gz",
+    "/boot/initrd.img",
+    "/isolinux/initrd.gz",
+    "/images/pxeboot/initrd.img",
+    "/Setup/initrd.gz",
+    "/isolinux/initramfs",
+    "/boot/iniramfs.igz",
+    "/initrd-x86_64",
+    "/live/initrd.img",
+    "/initrd.img",
+    "/sysresccd/boot/x86_64/sysresccd.img",
+    "/CDlinux/initrd",
+    "/parabola/boot/x86_64/parabolaiso.img",
+    "/parabola/boot/x86_64/initramfs-linux-libre.img",
+    "/hyperbola/boot/x86_64/hyperiso.img",
+    "/EFI/BOOT/initrd.img",
+    "/initrd",
+    "/live/initrd1",
+    "/isolinux/initrd.img",
+    "/syslinux/kernel/initramfs.gz",
+    "/boot/rootfs.xz",
+    "/arch/boot/x86_64/archiso.img",
+    "/blackarch/boot/x86_64/archiso.img",
+    "/blackarch/boot/x86_64/initramfs-linux.img",
+    "/live/initrd2.img",
+    "/install.amd/initrd.gz",
+    "/install.amd/gtk/initrd.gz",
+    "/austrumi/initrd.gz",
+    "/boot/initfs.x86_64-efi",
+    "/boot/initfs.i386-pc",
+    "/antiX/initrd.gz",
+    "/360Disk/initrd.gz",
+    "/porteus/initrd.xz",
+    "/pyabr/boot/initrfs.img",
+    "/initrd0.img",
+    "/sysresccd/boot/i686/sysresccd.img",
+    "/boot/full.cz",
+    "/live/initrd",
+    "/initramfs-linux.img",
+    "/boot/isolinux/initrd.gz",
+];
 const WIMBOOT_BCD_CANDIDATES: &[&str] = &[
     "/ventoy/common_bcd",
     "/ventoy/bcd",
@@ -563,7 +653,7 @@ impl<'a> BootManager<'a> {
 
     /// 引导 Linux ISO
     fn boot_linux(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
-        use nextboot_linux::{EfiStubOptions, LinuxBootConfig, LinuxBootloader, LinuxDistro};
+        use nextboot_linux::{EfiStubOptions, LinuxBootloader, LinuxDistro};
 
         info!("Booting Linux ISO...");
         if let Ok(()) = self.try_chain_load_paths(device, generic_efi_boot_paths()) {
@@ -580,7 +670,7 @@ impl<'a> BootManager<'a> {
         };
 
         // 创建启动配置
-        let config = LinuxBootConfig::for_distro(distro, &self.iso.path);
+        let config = self.discover_linux_boot_config(distro)?;
 
         info!("Kernel: {}", config.kernel_path);
         info!("Initrd: {}", config.initrd_path);
@@ -641,6 +731,164 @@ impl<'a> BootManager<'a> {
             "Linux EFI stub",
             Some(&load_options),
         )
+    }
+
+    fn discover_linux_boot_config(
+        &self,
+        distro: nextboot_linux::LinuxDistro,
+    ) -> uefi::Result<nextboot_linux::LinuxBootConfig> {
+        if let Some(config) = self.discover_linux_config_file_boot_config(distro)? {
+            return Ok(config);
+        }
+
+        if let Some(config) = self.discover_linux_candidate_boot_config(distro)? {
+            return Ok(config);
+        }
+
+        let config = nextboot_linux::LinuxBootConfig::for_distro(distro, &self.iso.path);
+        warn!(
+            "Falling back to built-in Linux boot paths for {}: kernel={} initrd={}",
+            self.iso.path, config.kernel_path, config.initrd_path
+        );
+        Ok(config)
+    }
+
+    fn discover_linux_config_file_boot_config(
+        &self,
+        distro: nextboot_linux::LinuxDistro,
+    ) -> uefi::Result<Option<nextboot_linux::LinuxBootConfig>> {
+        let mut config_paths = Vec::new();
+        for path in LINUX_GRUB_CONFIG_CANDIDATES
+            .iter()
+            .chain(LINUX_ISOLINUX_CONFIG_CANDIDATES.iter())
+        {
+            push_unique_iso_path(&mut config_paths, path)?;
+        }
+        self.discover_linux_loader_entry_configs(&mut config_paths)?;
+
+        for path in config_paths {
+            let text = match self.load_iso_text_file(&path, LINUX_CONFIG_MAX_SIZE) {
+                Ok(text) => text,
+                Err(err) if err.status() == Status::NOT_FOUND => continue,
+                Err(err) => {
+                    warn!(
+                        "Linux config candidate {} was not loaded: {:?}",
+                        path,
+                        err.status()
+                    );
+                    continue;
+                }
+            };
+
+            let parsed = if is_isolinux_config_path(&path) {
+                nextboot_linux::parse_isolinux_cfg(&text)
+                    .or_else(|| nextboot_linux::parse_grub_cfg(&text))
+            } else {
+                nextboot_linux::parse_grub_cfg(&text)
+                    .or_else(|| nextboot_linux::parse_isolinux_cfg(&text))
+            };
+            let Some((kernel, initrd, cmdline)) = parsed else {
+                info!(
+                    "Linux config {} did not contain a complete boot entry",
+                    path
+                );
+                continue;
+            };
+
+            let base_dir = iso_parent_dir(&path);
+            let kernel_path = resolve_linux_config_path(&base_dir, &kernel);
+            let initrd_path = resolve_linux_config_path(&base_dir, &initrd);
+            if !self.iso_file_exists(&kernel_path)? {
+                warn!(
+                    "Linux config {} references missing kernel {}",
+                    path, kernel_path
+                );
+                continue;
+            }
+            if !self.iso_file_exists(&initrd_path)? {
+                warn!(
+                    "Linux config {} references missing initrd {}",
+                    path, initrd_path
+                );
+                continue;
+            }
+
+            info!(
+                "Discovered Linux boot config from {}: kernel={} initrd={} cmdline={}",
+                path, kernel_path, initrd_path, cmdline
+            );
+            return Ok(Some(nextboot_linux::LinuxBootConfig::from_paths(
+                distro,
+                &self.iso.path,
+                &kernel_path,
+                &initrd_path,
+                &cmdline,
+            )));
+        }
+
+        Ok(None)
+    }
+
+    fn discover_linux_loader_entry_configs(&self, paths: &mut Vec<String>) -> uefi::Result<()> {
+        for dir in LINUX_LOADER_ENTRY_DIRS {
+            let entries = match self.read_iso_dir(dir) {
+                Ok(entries) => entries,
+                Err(err) if err.status() == Status::NOT_FOUND => continue,
+                Err(err) => {
+                    warn!(
+                        "Linux loader entry dir {} was not scanned: {:?}",
+                        dir,
+                        err.status()
+                    );
+                    continue;
+                }
+            };
+
+            for entry in entries {
+                if entry.is_dir || !entry.name.to_ascii_lowercase().ends_with(".conf") {
+                    continue;
+                }
+
+                push_unique_iso_path(paths, &format!("{}/{}", dir, entry.name))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn discover_linux_candidate_boot_config(
+        &self,
+        distro: nextboot_linux::LinuxDistro,
+    ) -> uefi::Result<Option<nextboot_linux::LinuxBootConfig>> {
+        let default = nextboot_linux::LinuxBootConfig::for_distro(distro, &self.iso.path);
+        if self.iso_file_exists(&default.kernel_path)?
+            && self.iso_file_exists(&default.initrd_path)?
+        {
+            info!(
+                "Using distro Linux defaults: kernel={} initrd={}",
+                default.kernel_path, default.initrd_path
+            );
+            return Ok(Some(default));
+        }
+
+        let Some(kernel_path) = self.first_existing_iso_file(LINUX_KERNEL_CANDIDATES)? else {
+            return Ok(None);
+        };
+        let Some(initrd_path) = self.first_existing_iso_file(LINUX_INITRD_CANDIDATES)? else {
+            return Ok(None);
+        };
+
+        info!(
+            "Using Ventoy-style Linux candidates: kernel={} initrd={}",
+            kernel_path, initrd_path
+        );
+        Ok(Some(nextboot_linux::LinuxBootConfig::from_paths(
+            distro,
+            &self.iso.path,
+            &kernel_path,
+            &initrd_path,
+            &default.cmdline,
+        )))
     }
 
     fn append_ventoy_linux_initrd_overlay(&self, initrd_data: &mut Vec<u8>) -> uefi::Result<()> {
@@ -1083,6 +1331,56 @@ impl<'a> BootManager<'a> {
         info!("Loaded {} bytes from ISO path {}", read, path);
 
         Ok(data)
+    }
+
+    fn load_iso_text_file(&self, path: &str, max_size: usize) -> uefi::Result<String> {
+        let data = self.load_file(path)?;
+        if data.len() > max_size {
+            return Err(Status::OUT_OF_RESOURCES.into());
+        }
+
+        let text = core::str::from_utf8(&data).map_err(|_| Status::LOAD_ERROR)?;
+        Ok(String::from(text))
+    }
+
+    fn read_iso_dir(&self, path: &str) -> uefi::Result<Vec<nextboot_fs::FileInfo>> {
+        if !self.iso.image_format.is_iso() {
+            return Err(Status::UNSUPPORTED.into());
+        }
+
+        let source_block_io = self
+            .bt
+            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+        let fs = self.open_virtual_iso_filesystem(&source_block_io)?;
+        fs.read_dir(&normalize_iso_path(path))
+            .map_err(fs_error_to_uefi_status)
+            .map_err(Into::into)
+    }
+
+    fn iso_file_exists(&self, path: &str) -> uefi::Result<bool> {
+        if !self.iso.image_format.is_iso() {
+            return Ok(false);
+        }
+
+        let source_block_io = self
+            .bt
+            .open_protocol_exclusive::<BlockIO>(self.iso.volume_handle)?;
+        let fs = self.open_virtual_iso_filesystem(&source_block_io)?;
+        match fs.stat(&normalize_iso_path(path)) {
+            Ok(info) => Ok(!info.is_dir),
+            Err(FsError::FileNotFound | FsError::DirectoryNotFound) => Ok(false),
+            Err(err) => Err(fs_error_to_uefi_status(err).into()),
+        }
+    }
+
+    fn first_existing_iso_file(&self, candidates: &[&str]) -> uefi::Result<Option<String>> {
+        for path in candidates {
+            if self.iso_file_exists(path)? {
+                return Ok(Some(normalize_iso_path(path)));
+            }
+        }
+
+        Ok(None)
     }
 
     fn load_source_volume_file(&self, path: &str) -> uefi::Result<SourceVolumeFile> {
@@ -3376,6 +3674,45 @@ fn normalize_iso_path(path: &str) -> String {
     }
 
     normalized
+}
+
+fn push_unique_iso_path(paths: &mut Vec<String>, path: &str) -> uefi::Result<()> {
+    let normalized = normalize_iso_path(path);
+    if paths.iter().any(|existing| existing == &normalized) {
+        return Ok(());
+    }
+
+    paths
+        .try_reserve_exact(1)
+        .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+    paths.push(normalized);
+    Ok(())
+}
+
+fn is_isolinux_config_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.contains("/isolinux/") || lower.contains("/syslinux/") || lower.ends_with("isolinux.cfg")
+}
+
+fn iso_parent_dir(path: &str) -> String {
+    let normalized = normalize_iso_path(path);
+    match normalized.rfind('/') {
+        Some(0) | None => String::from("/"),
+        Some(index) => String::from(&normalized[..index]),
+    }
+}
+
+fn resolve_linux_config_path(base_dir: &str, path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.starts_with('/') || trimmed.starts_with('\\') {
+        return normalize_iso_path(trimmed);
+    }
+
+    if base_dir == "/" {
+        normalize_iso_path(trimmed)
+    } else {
+        normalize_iso_path(&format!("{}/{}", base_dir, trimmed))
+    }
 }
 
 fn normalize_load_file_key(path: &str) -> String {
