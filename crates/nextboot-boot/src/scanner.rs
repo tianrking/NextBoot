@@ -66,6 +66,10 @@ pub struct IsoFile {
     pub ventoy_windows_cd_prompt: bool,
     /// Ventoy control.VTOY_WIN_UEFI_RES_LOCK 映射到 Windows UEFI 分辨率锁定模式。
     pub ventoy_windows_uefi_resolution_lock: u8,
+    /// Ventoy control.VTOY_WIN11_BYPASS_CHECK 是否要求跳过 Win11 安装硬件检查。
+    pub ventoy_windows11_bypass_check: bool,
+    /// Ventoy control.VTOY_WIN11_BYPASS_NRO 是否要求跳过 Win11 OOBE 联网账号要求。
+    pub ventoy_windows11_bypass_nro: bool,
     /// Ventoy password 插件为该镜像匹配出的密码。
     pub ventoy_password: Option<VentoyPassword>,
     /// Ventoy password.bootpwd 为该卷设置的全局启动菜单密码。
@@ -1129,6 +1133,8 @@ impl<'a> IsoScanner<'a> {
                     ventoy_linux_remount: config.linux_remount,
                     ventoy_windows_cd_prompt: config.windows_cd_prompt,
                     ventoy_windows_uefi_resolution_lock: config.windows_uefi_resolution_lock,
+                    ventoy_windows11_bypass_check: config.windows11_bypass_check,
+                    ventoy_windows11_bypass_nro: config.windows11_bypass_nro,
                     ventoy_password: config.image_password_for(&full_path).cloned(),
                     ventoy_boot_password: config.password.boot.clone(),
                     ventoy_plugin: config.image_plugin_for(&full_path),
@@ -1253,6 +1259,8 @@ impl<'a> IsoScanner<'a> {
                     ventoy_linux_remount: config.linux_remount,
                     ventoy_windows_cd_prompt: config.windows_cd_prompt,
                     ventoy_windows_uefi_resolution_lock: config.windows_uefi_resolution_lock,
+                    ventoy_windows11_bypass_check: config.windows11_bypass_check,
+                    ventoy_windows11_bypass_nro: config.windows11_bypass_nro,
                     ventoy_password: config.image_password_for(&full_path).cloned(),
                     ventoy_boot_password: config.password.boot.clone(),
                     ventoy_plugin: config.image_plugin_for(&full_path),

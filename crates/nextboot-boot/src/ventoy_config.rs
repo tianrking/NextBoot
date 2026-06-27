@@ -232,6 +232,8 @@ pub struct VentoyConfig {
     pub linux_remount: bool,
     pub windows_cd_prompt: bool,
     pub windows_uefi_resolution_lock: u8,
+    pub windows11_bypass_check: bool,
+    pub windows11_bypass_nro: bool,
     pub image_list_mode: VentoyImageListMode,
     pub image_list: Vec<String>,
     pub menu_aliases: Vec<VentoyMenuAlias>,
@@ -884,6 +886,12 @@ impl<'a> JsonParser<'a> {
                         "VTOY_WIN_UEFI_RES_LOCK" => {
                             config.windows_uefi_resolution_lock =
                                 parse_windows_uefi_resolution_lock(&value);
+                        }
+                        "VTOY_WIN11_BYPASS_CHECK" => {
+                            config.windows11_bypass_check = value == "1";
+                        }
+                        "VTOY_WIN11_BYPASS_NRO" => {
+                            config.windows11_bypass_nro = value == "1";
                         }
                         "VTOY_FILT_DOT_UNDERSCORE_FILE" => {
                             config.filter_dot_underscore = value == "1";
@@ -1808,6 +1816,8 @@ mod tests {
                 { "VTOY_LINUX_REMOUNT": "1" },
                 { "VTOY_WINDOWS_CD_PROMPT": "1" },
                 { "VTOY_WIN_UEFI_RES_LOCK": "2" },
+                { "VTOY_WIN11_BYPASS_CHECK": "1" },
+                { "VTOY_WIN11_BYPASS_NRO": "1" },
                 { "VTOY_FILT_DOT_UNDERSCORE_FILE": "1" }
             ],
             "menu_alias": [
@@ -1823,6 +1833,8 @@ mod tests {
         assert!(config.linux_remount);
         assert!(config.windows_cd_prompt);
         assert_eq!(config.windows_uefi_resolution_lock, 2);
+        assert!(config.windows11_bypass_check);
+        assert!(config.windows11_bypass_nro);
         assert_eq!(config.default_search_root.as_deref(), Some("/ISO"));
         assert_eq!(config.max_search_level, Some(2));
         assert_eq!(config.image_list_mode, VentoyImageListMode::Deny);

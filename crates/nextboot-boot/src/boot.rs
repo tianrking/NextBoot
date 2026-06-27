@@ -608,6 +608,15 @@ impl<'a> BootManager<'a> {
             return Err(Status::UNSUPPORTED.into());
         }
 
+        if self.iso.ventoy_windows11_bypass_check || self.iso.ventoy_windows11_bypass_nro {
+            info!(
+                "Windows 11 bypass controls requested for {}: hardware_check={} nro={}",
+                self.iso.path,
+                self.iso.ventoy_windows11_bypass_check,
+                self.iso.ventoy_windows11_bypass_nro
+            );
+        }
+
         let helper = self.load_wimboot_helper()?;
         let inputs = self.prepare_windows_iso_wimboot_runtime_inputs(&helper)?;
         let runtime = self.register_wimboot_runtime_files(inputs.runtime_files)?;

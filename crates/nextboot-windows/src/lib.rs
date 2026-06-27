@@ -16,9 +16,204 @@ extern crate alloc;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use alloc::format;
-use alloc::boxed::Box;
-use log::{info, warn, error};
+use log::info;
+
+pub const VENTOY_WINDOWS_DATA_AUTO_INSTALL_SCRIPT_SIZE: usize = 384;
+pub const VENTOY_WINDOWS_DATA_INJECTION_ARCHIVE_SIZE: usize = 384;
+pub const VENTOY_WINDOWS_DATA_RESERVED_SIZE: usize = 250;
+pub const VENTOY_WINDOWS_DATA_HEADER_SIZE: usize = 1024;
+
+const AUTO_INSTALL_SCRIPT_OFFSET: usize = 0;
+const INJECTION_ARCHIVE_OFFSET: usize =
+    AUTO_INSTALL_SCRIPT_OFFSET + VENTOY_WINDOWS_DATA_AUTO_INSTALL_SCRIPT_SIZE;
+const WINDOWS11_BYPASS_CHECK_OFFSET: usize =
+    INJECTION_ARCHIVE_OFFSET + VENTOY_WINDOWS_DATA_INJECTION_ARCHIVE_SIZE;
+const AUTO_INSTALL_LEN_OFFSET: usize = WINDOWS11_BYPASS_CHECK_OFFSET + 1;
+const WINDOWS11_BYPASS_NRO_OFFSET: usize = AUTO_INSTALL_LEN_OFFSET + 4;
+const RESERVED_OFFSET: usize = WINDOWS11_BYPASS_NRO_OFFSET + 1;
+
+/// Ventoy Windows auto-install payload appended after `ventoy_windows_data`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VentoyWindowsAutoInstall<'a> {
+    /// Original template path from `ventoy.json`.
+    pub source_path: &'a str,
+    /// Template file bytes appended after the 1024-byte runtime header.
+    pub data: &'a [u8],
+}
+
+/// Input for building Ventoy-compatible Windows runtime data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct VentoyWindowsRuntimeDataInput<'a> {
+    pub auto_install: Option<VentoyWindowsAutoInstall<'a>>,
+    pub injection_archive: Option<&'a str>,
+    pub windows11_bypass_check: bool,
+    pub windows11_bypass_nro: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VentoyWindowsRuntimeDataError {
+    AutoInstallTooLarge,
+    OutputReserveFailed,
+}
+
+/// Build Ventoy's packed `ventoy_windows_data` buffer.
+///
+/// Ventoy injects this blob through its modified wimboot helper. The header is
+/// packed to 1024 bytes and any selected auto-install template bytes are
+/// appended directly after it.
+pub fn build_ventoy_windows_runtime_data(
+    input: VentoyWindowsRuntimeDataInput<'_>,
+) -> Result<Vec<u8>, VentoyWindowsRuntimeDataError> {
+    debug_assert_eq!(RESERVED_OFFSET + VENTOY_WINDOWS_DATA_RESERVED_SIZE, 1024);
+
+    let auto_install_len = input
+        .auto_install
+        .as_ref()
+        .map_or(0usize, |auto_install| auto_install.data.len());
+    if auto_install_len > u32::MAX as usize {
+        return Err(VentoyWindowsRuntimeDataError::AutoInstallTooLarge);
+    }
+
+    let total_size = VENTOY_WINDOWS_DATA_HEADER_SIZE
+        .checked_add(auto_install_len)
+        .ok_or(VentoyWindowsRuntimeDataError::OutputReserveFailed)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(total_size)
+        .map_err(|_| VentoyWindowsRuntimeDataError::OutputReserveFailed)?;
+    out.resize(VENTOY_WINDOWS_DATA_HEADER_SIZE, 0);
+
+    if let Some(auto_install) = input.auto_install {
+        copy_ventoy_c_string(
+            &mut out[AUTO_INSTALL_SCRIPT_OFFSET..INJECTION_ARCHIVE_OFFSET],
+            ventoy_basename(auto_install.source_path),
+        );
+        out[AUTO_INSTALL_LEN_OFFSET..WINDOWS11_BYPASS_NRO_OFFSET]
+            .copy_from_slice(&(auto_install.data.len() as u32).to_le_bytes());
+        out.extend_from_slice(auto_install.data);
+    }
+
+    if let Some(injection_archive) = input.injection_archive {
+        copy_ventoy_c_string(
+            &mut out[INJECTION_ARCHIVE_OFFSET..WINDOWS11_BYPASS_CHECK_OFFSET],
+            injection_archive,
+        );
+    }
+
+    out[WINDOWS11_BYPASS_CHECK_OFFSET] = u8::from(input.windows11_bypass_check);
+    out[WINDOWS11_BYPASS_NRO_OFFSET] = u8::from(input.windows11_bypass_nro);
+
+    Ok(out)
+}
+
+fn copy_ventoy_c_string(field: &mut [u8], value: &str) {
+    if field.is_empty() {
+        return;
+    }
+
+    let bytes = value.as_bytes();
+    let copy_len = core::cmp::min(bytes.len(), field.len() - 1);
+    field[..copy_len].copy_from_slice(&bytes[..copy_len]);
+}
+
+fn ventoy_basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+#[cfg(test)]
+mod ventoy_windows_runtime_data_tests {
+    use super::*;
+    use alloc::string::String;
+
+    #[test]
+    fn encodes_bypass_flags_and_plugin_metadata() {
+        let payload = b"answer";
+        let data = build_ventoy_windows_runtime_data(VentoyWindowsRuntimeDataInput {
+            auto_install: Some(VentoyWindowsAutoInstall {
+                source_path: "/answer/autounattend.xml",
+                data: payload,
+            }),
+            injection_archive: Some("/ventoy/inject.zip"),
+            windows11_bypass_check: true,
+            windows11_bypass_nro: true,
+        })
+        .expect("runtime data");
+
+        let script = b"autounattend.xml";
+        let injection = b"/ventoy/inject.zip";
+
+        assert_eq!(data.len(), VENTOY_WINDOWS_DATA_HEADER_SIZE + payload.len());
+        assert_eq!(&data[..script.len()], script);
+        assert_eq!(data[script.len()], 0);
+        assert_eq!(
+            &data[INJECTION_ARCHIVE_OFFSET..INJECTION_ARCHIVE_OFFSET + injection.len()],
+            injection
+        );
+        assert_eq!(data[INJECTION_ARCHIVE_OFFSET + injection.len()], 0);
+        assert_eq!(data[WINDOWS11_BYPASS_CHECK_OFFSET], 1);
+        assert_eq!(
+            u32::from_le_bytes(
+                data[AUTO_INSTALL_LEN_OFFSET..WINDOWS11_BYPASS_NRO_OFFSET]
+                    .try_into()
+                    .unwrap()
+            ),
+            payload.len() as u32
+        );
+        assert_eq!(data[WINDOWS11_BYPASS_NRO_OFFSET], 1);
+        assert_eq!(&data[VENTOY_WINDOWS_DATA_HEADER_SIZE..], payload);
+    }
+
+    #[test]
+    fn truncates_c_string_fields_like_ventoy() {
+        let mut auto_path = String::from("/");
+        let mut injection = String::new();
+        for _ in 0..400 {
+            auto_path.push('a');
+            injection.push('b');
+        }
+
+        let data = build_ventoy_windows_runtime_data(VentoyWindowsRuntimeDataInput {
+            auto_install: Some(VentoyWindowsAutoInstall {
+                source_path: &auto_path,
+                data: b"x",
+            }),
+            injection_archive: Some(&injection),
+            ..VentoyWindowsRuntimeDataInput::default()
+        })
+        .expect("runtime data");
+
+        assert!(data[..VENTOY_WINDOWS_DATA_AUTO_INSTALL_SCRIPT_SIZE - 1]
+            .iter()
+            .all(|byte| *byte == b'a'));
+        assert_eq!(data[VENTOY_WINDOWS_DATA_AUTO_INSTALL_SCRIPT_SIZE - 1], 0);
+        assert!(data[INJECTION_ARCHIVE_OFFSET
+            ..INJECTION_ARCHIVE_OFFSET + VENTOY_WINDOWS_DATA_INJECTION_ARCHIVE_SIZE - 1]
+            .iter()
+            .all(|byte| *byte == b'b'));
+        assert_eq!(
+            data[INJECTION_ARCHIVE_OFFSET + VENTOY_WINDOWS_DATA_INJECTION_ARCHIVE_SIZE - 1],
+            0
+        );
+    }
+
+    #[test]
+    fn omits_auto_install_payload_when_absent() {
+        let data = build_ventoy_windows_runtime_data(VentoyWindowsRuntimeDataInput::default())
+            .expect("runtime data");
+
+        assert_eq!(data.len(), VENTOY_WINDOWS_DATA_HEADER_SIZE);
+        assert_eq!(data[WINDOWS11_BYPASS_CHECK_OFFSET], 0);
+        assert_eq!(
+            u32::from_le_bytes(
+                data[AUTO_INSTALL_LEN_OFFSET..WINDOWS11_BYPASS_NRO_OFFSET]
+                    .try_into()
+                    .unwrap()
+            ),
+            0
+        );
+        assert_eq!(data[WINDOWS11_BYPASS_NRO_OFFSET], 0);
+        assert!(data.iter().all(|byte| *byte == 0));
+    }
+}
 
 /// Windows 启动方法
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,7 +312,8 @@ impl WindowsBootConfig {
             WindowsBootMethod::Standard
         };
 
-        let wim_path = files.iter()
+        let wim_path = files
+            .iter()
             .find(|f| {
                 let f_lower = f.to_lowercase();
                 f_lower.contains("sources/install.wim") || f_lower.contains("sources/install.esd")
@@ -196,7 +392,8 @@ impl WindowsBootloader {
         }
 
         // 检查 PE 签名
-        let pe_offset = u32::from_le_bytes([data[0x3C], data[0x3D], data[0x3E], data[0x3F]]) as usize;
+        let pe_offset =
+            u32::from_le_bytes([data[0x3C], data[0x3D], data[0x3E], data[0x3F]]) as usize;
         if pe_offset + 4 > data.len() {
             return Err(WindowsBootError::InvalidBootFile);
         }
@@ -354,7 +551,7 @@ pub mod acpi {
             };
 
             let sum: u8 = bytes.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
-            (0u8.wrapping_sub(sum))
+            0u8.wrapping_sub(sum)
         }
     }
 
@@ -380,7 +577,7 @@ pub mod acpi {
     }
 
     /// 注入自定义 SSDT
-    pub fn inject_ssdt(table_data: &[u8]) -> Result<(), &'static str> {
+    pub fn inject_ssdt(_table_data: &[u8]) -> Result<(), &'static str> {
         // TODO: 将 SSDT 添加到 XSDT
         // 这需要修改 ACPI 表，风险较高
 
@@ -417,12 +614,12 @@ pub mod bcd {
             return None;
         }
 
-        Some(BcdStore { data: Vec::new() })
+        Some(BcdStore { _data: Vec::new() })
     }
 
     /// BCD 存储
     pub struct BcdStore {
-        data: Vec<u8>,
+        _data: Vec<u8>,
     }
 
     impl BcdStore {
@@ -486,9 +683,8 @@ impl PeInfo {
         }
 
         // 获取 PE 头偏移
-        let pe_offset = u32::from_le_bytes([
-            data[0x3C], data[0x3D], data[0x3E], data[0x3F],
-        ]) as usize;
+        let pe_offset =
+            u32::from_le_bytes([data[0x3C], data[0x3D], data[0x3E], data[0x3F]]) as usize;
 
         if pe_offset + 24 > data.len() {
             return None;
@@ -502,7 +698,8 @@ impl PeInfo {
         // 解析 COFF 头
         let machine = u16::from_le_bytes([data[pe_offset + 4], data[pe_offset + 5]]);
         let number_of_sections = u16::from_le_bytes([data[pe_offset + 6], data[pe_offset + 7]]);
-        let size_of_optional_header = u16::from_le_bytes([data[pe_offset + 20], data[pe_offset + 21]]);
+        let size_of_optional_header =
+            u16::from_le_bytes([data[pe_offset + 20], data[pe_offset + 21]]);
         let characteristics = u16::from_le_bytes([data[pe_offset + 22], data[pe_offset + 23]]);
 
         // 解析可选头
@@ -516,34 +713,48 @@ impl PeInfo {
         let (entry_point, image_base, image_size, subsystem) = if magic == 0x10B {
             // PE32
             let entry = u32::from_le_bytes([
-                data[opt_offset + 16], data[opt_offset + 17],
-                data[opt_offset + 18], data[opt_offset + 19],
+                data[opt_offset + 16],
+                data[opt_offset + 17],
+                data[opt_offset + 18],
+                data[opt_offset + 19],
             ]);
             let base = u32::from_le_bytes([
-                data[opt_offset + 28], data[opt_offset + 29],
-                data[opt_offset + 30], data[opt_offset + 31],
+                data[opt_offset + 28],
+                data[opt_offset + 29],
+                data[opt_offset + 30],
+                data[opt_offset + 31],
             ]) as u64;
             let size = u32::from_le_bytes([
-                data[opt_offset + 56], data[opt_offset + 57],
-                data[opt_offset + 58], data[opt_offset + 59],
+                data[opt_offset + 56],
+                data[opt_offset + 57],
+                data[opt_offset + 58],
+                data[opt_offset + 59],
             ]);
             let sub = u16::from_le_bytes([data[opt_offset + 68], data[opt_offset + 69]]);
             (entry, base, size, sub)
         } else if magic == 0x20B {
             // PE32+
             let entry = u32::from_le_bytes([
-                data[opt_offset + 16], data[opt_offset + 17],
-                data[opt_offset + 18], data[opt_offset + 19],
+                data[opt_offset + 16],
+                data[opt_offset + 17],
+                data[opt_offset + 18],
+                data[opt_offset + 19],
             ]);
             let base = u64::from_le_bytes([
-                data[opt_offset + 24], data[opt_offset + 25],
-                data[opt_offset + 26], data[opt_offset + 27],
-                data[opt_offset + 28], data[opt_offset + 29],
-                data[opt_offset + 30], data[opt_offset + 31],
+                data[opt_offset + 24],
+                data[opt_offset + 25],
+                data[opt_offset + 26],
+                data[opt_offset + 27],
+                data[opt_offset + 28],
+                data[opt_offset + 29],
+                data[opt_offset + 30],
+                data[opt_offset + 31],
             ]);
             let size = u32::from_le_bytes([
-                data[opt_offset + 56], data[opt_offset + 57],
-                data[opt_offset + 58], data[opt_offset + 59],
+                data[opt_offset + 56],
+                data[opt_offset + 57],
+                data[opt_offset + 58],
+                data[opt_offset + 59],
             ]);
             let sub = u16::from_le_bytes([data[opt_offset + 68], data[opt_offset + 69]]);
             (entry, base, size, sub)
