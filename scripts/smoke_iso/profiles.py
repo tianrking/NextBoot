@@ -10,6 +10,7 @@ PROFILE_LINUX = "linux"
 PROFILE_LINUX_GRUB = "linux-grub"
 
 LINUX_SMOKE_INITRD = b"070701NEXTBOOT SMOKE INITRD\n"
+LINUX_SMOKE_UCODE = b"070701NEXTBOOT SMOKE MICROCODE\n"
 
 
 def align_up(value: int, alignment: int) -> int:
@@ -262,6 +263,12 @@ def make_iso_layout(
                     "eltorito": False,
                 },
                 {
+                    "dir": "/CASPER",
+                    "name": b"UCODE.IMG;1",
+                    "data": LINUX_SMOKE_UCODE,
+                    "eltorito": False,
+                },
+                {
                     "dir": "/BOOT/GRUB",
                     "name": b"GRUB.CFG;1",
                     "data": (
@@ -270,7 +277,7 @@ def make_iso_layout(
                         b"set initrd_path=\"/casper/initrd\"\n"
                         b"menuentry 'NextBoot complex Linux smoke' {\n"
                         b"  linuxefi ($root)$kernel_path boot=casper quiet splash --- # trailing comment\n"
-                        b"  initrdefi ($root)$initrd_path\n"
+                        b"  initrdefi ($root)/casper/ucode.img ($root)$initrd_path\n"
                         b"}\n"
                     ),
                     "eltorito": False,

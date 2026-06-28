@@ -12,7 +12,10 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use log::{info, warn};
-use nextboot_linux::{EfiStubOptions, LinuxBootConfig, LinuxBootloader, LinuxDistro};
+use nextboot_linux::{
+    parse_grub_boot_entry, parse_isolinux_boot_entry, EfiStubOptions, LinuxBootConfig,
+    LinuxBootEntry, LinuxBootloader, LinuxDistro,
+};
 use uefi::Status;
 
 impl BootManager<'_> {
@@ -35,6 +38,11 @@ impl BootManager<'_> {
 
         info!("Kernel: {}", config.kernel_path);
         info!("Initrd: {}", config.initrd_path);
+        if config.initrd_paths.len() > 1 {
+            for (index, path) in config.initrd_paths.iter().enumerate() {
+                info!("Initrd[{}]: {}", index, path);
+            }
+        }
         info!("Cmdline: {}", config.cmdline);
 
         let mut bootloader = LinuxBootloader::new(config);
@@ -43,7 +51,7 @@ impl BootManager<'_> {
             .load_kernel(kernel_data)
             .map_err(|_| Status::LOAD_ERROR)?;
 
-        let mut initrd_data = self.load_file(&bootloader.config().initrd_path)?;
+        let mut initrd_data = self.load_linux_initrd_chain(&bootloader.config().initrd_paths)?;
         if let Err(err) = self.append_ventoy_linux_initrd_overlay(&mut initrd_data) {
             warn!(
                 "Failed to append Ventoy Linux initrd overlay for {}: {:?}",
@@ -135,13 +143,11 @@ impl BootManager<'_> {
             };
 
             let parsed = if is_isolinux_config_path(&path) {
-                nextboot_linux::parse_isolinux_cfg(&text)
-                    .or_else(|| nextboot_linux::parse_grub_cfg(&text))
+                parse_isolinux_boot_entry(&text).or_else(|| parse_grub_boot_entry(&text))
             } else {
-                nextboot_linux::parse_grub_cfg(&text)
-                    .or_else(|| nextboot_linux::parse_isolinux_cfg(&text))
+                parse_grub_boot_entry(&text).or_else(|| parse_isolinux_boot_entry(&text))
             };
-            let Some((kernel, initrd, cmdline)) = parsed else {
+            let Some(entry) = parsed else {
                 info!(
                     "Linux config {} did not contain a complete boot entry",
                     path
@@ -150,8 +156,8 @@ impl BootManager<'_> {
             };
 
             let base_dir = iso_parent_dir(&path);
-            let kernel_path = resolve_linux_config_path(&base_dir, &kernel);
-            let initrd_path = resolve_linux_config_path(&base_dir, &initrd);
+            let kernel_path = resolve_linux_config_path(&base_dir, &entry.kernel_path);
+            let initrd_paths = self.resolve_linux_initrd_paths(&base_dir, &entry)?;
             if !self.iso_file_exists(&kernel_path)? {
                 warn!(
                     "Linux config {} references missing kernel {}",
@@ -159,24 +165,33 @@ impl BootManager<'_> {
                 );
                 continue;
             }
-            if !self.iso_file_exists(&initrd_path)? {
+
+            let mut missing_initrd = None;
+            for initrd_path in &initrd_paths {
+                if !self.iso_file_exists(initrd_path)? {
+                    missing_initrd = Some(initrd_path.clone());
+                    break;
+                }
+            }
+            if let Some(missing) = missing_initrd {
                 warn!(
                     "Linux config {} references missing initrd {}",
-                    path, initrd_path
+                    path, missing
                 );
                 continue;
             }
 
+            let initrd_summary = linux_initrd_summary(&initrd_paths);
             info!(
                 "Discovered Linux boot config from {}: kernel={} initrd={} cmdline={}",
-                path, kernel_path, initrd_path, cmdline
+                path, kernel_path, initrd_summary, entry.cmdline
             );
-            return Ok(Some(LinuxBootConfig::from_paths(
+            return Ok(Some(LinuxBootConfig::from_initrd_paths(
                 distro,
                 &self.iso.path,
                 &kernel_path,
-                &initrd_path,
-                &cmdline,
+                initrd_paths,
+                &entry.cmdline,
             )));
         }
 
@@ -208,6 +223,21 @@ impl BootManager<'_> {
         }
 
         Ok(())
+    }
+
+    fn resolve_linux_initrd_paths(
+        &self,
+        base_dir: &str,
+        entry: &LinuxBootEntry,
+    ) -> uefi::Result<Vec<String>> {
+        let mut paths = Vec::new();
+        paths
+            .try_reserve_exact(entry.initrd_paths.len())
+            .map_err(|_| Status::OUT_OF_RESOURCES)?;
+        for initrd in &entry.initrd_paths {
+            paths.push(resolve_linux_config_path(base_dir, initrd));
+        }
+        Ok(paths)
     }
 
     fn discover_linux_candidate_boot_config(
@@ -252,4 +282,44 @@ impl BootManager<'_> {
             &default.cmdline,
         )))
     }
+
+    fn load_linux_initrd_chain(&self, paths: &[String]) -> uefi::Result<Vec<u8>> {
+        let mut combined = Vec::new();
+        for path in paths {
+            let data = self.load_file(path)?;
+            if data.is_empty() {
+                return Err(Status::LOAD_ERROR.into());
+            }
+
+            let offset = combined.len();
+            combined
+                .try_reserve(data.len())
+                .map_err(|_| Status::OUT_OF_RESOURCES)?;
+            combined.extend_from_slice(&data);
+            info!(
+                "Loaded Linux initrd component {}: {} bytes at offset {}",
+                path,
+                data.len(),
+                offset
+            );
+        }
+
+        if combined.is_empty() {
+            return Err(Status::NOT_FOUND.into());
+        }
+
+        Ok(combined)
+    }
+}
+
+fn linux_initrd_summary(paths: &[String]) -> String {
+    let mut out = String::new();
+    for (index, path) in paths.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(path);
+    }
+
+    out
 }

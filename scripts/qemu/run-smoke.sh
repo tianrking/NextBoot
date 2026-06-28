@@ -80,9 +80,13 @@ run_qemu_smoke() {
                     EXPECT_ARGS+=(--expect "Booting Linux ISO")
                     if [ "$SMOKE_LINUX_GRUB" -eq 1 ]; then
                         EXPECT_ARGS+=(
-                            --expect "Discovered Linux boot config from /boot/grub/grub.cfg: kernel=/casper/vmlinuz initrd=/casper/initrd cmdline=boot=casper quiet splash ---"
+                            --expect "Discovered Linux boot config from /boot/grub/grub.cfg: kernel=/casper/vmlinuz initrd=/casper/ucode.img,/casper/initrd cmdline=boot=casper quiet splash ---"
                             --expect "Kernel: /casper/vmlinuz"
                             --expect "Initrd: /casper/initrd"
+                            --expect "Initrd[0]: /casper/ucode.img"
+                            --expect "Initrd[1]: /casper/initrd"
+                            --expect "Loaded Linux initrd component /casper/ucode.img"
+                            --expect "Loaded Linux initrd component /casper/initrd"
                             --expect "Trying Linux EFI stub EFI loader path: /casper/vmlinuz"
                         )
                     else

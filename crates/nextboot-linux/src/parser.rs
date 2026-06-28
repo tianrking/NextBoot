@@ -3,10 +3,30 @@ use alloc::{
     vec::Vec,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxBootEntry {
+    pub kernel_path: String,
+    pub initrd_paths: Vec<String>,
+    pub cmdline: String,
+}
+
+impl LinuxBootEntry {
+    pub fn primary_initrd_path(&self) -> Option<&str> {
+        self.initrd_paths.last().map(|path| path.as_str())
+    }
+}
+
 /// 解析 isolinux/syslinux 配置
 pub fn parse_isolinux_cfg(cfg: &str) -> Option<(String, String, String)> {
+    parse_isolinux_boot_entry(cfg).and_then(|entry| {
+        let initrd = entry.primary_initrd_path()?.to_string();
+        Some((entry.kernel_path, initrd, entry.cmdline))
+    })
+}
+
+pub fn parse_isolinux_boot_entry(cfg: &str) -> Option<LinuxBootEntry> {
     let mut kernel = None;
-    let mut initrd = None;
+    let mut initrds = Vec::new();
     let mut append = String::new();
 
     for line in cfg.lines() {
@@ -21,39 +41,47 @@ pub fn parse_isolinux_cfg(cfg: &str) -> Option<(String, String, String)> {
 
         if command.eq_ignore_ascii_case("label") {
             kernel = None;
-            initrd = None;
+            initrds.clear();
             append.clear();
             continue;
         }
 
         if command.eq_ignore_ascii_case("kernel") || command.eq_ignore_ascii_case("linux") {
             kernel = parts.next().and_then(normalize_config_path_token);
-            if let Some(result) = complete_linux_config(&kernel, &initrd, &append) {
+            if let Some(result) = complete_linux_entry(&kernel, &initrds, &append) {
                 return Some(result);
             }
         } else if command.eq_ignore_ascii_case("initrd") {
-            initrd = last_normalized_config_path(parts);
-            if let Some(result) = complete_linux_config(&kernel, &initrd, &append) {
+            initrds = normalized_config_paths(parts);
+            if let Some(result) = complete_linux_entry(&kernel, &initrds, &append) {
                 return Some(result);
             }
         } else if command.eq_ignore_ascii_case("append") {
-            append = strip_cmdline_initrd_tokens(parts);
-            if initrd.is_none() {
-                initrd = extract_initrd_from_cmdline(line, &[]);
+            let args: Vec<&str> = parts.collect();
+            append = strip_cmdline_initrd_tokens(args.iter().copied());
+            if initrds.is_empty() {
+                initrds = extract_initrds_from_cmdline_tokens(args.iter().copied(), &[]);
             }
-            if let Some(result) = complete_linux_config(&kernel, &initrd, &append) {
+            if let Some(result) = complete_linux_entry(&kernel, &initrds, &append) {
                 return Some(result);
             }
         }
     }
 
-    complete_linux_config(&kernel, &initrd, &append)
+    complete_linux_entry(&kernel, &initrds, &append)
 }
 
 /// 解析 GRUB 配置
 pub fn parse_grub_cfg(cfg: &str) -> Option<(String, String, String)> {
+    parse_grub_boot_entry(cfg).and_then(|entry| {
+        let initrd = entry.primary_initrd_path()?.to_string();
+        Some((entry.kernel_path, initrd, entry.cmdline))
+    })
+}
+
+pub fn parse_grub_boot_entry(cfg: &str) -> Option<LinuxBootEntry> {
     let mut kernel = None;
-    let mut initrd = None;
+    let mut initrds = Vec::new();
     let mut cmdline = String::new();
     let mut options = String::new();
     let mut vars = Vec::new();
@@ -70,7 +98,7 @@ pub fn parse_grub_cfg(cfg: &str) -> Option<(String, String, String)> {
 
         if command == "}" || command.starts_with("menuentry") {
             kernel = None;
-            initrd = None;
+            initrds.clear();
             cmdline.clear();
             continue;
         }
@@ -96,7 +124,11 @@ pub fn parse_grub_cfg(cfg: &str) -> Option<(String, String, String)> {
                 .and_then(|token| normalize_config_path_token_with_vars(token, &vars))
             {
                 kernel = Some(path);
-                cmdline = strip_cmdline_initrd_tokens_with_vars(parts, &vars);
+                let args: Vec<&str> = parts.collect();
+                if initrds.is_empty() {
+                    initrds = extract_initrds_from_cmdline_tokens(args.iter().copied(), &vars);
+                }
+                cmdline = strip_cmdline_initrd_tokens_with_vars(args.iter().copied(), &vars);
                 if cmdline.is_empty() && !options.is_empty() {
                     cmdline = options.clone();
                 }
@@ -105,21 +137,21 @@ pub fn parse_grub_cfg(cfg: &str) -> Option<(String, String, String)> {
             || command.eq_ignore_ascii_case("initrd16")
             || command.eq_ignore_ascii_case("initrdefi")
         {
-            initrd = last_normalized_config_path_with_vars(parts, &vars);
-            if let Some(result) = complete_linux_config(&kernel, &initrd, &cmdline) {
+            initrds = normalized_config_paths_with_vars(parts, &vars);
+            if let Some(result) = complete_linux_entry(&kernel, &initrds, &cmdline) {
                 return Some(result);
             }
         } else if command.eq_ignore_ascii_case("module")
             || command.eq_ignore_ascii_case("module2")
             || command.eq_ignore_ascii_case("module2efi")
         {
-            if initrd.is_none() {
-                initrd = last_normalized_config_path_with_vars(parts, &vars);
+            if initrds.is_empty() {
+                initrds = normalized_config_paths_with_vars(parts, &vars);
             }
         }
     }
 
-    complete_linux_config(&kernel, &initrd, &cmdline)
+    complete_linux_entry(&kernel, &initrds, &cmdline)
 }
 
 fn clean_config_line(line: &str) -> Option<&str> {
@@ -217,45 +249,54 @@ fn strip_quotes(value: &str) -> &str {
     value.trim().trim_matches('"').trim_matches('\'')
 }
 
-fn complete_linux_config(
+fn complete_linux_entry(
     kernel: &Option<String>,
-    initrd: &Option<String>,
+    initrds: &[String],
     cmdline: &str,
-) -> Option<(String, String, String)> {
-    match (kernel, initrd) {
-        (Some(kernel), Some(initrd)) => Some((kernel.clone(), initrd.clone(), cmdline.to_string())),
-        _ => None,
+) -> Option<LinuxBootEntry> {
+    let kernel_path = kernel.as_ref()?;
+    if initrds.is_empty() {
+        return None;
     }
+
+    Some(LinuxBootEntry {
+        kernel_path: kernel_path.clone(),
+        initrd_paths: initrds.to_vec(),
+        cmdline: cmdline.to_string(),
+    })
 }
 
-fn last_normalized_config_path<'a>(tokens: impl Iterator<Item = &'a str>) -> Option<String> {
-    last_normalized_config_path_with_vars(tokens, &[])
+fn normalized_config_paths<'a>(tokens: impl Iterator<Item = &'a str>) -> Vec<String> {
+    normalized_config_paths_with_vars(tokens, &[])
 }
 
-fn last_normalized_config_path_with_vars<'a>(
+fn normalized_config_paths_with_vars<'a>(
     tokens: impl Iterator<Item = &'a str>,
     vars: &[(String, String)],
-) -> Option<String> {
-    let mut found = None;
+) -> Vec<String> {
+    let mut paths = Vec::new();
     for token in tokens {
         if let Some(path) = normalize_config_path_token_with_vars(token, vars) {
-            found = Some(path);
+            paths.push(path);
         }
     }
 
-    found
+    paths
 }
 
-fn extract_initrd_from_cmdline(cmdline: &str, vars: &[(String, String)]) -> Option<String> {
-    let mut found = None;
-    for token in config_tokens(cmdline) {
+fn extract_initrds_from_cmdline_tokens<'a>(
+    tokens: impl Iterator<Item = &'a str>,
+    vars: &[(String, String)],
+) -> Vec<String> {
+    let mut found = Vec::new();
+    for token in tokens {
         let Some(value) = token.strip_prefix("initrd=") else {
             continue;
         };
 
         for part in value.split(',') {
             if let Some(path) = normalize_config_path_token_with_vars(part, vars) {
-                found = Some(path);
+                found.push(path);
             }
         }
     }
@@ -269,14 +310,11 @@ fn strip_cmdline_initrd_tokens<'a>(tokens: impl Iterator<Item = &'a str>) -> Str
 
 fn strip_cmdline_initrd_tokens_with_vars<'a>(
     tokens: impl Iterator<Item = &'a str>,
-    vars: &[(String, String)],
+    _vars: &[(String, String)],
 ) -> String {
     let mut out = String::new();
     for token in tokens {
         if token.starts_with("initrd=") {
-            if extract_initrd_from_cmdline(token, vars).is_some() {
-                continue;
-            }
             continue;
         }
 

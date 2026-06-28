@@ -26,4 +26,7 @@ pub use config::{auto_detect_config, LinuxBootConfig};
 pub use distro::LinuxDistro;
 pub use loader::{LinuxBootError, LinuxBootloader};
 pub use params::{BootParams, EfiHandoverParams, EfiStubOptions};
-pub use parser::{parse_grub_cfg, parse_isolinux_cfg};
+pub use parser::{
+    parse_grub_boot_entry, parse_grub_cfg, parse_isolinux_boot_entry, parse_isolinux_cfg,
+    LinuxBootEntry,
+};

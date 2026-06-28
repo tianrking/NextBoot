@@ -1,5 +1,9 @@
-use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 
 use crate::LinuxDistro;
 
@@ -12,6 +16,8 @@ pub struct LinuxBootConfig {
     pub kernel_path: String,
     /// Initrd 文件路径
     pub initrd_path: String,
+    /// Initrd 文件路径链，按 GRUB/ISOLINUX 声明顺序拼接。
+    pub initrd_paths: Vec<String>,
     /// 内核命令行参数
     pub cmdline: String,
     /// ISO 文件路径 (用于 iso-scan)
@@ -90,10 +96,13 @@ impl LinuxBootConfig {
             _ => extra_cmdline.to_string(),
         };
 
+        let initrd_path = initrd.to_string();
+
         Self {
             distro,
             kernel_path: kernel.to_string(),
-            initrd_path: initrd.to_string(),
+            initrd_path: initrd_path.clone(),
+            initrd_paths: vec![initrd_path],
             cmdline,
             iso_path: iso_path.to_string(),
             use_efi: true,
@@ -108,10 +117,29 @@ impl LinuxBootConfig {
         initrd_path: &str,
         cmdline: &str,
     ) -> Self {
+        Self::from_initrd_paths(
+            distro,
+            iso_path,
+            kernel_path,
+            vec![initrd_path.to_string()],
+            cmdline,
+        )
+    }
+
+    /// 从已发现的 Kernel/Initrd 路径链创建启动配置。
+    pub fn from_initrd_paths(
+        distro: LinuxDistro,
+        iso_path: &str,
+        kernel_path: &str,
+        initrd_paths: Vec<String>,
+        cmdline: &str,
+    ) -> Self {
+        let initrd_path = initrd_paths.last().cloned().unwrap_or_default();
         Self {
             distro,
             kernel_path: kernel_path.to_string(),
-            initrd_path: initrd_path.to_string(),
+            initrd_path,
+            initrd_paths,
             cmdline: cmdline.to_string(),
             iso_path: iso_path.to_string(),
             use_efi: true,

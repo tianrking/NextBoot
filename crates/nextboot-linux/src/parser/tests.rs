@@ -1,5 +1,6 @@
-use super::{parse_grub_cfg, parse_isolinux_cfg};
+use super::{parse_grub_boot_entry, parse_grub_cfg, parse_isolinux_boot_entry, parse_isolinux_cfg};
 use alloc::string::String;
+use alloc::vec;
 
 #[test]
 fn grub_parser_extracts_first_menuentry_paths() {
@@ -27,6 +28,14 @@ fn grub_parser_uses_last_initrd_component() {
         initrd /intel-ucode.img /arch/boot/x86_64/initramfs-linux.img
     "#;
 
+    let entry = parse_grub_boot_entry(cfg).expect("grub boot entry");
+    assert_eq!(
+        entry.initrd_paths,
+        vec![
+            String::from("/intel-ucode.img"),
+            String::from("/arch/boot/x86_64/initramfs-linux.img"),
+        ]
+    );
     assert_eq!(
         parse_grub_cfg(cfg),
         Some((
@@ -70,6 +79,32 @@ fn isolinux_parser_extracts_append_initrd_and_removes_duplicate_arg() {
             String::from("vmlinuz"),
             String::from("initrd.img"),
             String::from("boot=live quiet")
+        ))
+    );
+}
+
+#[test]
+fn isolinux_parser_preserves_multiple_append_initrds() {
+    let cfg = r#"
+        label arch
+          kernel /arch/boot/x86_64/vmlinuz-linux
+          append initrd=/intel-ucode.img,/arch/boot/x86_64/initramfs-linux.img archisobasedir=arch
+    "#;
+
+    let entry = parse_isolinux_boot_entry(cfg).expect("isolinux boot entry");
+    assert_eq!(
+        entry.initrd_paths,
+        vec![
+            String::from("/intel-ucode.img"),
+            String::from("/arch/boot/x86_64/initramfs-linux.img"),
+        ]
+    );
+    assert_eq!(
+        parse_isolinux_cfg(cfg),
+        Some((
+            String::from("/arch/boot/x86_64/vmlinuz-linux"),
+            String::from("/arch/boot/x86_64/initramfs-linux.img"),
+            String::from("archisobasedir=arch")
         ))
     );
 }
