@@ -71,6 +71,37 @@ jobs:
             "nextboot-${{ steps.version.outputs.version }}-all-uefi-512b-exfat.img.xz" \
             > "SHA256SUMS-${{ steps.version.outputs.version }}.txt"
 
+      - name: Remove superseded single-arch release assets
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            let release;
+            try {
+              release = await github.rest.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag: "${{ steps.version.outputs.version }}",
+              });
+            } catch (error) {
+              if (error.status === 404) {
+                core.info("No existing release assets to prune.");
+                return;
+              }
+              throw error;
+            }
+
+            for (const asset of release.data.assets) {
+              if (asset.name.includes("x86_64-unknown-uefi")) {
+                core.info(`Deleting superseded asset ${asset.name}`);
+                await github.rest.repos.deleteReleaseAsset({
+                  owner,
+                  repo,
+                  asset_id: asset.id,
+                });
+              }
+            }
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
