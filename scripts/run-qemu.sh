@@ -70,6 +70,7 @@ SMOKE_ARTIFACT_SUFFIX=""
 SMOKE_TIMEOUT=20
 MEMORY="1024M"
 IMAGES=()
+SUPPORT_IMAGES=()
 
 die() {
     echo -e "${RED}Error: $*${NC}" >&2
@@ -120,7 +121,7 @@ if [ "$SMOKE_VLNK_ISO" -eq 1 ]; then
     SMOKE_VLNK_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-vlnk.vlnk.iso"
 fi
 
-for image in "${IMAGES[@]}"; do
+for image in "${IMAGES[@]}" "${SUPPORT_IMAGES[@]}"; do
     [ -f "$image" ] || die "Image file not found: ${image}"
 done
 
@@ -161,8 +162,9 @@ PY_ARGS=(
     "$SMOKE_AUTO_MEMDISK"
     "$EFI_BOOT_NAME"
 )
-if [ "${#IMAGES[@]}" -gt 0 ]; then
+if [ "${#IMAGES[@]}" -gt 0 ] || [ "${#SUPPORT_IMAGES[@]}" -gt 0 ]; then
     PY_ARGS+=("${IMAGES[@]}")
+    PY_ARGS+=("${SUPPORT_IMAGES[@]}")
 fi
 CREATE_DISK_SCRIPT="${SCRIPT_DIR}/qemu/create-disk-image.py"
 [ -f "$CREATE_DISK_SCRIPT" ] || die "QEMU disk creator not found: ${CREATE_DISK_SCRIPT}"
@@ -185,7 +187,7 @@ if [ "$VERIFY_IMAGE" -eq 1 ]; then
     if [ "$SMOKE_VLNK_ISO" -eq 1 ]; then
         VERIFY_ARGS+=(--image "$SMOKE_VLNK_FILE")
     else
-        for image in "${IMAGES[@]}"; do
+        for image in "${IMAGES[@]}" "${SUPPORT_IMAGES[@]}"; do
             VERIFY_ARGS+=(--image "$image")
         done
     fi

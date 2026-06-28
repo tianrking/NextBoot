@@ -38,8 +38,9 @@ workflows and which gaps are still worth pursuing.
   VDI child images, classifying every virtual range as child-image data,
   parent-backed data, or zero fill. The boot layer can now resolve same-volume
   VHDX Parent Locator paths and use one parent VHDX for fully parent-backed
-  missing blocks. Parent-required VDI images and VHDX cases without a resolvable
-  parent file are still verified to fail loudly with `UNSUPPORTED`.
+  missing blocks. The QEMU matrix now boots a parent-backed VHDX child with its
+  same-volume parent present; parent-required VDI images are still verified to
+  fail loudly with `UNSUPPORTED`.
 - Local Secure Boot signing workflow: `scripts/secure-boot.sh` can generate a
   local test certificate, sign the UEFI binary with sbsigntools, verify the
   signed binary where `sbverify` is available, and document firmware db or shim
@@ -66,11 +67,9 @@ workflows and which gaps are still worth pursuing.
   unallocated/discarded blocks have virtual hard-disk boot smoke coverage now;
   differencing VHDX/VDI metadata and parent locator/linkage fields are parsed
   in host tests, and child/parent/zero spans are planned in reusable code. VHDX
-  can now open a same-volume one-level parent for missing blocks; VDI parent
-  fallback, deeper chains, and mixed child/parent partial-bitmaps still need
-  implementation. Parent-required smoke images without their parent file are
-  still covered as negative tests so unsupported media is reported
-  deterministically.
+  can now open and boot from a same-volume one-level parent for missing blocks;
+  VDI parent fallback, deeper chains, VHDX missing-parent diagnostics, and mixed
+  child/parent partial-bitmaps still need implementation.
 - More filesystems: Ventoy covers a broader set of user storage formats. UDF,
   ext2/3/4, XFS extent/local-directory/dir2-directory reads, and a Btrfs
   superblock plus NextBoot extent/directory smoke map are now covered in QEMU

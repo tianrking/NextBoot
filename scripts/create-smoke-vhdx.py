@@ -106,11 +106,11 @@ def header_section() -> bytes:
     return bytes(header)
 
 
-def parent_locator_region() -> bytes:
+def parent_locator_region(parent_path: str) -> bytes:
     entries = [
         ("parent_linkage", "{83ed0ec3-24c8-49a6-a959-5e4bf1288bfb}"),
-        ("relative_path", "nextboot-smoke-parent-base.vhdx"),
-        ("absolute_win32_path", "C:\\nextboot\\nextboot-smoke-parent-base.vhdx"),
+        ("relative_path", parent_path),
+        ("absolute_win32_path", f"C:\\nextboot\\{parent_path}"),
     ]
     locator = bytearray(20 + len(entries) * 12)
     locator[0:16] = VHDX_PARENT_LOCATOR_TYPE_GUID
@@ -132,7 +132,7 @@ def parent_locator_region() -> bytes:
     return bytes(locator)
 
 
-def metadata_region(virtual_size: int, has_parent: bool) -> bytes:
+def metadata_region(virtual_size: int, has_parent: bool, parent_path: str) -> bytes:
     metadata = bytearray(MIB)
     metadata[0:8] = b"metadata"
     put_u16(metadata, 10, 5 if has_parent else 4)
@@ -150,7 +150,7 @@ def metadata_region(virtual_size: int, has_parent: bool) -> bytes:
     write_metadata_entry(metadata, 128, PHYSICAL_SECTOR_SIZE_GUID, 0x10014, 4)
     put_u32(metadata, 0x10014, PHYSICAL_SECTOR_SIZE)
     if has_parent:
-        locator = parent_locator_region()
+        locator = parent_locator_region(parent_path)
         write_metadata_entry(metadata, 160, PARENT_LOCATOR_METADATA_GUID, 0x10018, len(locator))
         metadata[0x10018 : 0x10018 + len(locator)] = locator
     return bytes(metadata)
@@ -188,7 +188,13 @@ def bat_region(
     return bytes(bat)
 
 
-def vhdx(raw: bytes, sparse: bool, partial_present: bool, parent_required: bool) -> bytes:
+def vhdx(
+    raw: bytes,
+    sparse: bool,
+    partial_present: bool,
+    parent_required: bool,
+    parent_path: str,
+) -> bytes:
     if not raw or len(raw) % LOGICAL_SECTOR_SIZE:
         raise ValueError("VHDX payload size must be a non-zero multiple of 512 bytes")
     if sparse and partial_present:
@@ -216,7 +222,7 @@ def vhdx(raw: bytes, sparse: bool, partial_present: bool, parent_required: bool)
 
     image = bytearray()
     image.extend(header_section())
-    image.extend(metadata_region(len(raw), partial_present or parent_required))
+    image.extend(metadata_region(len(raw), partial_present or parent_required, parent_path))
     image.extend(bat_region(block_offsets, bitmap_offset, partial_present, parent_required))
     assert len(image) == PAYLOAD_OFFSET
 
@@ -244,6 +250,11 @@ def main() -> None:
         action="store_true",
         help="mark sparse blocks as requiring a differencing parent chain",
     )
+    parser.add_argument(
+        "--parent-path",
+        default="nextboot-smoke-parent-base.vhdx",
+        help="relative parent path stored in the VHDX Parent Locator",
+    )
     parser.add_argument("raw_image", type=Path)
     parser.add_argument("vhdx_image", type=Path)
     args = parser.parse_args()
@@ -251,7 +262,7 @@ def main() -> None:
     raw = args.raw_image.read_bytes()
     args.vhdx_image.parent.mkdir(parents=True, exist_ok=True)
     args.vhdx_image.write_bytes(
-        vhdx(raw, args.sparse, args.partial_present, args.parent_required)
+        vhdx(raw, args.sparse, args.partial_present, args.parent_required, args.parent_path)
     )
     print(f"created {args.vhdx_image} ({args.vhdx_image.stat().st_size} bytes)")
 

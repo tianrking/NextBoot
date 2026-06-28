@@ -129,7 +129,7 @@ if [ "${NEXTBOOT_FULL_QEMU_MATRIX:-0}" = "1" ]; then
     run_case "nvme 4K split exFAT partially-present VHDX smoke" \
         --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-partial-vhdx
 
-    run_case "nvme 4K split exFAT parent-required VHDX rejection" \
+    run_case "nvme 4K split exFAT parent-backed VHDX smoke" \
         --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-vhdx
 
     run_case "nvme 4K split exFAT dynamic VDI smoke" \
