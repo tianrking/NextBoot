@@ -1,5 +1,5 @@
 use super::*;
-use crate::{VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
+use crate::{VirtIoError, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
 
 fn fill_from_lba(lba: u64, buf: &mut [u8]) -> Result<(), VirtIoError> {
     for byte in buf {
