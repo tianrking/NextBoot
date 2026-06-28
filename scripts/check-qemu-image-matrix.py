@@ -25,6 +25,7 @@ class ImageCase:
     name: str
     args: tuple[str, ...]
     expect: tuple[str, ...]
+    artifact: str | None = None
 
 
 CASES = (
@@ -72,6 +73,19 @@ CASES = (
         "NVMe 4K split XFS VLNK smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "xfs", "--sector-size", "4096", "--smoke-vlnk-iso"),
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=xfs", "verified 1 /ISO image file(s)"),
+        f"nextboot-smoke-{ARCH_TAG}-vlnk.vlnk.iso",
+    ),
+    ImageCase(
+        "NVMe 4K split parent-required VHDX",
+        ("--bus", "nvme", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-parent-vhdx"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", f"nextboot-smoke-{ARCH_TAG}-parent.vhdx"),
+        f"nextboot-smoke-{ARCH_TAG}-parent.vhdx",
+    ),
+    ImageCase(
+        "NVMe 4K split differencing VDI",
+        ("--bus", "nvme", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-parent-vdi"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", f"nextboot-smoke-{ARCH_TAG}-parent.vdi"),
+        f"nextboot-smoke-{ARCH_TAG}-parent.vdi",
     ),
 )
 
@@ -114,9 +128,9 @@ def run_case(case: ImageCase, env: dict[str, str], index: int) -> None:
     for needle in case.expect:
         require(needle in result.stdout, f"{case.name} output missing {needle!r}\n{result.stdout}")
     require("--no-run set; image is ready for manual testing." in result.stdout, f"{case.name} did not stop at --no-run")
-    if "--smoke-vlnk-iso" in case.args:
-        vlnk_file = PROJECT_DIR / "target" / f"nextboot-smoke-{ARCH_TAG}-vlnk.vlnk.iso"
-        require(vlnk_file.exists(), f"{case.name} did not create {vlnk_file}")
+    if case.artifact:
+        artifact = PROJECT_DIR / "target" / case.artifact
+        require(artifact.exists(), f"{case.name} did not create {artifact}")
 
 
 def main() -> int:
