@@ -1,4 +1,5 @@
 use super::*;
+use alloc::vec::Vec;
 
 pub(super) struct MemoryBlockIo {
     block_size: u32,
