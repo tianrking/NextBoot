@@ -54,6 +54,16 @@ CASES = (
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf", f"nextboot-smoke-{ARCH_TAG}-windows.iso"),
     ),
     ImageCase(
+        "NVMe 4K split ext2 smoke ISO",
+        ("--bus", "nvme", "--layout", "split", "--data-fs", "ext2", "--sector-size", "4096", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext2", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
+    ),
+    ImageCase(
+        "NVMe 4K split ext3 smoke ISO",
+        ("--bus", "nvme", "--layout", "split", "--data-fs", "ext3", "--sector-size", "4096", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext3", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
+    ),
+    ImageCase(
         "NVMe 4K split ext4 Linux plugins",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "ext4", "--sector-size", "4096", "--smoke-linux-plugins"),
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext4", f"nextboot-smoke-{ARCH_TAG}-linux.iso"),
