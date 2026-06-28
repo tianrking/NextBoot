@@ -27,6 +27,9 @@ if [ "${NEXTBOOT_FULL_QEMU_MATRIX:-0}" = "1" ]; then
     run_case "virtio 512 single FAT32 smoke ISO" \
         --bus virtio --sector-size 512 --smoke-efi-iso
 
+    run_case "virtio 4K split exFAT smoke ISO" \
+        --bus virtio --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
+
     run_case "usb 4K split exFAT smoke ISO" \
         --bus usb --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
 

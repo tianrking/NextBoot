@@ -36,6 +36,10 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
         ("--bus virtio", "--sector-size 512", "--smoke-efi-iso"),
     ),
     MatrixRequirement(
+        "full virtio 4K split exFAT ISO boot",
+        ("--bus virtio", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
         "full USB 4K split exFAT ISO boot",
         ("--bus usb", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-efi-iso"),
     ),

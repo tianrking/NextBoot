@@ -40,6 +40,15 @@ CASES = (
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "logical_block_size=4096"),
     ),
     ImageCase(
+        "virtio 4K split exFAT smoke ISO",
+        ("--bus", "virtio", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "virtio-blk-pci",
+            "logical_block_size=4096",
+        ),
+    ),
+    ImageCase(
         "USB 512 split FAT32 smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "fat32", "--sector-size", "512", "--smoke-efi-iso"),
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "usb-storage"),
