@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::ptr;
+use log::info;
 use nextboot_virtio::protocol::{DevicePathHeader, DevicePathType, EndDevicePath, MediaSubtype};
 use uefi::proto::device_path::{DevicePath, FfiDevicePath};
 use uefi::proto::unsafe_protocol;
@@ -306,6 +307,12 @@ impl LinuxInitrdLoadFile2Protocol {
         unsafe {
             *buffer_size = required_size;
         }
+        info!(
+            "Linux initrd LoadFile2 request: required={} provided={} buffer_null={}",
+            required_size,
+            provided_size,
+            buffer.is_null()
+        );
 
         if buffer.is_null() || provided_size < required_size {
             return Status::BUFFER_TOO_SMALL;
@@ -314,6 +321,7 @@ impl LinuxInitrdLoadFile2Protocol {
         unsafe {
             ptr::copy_nonoverlapping(self.data.as_ptr(), buffer.cast::<u8>(), required_size);
         }
+        info!("Linux initrd LoadFile2 served {} bytes", required_size);
 
         Status::SUCCESS
     }

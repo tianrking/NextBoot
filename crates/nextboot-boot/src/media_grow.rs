@@ -1,6 +1,6 @@
 use crate::media_grow_util::{
-    crc32, device_path_to_vec, div_round_up, read_le_u32, read_le_u64, write_le_u32,
-    write_le_u64, zeroed_vec,
+    crc32, device_path_to_vec, div_round_up, read_le_u32, read_le_u64, write_le_u32, write_le_u64,
+    zeroed_vec,
 };
 use crate::source_disk::{parent_device_path_bytes, parse_last_hard_drive_device_path};
 use alloc::vec::Vec;
@@ -158,7 +158,11 @@ fn try_grow_boot_media(image: Handle, bt: &BootServices) -> Result<GrowOutcome, 
     if needs_gpt {
         update_gpt_entries(&mut entries, gpt.entry_size, data.index, new_data_end)?;
         let new_entry_crc = crc32(entries.get(..entry_bytes).ok_or("truncated GPT entries")?);
-        write_le_u32(&mut mbr, 0x1be + 12, (total_blocks - 1).min(u32::MAX as u64) as u32)?;
+        write_le_u32(
+            &mut mbr,
+            0x1be + 12,
+            (total_blocks - 1).min(u32::MAX as u64) as u32,
+        )?;
         block_io
             .write_blocks(media_id, 0, &mbr)
             .map_err(|_| "failed to update protective MBR")?;
@@ -209,7 +213,8 @@ fn boot_parent_block_handle(image: Handle, bt: &BootServices) -> Result<Handle, 
         .ok_or("boot device has no hard-drive device path")?;
     let parent_path = parent_device_path_bytes(&device_path_bytes, &hard_drive)
         .ok_or("could not derive parent device path")?;
-    let mut parent = unsafe { DevicePath::from_ffi_ptr(parent_path.as_ptr().cast::<FfiDevicePath>()) };
+    let mut parent =
+        unsafe { DevicePath::from_ffi_ptr(parent_path.as_ptr().cast::<FfiDevicePath>()) };
     bt.locate_device_path::<BlockIO>(&mut parent)
         .map_err(|_| "could not locate parent BlockIO")
 }
@@ -264,35 +269,55 @@ fn find_release_data_partition(
         let offset = index
             .checked_mul(entry_size)
             .ok_or("GPT entry offset overflow")?;
-        let entry = entries.get(offset..offset + entry_size).ok_or("truncated GPT entry")?;
+        let entry = entries
+            .get(offset..offset + entry_size)
+            .ok_or("truncated GPT entry")?;
         if entry
             .get(..GPT_ENTRY_TYPE_GUID_LEN)
             .is_some_and(|guid| guid.iter().all(|byte| *byte == 0))
         {
             continue;
         }
+        let info = PartitionInfo {
+            index,
+            start_lba: read_le_u64(entry, GPT_ENTRY_START_LBA_OFFSET)
+                .ok_or("missing partition start")?,
+            end_lba: read_le_u64(entry, GPT_ENTRY_END_LBA_OFFSET).ok_or("missing partition end")?,
+        };
         if gpt_name_eq(entry, NEXBOOT_EFI) {
             saw_efi = true;
             continue;
         }
         if gpt_name_eq(entry, NEXBOOT_DATA) {
-            data = Some(PartitionInfo {
-                index,
-                start_lba: read_le_u64(entry, GPT_ENTRY_START_LBA_OFFSET)
-                    .ok_or("missing data partition start")?,
-                end_lba: read_le_u64(entry, GPT_ENTRY_END_LBA_OFFSET)
-                    .ok_or("missing data partition end")?,
-            });
-            continue;
-        }
-        if data.is_some() {
-            return Err("non-empty partition follows NEXBOOT_DATA");
+            data = Some(info);
         }
     }
     if !saw_efi {
         return Err("missing NEXBOOT_EFI partition");
     }
-    data.ok_or("missing NEXBOOT_DATA partition")
+    let data = data.ok_or("missing NEXBOOT_DATA partition")?;
+
+    for index in 0..entry_count {
+        let offset = index
+            .checked_mul(entry_size)
+            .ok_or("GPT entry offset overflow")?;
+        let entry = entries
+            .get(offset..offset + entry_size)
+            .ok_or("truncated GPT entry")?;
+        if entry
+            .get(..GPT_ENTRY_TYPE_GUID_LEN)
+            .is_some_and(|guid| guid.iter().all(|byte| *byte == 0))
+        {
+            continue;
+        }
+        let start_lba =
+            read_le_u64(entry, GPT_ENTRY_START_LBA_OFFSET).ok_or("missing partition start")?;
+        if start_lba > data.start_lba {
+            return Err("non-empty partition follows NEXBOOT_DATA");
+        }
+    }
+
+    Ok(data)
 }
 
 fn plan_exfat_growth(
@@ -303,9 +328,7 @@ fn plan_exfat_growth(
     available_blocks: u64,
 ) -> Result<ExfatGrowth, &'static str> {
     let boot = read_blocks(block_io, media_id, data.start_lba, block_size, 1)?;
-    if boot.get(0..3) != Some(&[0xeb, 0x76, 0x90])
-        || boot.get(3..11) != Some(&b"EXFAT   "[..])
-    {
+    if boot.get(0..3) != Some(&[0xeb, 0x76, 0x90]) || boot.get(3..11) != Some(&b"EXFAT   "[..]) {
         return Err("NEXTDATA is not exFAT");
     }
     if read_le_u64(&boot, 64).ok_or("missing exFAT partition offset")? != data.start_lba {
@@ -332,7 +355,9 @@ fn plan_exfat_growth(
         .and_then(|entries| entries.checked_sub(2))
         .ok_or("invalid exFAT FAT capacity")?;
     let requested_clusters = (available_blocks - cluster_heap_offset) / sectors_per_cluster;
-    let cluster_count = requested_clusters.min(fat_capacity).min(u64::from(u32::MAX - 2));
+    let cluster_count = requested_clusters
+        .min(fat_capacity)
+        .min(u64::from(u32::MAX - 2));
     if cluster_count < 16 {
         return Err("expanded exFAT cluster count is too small");
     }
@@ -446,5 +471,6 @@ fn gpt_name_eq(entry: &[u8], expected: &str) -> bool {
         }
         offset += 2;
     }
-    raw.get(offset..).is_some_and(|tail| tail.iter().all(|byte| *byte == 0))
+    raw.get(offset..)
+        .is_some_and(|tail| tail.iter().all(|byte| *byte == 0))
 }

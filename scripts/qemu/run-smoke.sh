@@ -44,6 +44,7 @@ run_qemu_smoke() {
             if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
                 EXPECT_ARGS+=(
                     --expect "Using EFI El Torito boot image"
+                    --expect "device_type: DvdRom"
                 )
                 if [ "$SMOKE_AUTO_MEMDISK" -eq 1 ] || [ "$SMOKE_MENU_MEMDISK" -eq 1 ]; then
                     EXPECT_ARGS+=(
@@ -58,7 +59,6 @@ run_qemu_smoke() {
                 if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
                     if [ "$SMOKE_WINDOWS_WIMBOOT" -eq 1 ]; then
                         EXPECT_ARGS+=(
-                            --expect "device_type: DvdRom"
                             --expect "Booting Windows ISO"
                             --expect "Windows default EFI chain-load paths failed"
                             --expect "Loaded compressed WIMBOOT helper /ventoy/wimboot.x86_64"
@@ -70,7 +70,6 @@ run_qemu_smoke() {
                         )
                     else
                         EXPECT_ARGS+=(
-                            --expect "device_type: DvdRom"
                             --expect "Booting Windows ISO"
                             --expect "Chain loading: /efi/microsoft/boot/bootmgfw.efi"
                             --expect "Loaded chained EFI image"

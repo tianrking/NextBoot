@@ -32,18 +32,18 @@ CASES = (
     ImageCase(
         "NVMe 4K split exFAT smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", "logical_block_size=4096"),
+        ("verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB", "logical_block_size=4096"),
     ),
     ImageCase(
         "NVMe 4K split FAT32 smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "fat32", "--sector-size", "4096", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "logical_block_size=4096"),
+        ("verified split GPT layout: NEXBOOT_DATA=fat32 NEXBOOT_EFI=FAT16-32MiB", "logical_block_size=4096"),
     ),
     ImageCase(
         "virtio 4K split exFAT smoke ISO",
         ("--bus", "virtio", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB",
             "virtio-blk-pci",
             "logical_block_size=4096",
         ),
@@ -52,7 +52,7 @@ CASES = (
         "virtio 4K split FAT32 smoke ISO",
         ("--bus", "virtio", "--layout", "split", "--data-fs", "fat32", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32",
+            "verified split GPT layout: NEXBOOT_DATA=fat32 NEXBOOT_EFI=FAT16-32MiB",
             "virtio-blk-pci",
             "logical_block_size=4096",
         ),
@@ -61,7 +61,7 @@ CASES = (
         "virtio 4K split NTFS smoke ISO",
         ("--bus", "virtio", "--layout", "split", "--data-fs", "ntfs", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ntfs",
+            "verified split GPT layout: NEXBOOT_DATA=ntfs NEXBOOT_EFI=FAT16-32MiB",
             "virtio-blk-pci",
             "logical_block_size=4096",
         ),
@@ -70,7 +70,7 @@ CASES = (
         "virtio 4K split UDF smoke ISO",
         ("--bus", "virtio", "--layout", "split", "--data-fs", "udf", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf",
+            "verified split GPT layout: NEXBOOT_DATA=udf NEXBOOT_EFI=FAT16-32MiB",
             "virtio-blk-pci",
             "logical_block_size=4096",
         ),
@@ -79,7 +79,7 @@ CASES = (
         "virtio 4K split ext2 smoke ISO",
         ("--bus", "virtio", "--layout", "split", "--data-fs", "ext2", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext2",
+            "verified split GPT layout: NEXBOOT_DATA=ext2 NEXBOOT_EFI=FAT16-32MiB",
             "virtio-blk-pci",
             "logical_block_size=4096",
         ),
@@ -88,7 +88,7 @@ CASES = (
         "virtio 4K split ext3 smoke ISO",
         ("--bus", "virtio", "--layout", "split", "--data-fs", "ext3", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext3",
+            "verified split GPT layout: NEXBOOT_DATA=ext3 NEXBOOT_EFI=FAT16-32MiB",
             "virtio-blk-pci",
             "logical_block_size=4096",
         ),
@@ -97,7 +97,7 @@ CASES = (
         "virtio 4K split ext4 smoke ISO",
         ("--bus", "virtio", "--layout", "split", "--data-fs", "ext4", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext4",
+            "verified split GPT layout: NEXBOOT_DATA=ext4 NEXBOOT_EFI=FAT16-32MiB",
             "virtio-blk-pci",
             "logical_block_size=4096",
         ),
@@ -105,13 +105,13 @@ CASES = (
     ImageCase(
         "USB 512 split FAT32 smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "fat32", "--sector-size", "512", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "usb-storage"),
+        ("verified split GPT layout: NEXBOOT_DATA=fat32 NEXBOOT_EFI=FAT16-32MiB", "usb-storage"),
     ),
     ImageCase(
         "USB 4K split exFAT smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
             "usb-storage",
         ),
@@ -120,7 +120,7 @@ CASES = (
         "USB 4K split FAT32 smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "fat32", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32",
+            "verified split GPT layout: NEXBOOT_DATA=fat32 NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
             "usb-storage",
         ),
@@ -129,7 +129,7 @@ CASES = (
         "USB 4K split NTFS smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "ntfs", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ntfs",
+            "verified split GPT layout: NEXBOOT_DATA=ntfs NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
             "usb-storage",
         ),
@@ -138,7 +138,7 @@ CASES = (
         "USB 4K split UDF smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "udf", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf",
+            "verified split GPT layout: NEXBOOT_DATA=udf NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
             "usb-storage",
         ),
@@ -147,7 +147,7 @@ CASES = (
         "USB 4K split ext2 smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "ext2", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext2",
+            "verified split GPT layout: NEXBOOT_DATA=ext2 NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
             "usb-storage",
         ),
@@ -156,7 +156,7 @@ CASES = (
         "USB 4K split ext3 smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "ext3", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext3",
+            "verified split GPT layout: NEXBOOT_DATA=ext3 NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
             "usb-storage",
         ),
@@ -165,7 +165,7 @@ CASES = (
         "USB 4K split ext4 smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "ext4", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext4",
+            "verified split GPT layout: NEXBOOT_DATA=ext4 NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
             "usb-storage",
         ),
@@ -173,73 +173,73 @@ CASES = (
     ImageCase(
         "SD 512 split FAT32 smoke ISO",
         ("--bus", "sd", "--layout", "split", "--data-fs", "fat32", "--sector-size", "512", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "sd-card"),
+        ("verified split GPT layout: NEXBOOT_DATA=fat32 NEXBOOT_EFI=FAT16-32MiB", "sd-card"),
     ),
     ImageCase(
         "SD 512 split exFAT smoke ISO",
         ("--bus", "sd", "--layout", "split", "--data-fs", "exfat", "--sector-size", "512", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", "sd-card"),
+        ("verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB", "sd-card"),
     ),
     ImageCase(
         "SD 512 split NTFS smoke ISO",
         ("--bus", "sd", "--layout", "split", "--data-fs", "ntfs", "--sector-size", "512", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ntfs", "sd-card"),
+        ("verified split GPT layout: NEXBOOT_DATA=ntfs NEXBOOT_EFI=FAT16-32MiB", "sd-card"),
     ),
     ImageCase(
         "SD 512 split UDF smoke ISO",
         ("--bus", "sd", "--layout", "split", "--data-fs", "udf", "--sector-size", "512", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf", "sd-card"),
+        ("verified split GPT layout: NEXBOOT_DATA=udf NEXBOOT_EFI=FAT16-32MiB", "sd-card"),
     ),
     ImageCase(
         "SATA 512 split NTFS smoke ISO",
         ("--bus", "sata", "--layout", "split", "--data-fs", "ntfs", "--sector-size", "512", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ntfs", "ide-hd"),
+        ("verified split GPT layout: NEXBOOT_DATA=ntfs NEXBOOT_EFI=FAT16-32MiB", "ide-hd"),
     ),
     ImageCase(
         "SATA 512 split FAT32 smoke ISO",
         ("--bus", "sata", "--layout", "split", "--data-fs", "fat32", "--sector-size", "512", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "ide-hd"),
+        ("verified split GPT layout: NEXBOOT_DATA=fat32 NEXBOOT_EFI=FAT16-32MiB", "ide-hd"),
     ),
     ImageCase(
         "SATA 512 split exFAT smoke ISO",
         ("--bus", "sata", "--layout", "split", "--data-fs", "exfat", "--sector-size", "512", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", "ide-hd"),
+        ("verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB", "ide-hd"),
     ),
     ImageCase(
         "SATA 512 split UDF smoke ISO",
         ("--bus", "sata", "--layout", "split", "--data-fs", "udf", "--sector-size", "512", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf", "ide-hd"),
+        ("verified split GPT layout: NEXBOOT_DATA=udf NEXBOOT_EFI=FAT16-32MiB", "ide-hd"),
     ),
     ImageCase(
         "NVMe 4K split UDF Windows smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "udf", "--sector-size", "4096", "--smoke-windows-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf", f"Win11_23H2-{ARCH_TAG}.iso"),
+        ("verified split GPT layout: NEXBOOT_DATA=udf NEXBOOT_EFI=FAT16-32MiB", f"Win11_23H2-{ARCH_TAG}.iso"),
     ),
     ImageCase(
         "NVMe 4K split ext2 smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "ext2", "--sector-size", "4096", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext2", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
+        ("verified split GPT layout: NEXBOOT_DATA=ext2 NEXBOOT_EFI=FAT16-32MiB", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
     ),
     ImageCase(
         "NVMe 4K split ext3 smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "ext3", "--sector-size", "4096", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext3", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
+        ("verified split GPT layout: NEXBOOT_DATA=ext3 NEXBOOT_EFI=FAT16-32MiB", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
     ),
     ImageCase(
         "NVMe 4K split ext4 smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "ext4", "--sector-size", "4096", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext4", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
+        ("verified split GPT layout: NEXBOOT_DATA=ext4 NEXBOOT_EFI=FAT16-32MiB", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
     ),
     ImageCase(
         "NVMe 4K split Btrfs smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "btrfs", "--sector-size", "4096", "--smoke-efi-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=btrfs", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
+        ("verified split GPT layout: NEXBOOT_DATA=btrfs NEXBOOT_EFI=FAT16-32MiB", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
     ),
     ImageCase(
         "USB 4K split Btrfs smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "btrfs", "--sector-size", "4096", "--smoke-efi-iso"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=btrfs",
+            "verified split GPT layout: NEXBOOT_DATA=btrfs NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
             "usb-storage",
         ),
@@ -247,24 +247,24 @@ CASES = (
     ImageCase(
         "NVMe 4K split ext4 Linux plugins",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "ext4", "--sector-size", "4096", "--smoke-linux-plugins"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext4", f"nextboot-smoke-{ARCH_TAG}-linux.iso"),
+        ("verified split GPT layout: NEXBOOT_DATA=ext4 NEXBOOT_EFI=FAT16-32MiB", f"nextboot-smoke-{ARCH_TAG}-linux.iso"),
     ),
     ImageCase(
         "NVMe 4K split exFAT Linux GRUB smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-linux-grub"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", f"Daily_Install_GRUB-{ARCH_TAG}.iso"),
+        ("verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB", f"Daily_Install_GRUB-{ARCH_TAG}.iso"),
     ),
     ImageCase(
         "NVMe 4K split XFS VLNK smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "xfs", "--sector-size", "4096", "--smoke-vlnk-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=xfs", "verified 1 /ISO image file(s)"),
+        ("verified split GPT layout: NEXBOOT_DATA=xfs NEXBOOT_EFI=FAT16-32MiB", "verified 1 /ISO image file(s)"),
         f"nextboot-smoke-{ARCH_TAG}-vlnk.vlnk.iso",
     ),
     ImageCase(
         "NVMe 4K split parent-backed VHDX",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-parent-vhdx"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB",
             f"nextboot-smoke-{ARCH_TAG}-parent.vhdx",
             f"nextboot-smoke-{ARCH_TAG}-parent-base.vhdbase",
             "verified 2 /ISO image file(s)",
@@ -287,7 +287,7 @@ CASES = (
             "4",
         ),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB",
             f"nextboot-smoke-{ARCH_TAG}-parent-chain.vhdx",
             f"nextboot-smoke-{ARCH_TAG}-parent-base.vhdbase",
             f"nextboot-smoke-{ARCH_TAG}-parent-level-2.vhdbase",
@@ -311,7 +311,7 @@ CASES = (
             "--smoke-missing-parent-vhdx",
         ),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB",
             f"nextboot-smoke-{ARCH_TAG}-missing-parent.vhdx",
             "verified 1 /ISO image file(s)",
         ),
@@ -331,7 +331,7 @@ CASES = (
             "--smoke-parent-partial-vhdx",
         ),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB",
             f"nextboot-smoke-{ARCH_TAG}-parent-partial.vhdx",
             f"nextboot-smoke-{ARCH_TAG}-parent-base.vhdbase",
             "verified 2 /ISO image file(s)",
@@ -342,7 +342,7 @@ CASES = (
         "NVMe 4K split parent-backed VDI",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-parent-vdi"),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB",
             f"nextboot-smoke-{ARCH_TAG}-parent.vdi",
             f"nextboot-smoke-{ARCH_TAG}-parent-base.vdibase",
             "verified 2 /ISO image file(s)",
@@ -365,7 +365,7 @@ CASES = (
             "4",
         ),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB",
             f"nextboot-smoke-{ARCH_TAG}-parent-chain.vdi",
             f"nextboot-smoke-{ARCH_TAG}-parent-base.vdibase",
             f"nextboot-smoke-{ARCH_TAG}-parent-level-2.vdibase",
@@ -389,7 +389,7 @@ CASES = (
             "--smoke-missing-parent-vdi",
         ),
         (
-            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB",
             f"nextboot-smoke-{ARCH_TAG}-missing-parent.vdi",
             "verified 1 /ISO image file(s)",
         ),

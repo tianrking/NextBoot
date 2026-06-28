@@ -46,6 +46,7 @@ pub struct VentoyDudFile<'a> {
 
 pub struct VentoyLinuxInitrdInput<'a> {
     pub base_archives: &'a [&'a [u8]],
+    pub original_initrd: Option<&'a [u8]>,
     pub image_map: &'a [VentoyImageMapChunk],
     pub os_param: &'a [u8; VENTOY_OS_PARAM_SIZE],
     pub auto_install: Option<&'a [u8]>,
@@ -61,6 +62,10 @@ pub fn build_ventoy_linux_initrd(
 
     for archive in input.base_archives {
         builder.append_archive_without_trailer(archive)?;
+    }
+
+    if let Some(data) = input.original_initrd {
+        builder.add_file("initrd000", data)?;
     }
 
     builder.add_file(VENTOY_IMAGE_MAP_PATH, &encode_image_map(input.image_map)?)?;
@@ -208,6 +213,7 @@ mod tests {
         };
         let input = VentoyLinuxInitrdInput {
             base_archives: &[],
+            original_initrd: None,
             image_map: &image_map,
             os_param: &os_param,
             auto_install: Some(b"answer"),
@@ -258,6 +264,7 @@ mod tests {
         let base = base.finish().expect("base archive");
         let input = VentoyLinuxInitrdInput {
             base_archives: &[&base],
+            original_initrd: Some(b"initrd"),
             image_map: &image_map,
             os_param: &os_param,
             auto_install: None,
@@ -270,6 +277,7 @@ mod tests {
         let entries = list_entries(&archive).expect("entries");
 
         assert_eq!(entries[0].0, "init");
+        assert!(entries.iter().any(|entry| entry.0 == "initrd000"));
         assert_eq!(
             entries
                 .iter()
@@ -296,6 +304,7 @@ mod tests {
         }];
         let input = VentoyLinuxInitrdInput {
             base_archives: &[],
+            original_initrd: None,
             image_map: &image_map,
             os_param: &os_param,
             auto_install: None,

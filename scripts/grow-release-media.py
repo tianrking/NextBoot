@@ -166,7 +166,10 @@ def grow(path: str, sector_size: int, media_size_bytes: int | None = None) -> st
         require(any(part.name == NEXBOOT_EFI for part in partitions), "missing NEXBOOT_EFI")
         data = next((part for part in partitions if part.name == NEXBOOT_DATA), None)
         require(data is not None, "missing NEXBOOT_DATA")
-        require(all(part.index <= data.index for part in partitions), "NEXBOOT_DATA is not last partition")
+        require(
+            all(part.start_lba <= data.start_lba for part in partitions),
+            "NEXBOOT_DATA is not physically last partition",
+        )
 
         backup_entries_lba = last_lba - entry_array_sectors
         new_last_usable = backup_entries_lba - 1

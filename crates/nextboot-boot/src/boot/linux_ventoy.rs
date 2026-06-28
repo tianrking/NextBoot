@@ -44,6 +44,7 @@ impl BootManager<'_> {
 
         let input = VentoyLinuxInitrdInput {
             base_archives: &base_refs,
+            original_initrd: Some(initrd_data.as_slice()),
             image_map: &image_map,
             os_param: &os_param,
             auto_install: auto_install.as_ref().map(|file| file.data.as_slice()),
@@ -51,17 +52,20 @@ impl BootManager<'_> {
             injection_archive: injection.as_ref().map(|file| file.data.as_slice()),
             dud_files: &dud_refs,
         };
-        let overlay = crate::ventoy_linux::build_ventoy_linux_initrd(&input)
+        let replacement = crate::ventoy_linux::build_ventoy_linux_initrd(&input)
             .map_err(ventoy_linux_error_to_uefi_status)?;
+        let original_initrd_len = initrd_data.len();
 
+        initrd_data.clear();
         initrd_data
-            .try_reserve_exact(overlay.len())
+            .try_reserve_exact(replacement.len())
             .map_err(|_| Status::OUT_OF_RESOURCES)?;
-        initrd_data.extend_from_slice(&overlay);
+        initrd_data.extend_from_slice(&replacement);
 
         info!(
-            "Appended Ventoy Linux initrd overlay: {} bytes, base_archives={}, image_chunks={}, auto_install={}, persistence={}, injection={}, dud_files={}",
-            overlay.len(),
+            "Prepared Ventoy Linux initrd: {} bytes, original_initrd={} bytes, base_archives={}, image_chunks={}, auto_install={}, persistence={}, injection={}, dud_files={}",
+            initrd_data.len(),
+            original_initrd_len,
             base_archives.len(),
             image_map.len(),
             auto_install.is_some(),

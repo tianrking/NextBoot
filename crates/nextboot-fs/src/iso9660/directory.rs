@@ -163,7 +163,15 @@ impl Iso9660 {
 
         // 读取文件名
         let name_raw = &data[33..33 + name_length];
-        let name = self.parse_filename(name_raw);
+        let mut name = self.parse_filename(name_raw);
+        let system_use_start = 33 + name_length + if name_length % 2 == 0 { 1 } else { 0 };
+        if system_use_start < length {
+            if let Some(rock_ridge_name) =
+                Self::parse_rock_ridge_name(&data[system_use_start..length])
+            {
+                name = rock_ridge_name;
+            }
+        }
 
         // 跳过隐藏文件
         if is_hidden {
@@ -219,6 +227,44 @@ impl Iso9660 {
         name.to_lowercase()
     }
 
+    fn parse_rock_ridge_name(system_use: &[u8]) -> Option<String> {
+        let mut offset = 0usize;
+        let mut out = String::new();
+        let mut found = false;
+
+        while offset + 4 <= system_use.len() {
+            let signature = &system_use[offset..offset + 2];
+            let length = system_use[offset + 2] as usize;
+            if length < 4 || offset + length > system_use.len() {
+                break;
+            }
+
+            if signature == b"NM" && length >= 5 {
+                let flags = system_use[offset + 4];
+                if flags & 0x02 != 0 {
+                    return Some(String::from("."));
+                }
+                if flags & 0x04 != 0 {
+                    return Some(String::from(".."));
+                }
+                if flags & 0x08 != 0 {
+                    return Some(String::from("/"));
+                }
+
+                let name = String::from_utf8_lossy(&system_use[offset + 5..offset + length]);
+                out.push_str(&name);
+                found = true;
+                if flags & 0x01 == 0 {
+                    return Some(out);
+                }
+            }
+
+            offset += length;
+        }
+
+        found.then_some(out)
+    }
+
     /// 路径转 LBA
     fn path_to_lba(&self, path: &str) -> Result<u32, FsError> {
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -247,5 +293,35 @@ impl Iso9660 {
         }
 
         Ok(current_lba)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Iso9660;
+    use alloc::string::String;
+
+    #[test]
+    fn rock_ridge_nm_replaces_iso9660_short_name() {
+        let mut system_use = alloc::vec![b'N', b'M', 17, 1, 0];
+        system_use.extend_from_slice(b"vmlinuz-virt");
+
+        assert_eq!(
+            Iso9660::parse_rock_ridge_name(&system_use),
+            Some(String::from("vmlinuz-virt"))
+        );
+    }
+
+    #[test]
+    fn rock_ridge_nm_continuation_concatenates_name_parts() {
+        let mut system_use = alloc::vec![b'N', b'M', 9, 1, 1];
+        system_use.extend_from_slice(b"init");
+        system_use.extend_from_slice(&[b'N', b'M', 15, 1, 0]);
+        system_use.extend_from_slice(b"ramfs-virt");
+
+        assert_eq!(
+            Iso9660::parse_rock_ridge_name(&system_use),
+            Some(String::from("initramfs-virt"))
+        );
     }
 }

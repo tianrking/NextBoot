@@ -337,6 +337,13 @@ pub enum OsType {
 }
 
 impl OsType {
+    pub fn is_linux(self) -> bool {
+        matches!(
+            self,
+            OsType::Ubuntu | OsType::Debian | OsType::Fedora | OsType::Arch | OsType::Linux
+        )
+    }
+
     /// 从文件名检测
     pub fn detect_from_path(path: &str) -> Self {
         let path_lower = path.to_lowercase();

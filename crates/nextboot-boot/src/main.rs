@@ -68,6 +68,10 @@ fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
 /// 主启动流程
 fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
     media_grow::grow_boot_media(image, st.boot_services());
+    let qemu_linux_serial_console = qemu_linux_serial_console_enabled(st);
+    if qemu_linux_serial_console {
+        info!("QEMU/EDK2 firmware detected; Linux serial console smoke mode enabled");
+    }
 
     // Phase 1: 检测存储设备
     info!("Phase 1: Detecting storage devices...");
@@ -155,8 +159,13 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
 
             // Phase 4: 启动选中的 ISO
             info!("Phase 4: Booting selected ISO...");
-            let boot_manager =
-                BootManager::new(st.boot_services(), st.runtime_services(), image, &iso);
+            let boot_manager = BootManager::new(
+                st.boot_services(),
+                st.runtime_services(),
+                image,
+                &iso,
+                qemu_linux_serial_console,
+            );
             boot_manager.prepare_and_boot()?;
         }
         None => {
@@ -165,4 +174,20 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
     }
 
     Ok(())
+}
+
+fn qemu_linux_serial_console_enabled(st: &SystemTable<Boot>) -> bool {
+    firmware_vendor_contains_ascii(st, b"EDK II")
+        || firmware_vendor_contains_ascii(st, b"OVMF")
+        || firmware_vendor_contains_ascii(st, b"QEMU")
+}
+
+fn firmware_vendor_contains_ascii(st: &SystemTable<Boot>, needle: &[u8]) -> bool {
+    let vendor = st.firmware_vendor().to_u16_slice();
+    vendor.windows(needle.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle.iter())
+            .all(|(code_unit, byte)| *code_unit == u16::from(*byte))
+    })
 }

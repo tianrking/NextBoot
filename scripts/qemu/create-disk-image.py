@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import math
-import lzma
 import os
 import struct
 import sys
@@ -10,6 +9,7 @@ import zlib
 
 from disk_image.exfat import write_exfat_volume
 from disk_image.btrfs import write_btrfs_volume
+from disk_image.fat16 import write_fat16_volume
 from disk_image.fat_names import Directory, fat_label, split_virtual_path
 from disk_image.ext4 import write_ext4_volume
 from disk_image.fat32 import write_fat32_volume
@@ -22,6 +22,7 @@ from disk_image.smoke import (
     make_smoke_linux_plugin_files,
     make_smoke_windows_wimboot_files,
 )
+from disk_image.ventoy_assets import copy_ventoy_assets
 
 path = sys.argv[1]
 size_mb = int(sys.argv[2])
@@ -107,6 +108,11 @@ growable_exfat_max_mib = int(os.environ.get("NEXTBOOT_GROWABLE_EXFAT_MAX_MIB", "
 growable_exfat_cluster_size = int(os.environ.get("NEXTBOOT_GROWABLE_EXFAT_CLUSTER_SIZE", "131072"))
 
 extra_files = []
+
+ventoy_assets_dir = os.environ.get("NEXTBOOT_VENTOY_ASSETS_DIR", "")
+if ventoy_assets_dir:
+    extra_files.extend(copy_ventoy_assets(ventoy_assets_dir))
+
 if smoke_auto_memdisk:
     extra_files.extend(make_smoke_auto_memdisk_files(image_files))
 if smoke_conf_replace:
@@ -142,6 +148,30 @@ def fat32_geometry(part_sectors):
         )
 
     return reserved_sectors, num_fats, sectors_per_cluster, fat_size, cluster_count
+
+def fat16_geometry(part_sectors):
+    reserved_sectors = 1
+    num_fats = 2
+    sectors_per_cluster = 1
+    root_entry_count = 512
+    root_dir_sectors = math.ceil(root_entry_count * 32 / sector_size)
+    fat_size = 1
+    while True:
+        data_sectors = part_sectors - reserved_sectors - root_dir_sectors - num_fats * fat_size
+        if data_sectors <= 0:
+            raise SystemExit("partition is too small for FAT16")
+        cluster_count = data_sectors // sectors_per_cluster
+        required = math.ceil((cluster_count + 2) * 2 / sector_size)
+        if required <= fat_size:
+            break
+        fat_size = required
+
+    if not (4085 <= cluster_count < 65525):
+        raise SystemExit(
+            f"partition has {cluster_count} clusters, outside FAT16 range"
+        )
+
+    return reserved_sectors, num_fats, sectors_per_cluster, fat_size, root_entry_count, cluster_count
 
 def log2_power_of_two(value):
     if value <= 0 or value & (value - 1):
@@ -190,7 +220,9 @@ def make_partition(name, label, fs_type, type_guid, start_lba, end_lba, include_
     if start_lba < first_usable_lba or end_lba > last_usable_lba or end_lba < start_lba:
         raise SystemExit(f"invalid partition range for {name}")
     part_sectors = end_lba - start_lba + 1
-    if fs_type == "fat32":
+    if fs_type == "fat16":
+        fat16_geometry(part_sectors)
+    elif fs_type == "fat32":
         fat32_geometry(part_sectors)
     elif fs_type == "exfat":
         exfat_geometry(part_sectors)
@@ -240,23 +272,11 @@ if layout == "single":
         )
     )
 else:
-    esp_size_mib = 64 if sector_size == 512 else 260
+    esp_size_mib = 32
     esp_start_lba = single_start_lba
     esp_end_lba = esp_start_lba + mib_to_sectors(esp_size_mib) - 1
     data_start_lba = align_up(esp_end_lba + 1, alignment_lba)
     data_end_lba = last_usable_lba
-    partitions.append(
-        make_partition(
-            "NEXBOOT_EFI",
-            "NEXBOOT",
-            "fat32",
-            esp_type,
-            esp_start_lba,
-            esp_end_lba,
-            True,
-            False,
-        )
-    )
     partitions.append(
         make_partition(
             "NEXBOOT_DATA",
@@ -267,6 +287,18 @@ else:
             data_end_lba,
             False,
             True,
+        )
+    )
+    partitions.append(
+        make_partition(
+            "NEXBOOT_EFI",
+            "VTOYEFI",
+            "fat16",
+            esp_type,
+            esp_start_lba,
+            esp_end_lba,
+            True,
+            False,
         )
     )
 
@@ -326,6 +358,7 @@ def partition_name_bytes(name):
 
 volume_deps = {
     "sector_size": sector_size,
+    "fat16_geometry": fat16_geometry,
     "fat32_geometry": fat32_geometry,
     "exfat_geometry": exfat_geometry,
     "ntfs_geometry": ntfs_geometry,
@@ -396,7 +429,9 @@ with open(path, "wb") as f:
     f.write(make_header(last_lba, 1, backup_entries_lba))
 
     for part in partitions:
-        if part["fs_type"] == "exfat":
+        if part["fs_type"] == "fat16":
+            write_fat16_volume(f, part, volume_deps)
+        elif part["fs_type"] == "exfat":
             write_exfat_volume(f, part, volume_deps)
         elif part["fs_type"] in ("ext2", "ext3", "ext4"):
             write_ext4_volume(f, part, volume_deps)

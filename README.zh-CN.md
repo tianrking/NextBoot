@@ -6,6 +6,7 @@
 
 [![CI](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml)
 [![Full QEMU Matrix](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml)
+[![Real ISO QEMU](https://github.com/tianrking/NextBoot/actions/workflows/real-iso-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/real-iso-qemu.yml)
 [![Release](https://img.shields.io/github/v/release/tianrking/NextBoot?include_prereleases&label=release)](https://github.com/tianrking/NextBoot/releases/latest)
 [![Rust](https://img.shields.io/badge/Rust-UEFI-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#架构)
@@ -47,7 +48,7 @@ nextboot-v0.0.1-universal-uefi.img.zip
 | 区域 | 内容 |
 | --- | --- |
 | GPT | 标准 GPT 分区表，适合可移动设备和固定磁盘设备 |
-| ESP | FAT32 EFI 系统分区，包含 `BOOTX64.EFI`、`BOOTIA32.EFI`、`BOOTAA64.EFI` |
+| ESP | 32MiB FAT EFI 系统分区，包含 `BOOTX64.EFI`、`BOOTIA32.EFI`、`BOOTAA64.EFI` |
 | Data | 可增长的 exFAT `NEXTDATA` 分区，预置 `/ISO` 目录 |
 | 烧录工具 | balenaEtcher、Raspberry Pi Imager、Rufus、Win32 Disk Imager、GNOME Disks 和其他 raw 写入工具 |
 | 烧录主机 | Windows、macOS、Linux |
@@ -86,6 +87,7 @@ nextboot-v0.0.1-universal-uefi.img.zip
 | --- | --- |
 | USB 512B FAT32 | QEMU boot smoke 到达 `NEXTBOOT_SMOKE_EFI_STARTED` |
 | NVMe 4K exFAT | QEMU boot smoke 到达 `NEXTBOOT_SMOKE_EFI_STARTED` |
+| 真实 Linux ISO | QEMU 将 Alpine standard 启动到 login，将 Ubuntu Server 启动到 installer，将 Kali netinst 启动到 debian-installer |
 | USB SSD 4K 布局 | QEMU 镜像矩阵覆盖 exFAT、FAT32、NTFS、UDF、ext2/3/4、Btrfs smoke 场景 |
 | SD 风格介质 | 已有 QEMU 镜像/文件系统验证；固件启动行为仍需要真实设备证据 |
 | 真实硬件 | 已有结构化报告工具，公开兼容矩阵还需要补充真实 pass 行 |
@@ -101,7 +103,7 @@ flowchart LR
   User["用户烧录通用 NextBoot 镜像"] --> Media["U 盘 / USB SSD / SD / 外置 SSD"]
 
   subgraph Disk["GPT 存储设备"]
-    ESP["FAT32 ESP<br/>BOOTX64 / BOOTIA32 / BOOTAA64"]
+    ESP["32MiB FAT ESP<br/>BOOTX64 / BOOTIA32 / BOOTAA64"]
     DATA["NEXTDATA 分区<br/>/ISO/*.iso / *.wim / *.vhdx / *.efi"]
   end
 
@@ -130,7 +132,7 @@ flowchart LR
 | 区域 | 状态 |
 | --- | --- |
 | GPT split layout | 支持 |
-| FAT32 ESP fallback loaders | `BOOTX64.EFI`、`BOOTIA32.EFI`、`BOOTAA64.EFI` |
+| FAT ESP fallback loaders | `BOOTX64.EFI`、`BOOTIA32.EFI`、`BOOTAA64.EFI` |
 | Release media growth | 单一通用镜像，首次启动 GPT/exFAT 扩容 |
 | 数据文件系统 | FAT32、exFAT、ext2、ext3、ext4、NTFS、UDF、有限 XFS、有限 Btrfs |
 | QEMU 存储总线 | virtio、NVMe、SATA、USB mass storage、SDHCI SD |
@@ -175,6 +177,7 @@ target/release-media/
 ## 测试
 
 CI 会在每次 push 和 pull request 上运行项目健康检查、UEFI target checks、QEMU 镜像生成矩阵，以及默认 QEMU boot smoke。
+计划任务/手动触发的 Real ISO QEMU workflow 会额外下载带 SHA256 固定校验的 Alpine、Ubuntu Server 和 Kali netinst ISO，并通过 NextBoot 真启动。
 
 常用本地检查：
 
@@ -187,6 +190,10 @@ scripts/qemu-smoke-matrix.sh
 
 # 需要更大兼容集合时运行完整本地矩阵。
 NEXTBOOT_FULL_QEMU_MATRIX=1 scripts/qemu-smoke-matrix.sh
+
+# 真实 ISO 启动检查。需要使用本地 Ventoy checkout 时，可设置
+# NEXTBOOT_VENTOY_ASSETS_DIR 指向 Ventoy asset 目录。
+scripts/check-real-iso-qemu.py
 ```
 
 直接做 release-media QA 的示例：

@@ -22,10 +22,19 @@ impl BootManager<'_> {
     /// 引导 Linux ISO
     pub(super) fn boot_linux(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
         info!("Booting Linux ISO...");
-        if let Ok(()) = self.try_chain_load_paths(device, generic_efi_boot_paths()) {
-            return Ok(());
+        match self.try_direct_linux_efi_stub(device) {
+            Ok(()) => return Ok(()),
+            Err(err) => warn!(
+                "Direct Linux EFI-stub boot failed for {}: {:?}; trying default EFI chain-load paths",
+                self.iso.path,
+                err.status()
+            ),
         }
 
+        self.try_chain_load_paths(device, generic_efi_boot_paths())
+    }
+
+    fn try_direct_linux_efi_stub(&self, device: &VirtualBootDevice) -> uefi::Result<()> {
         let distro = match self.iso.os_type {
             crate::scanner::OsType::Ubuntu => LinuxDistro::Ubuntu,
             crate::scanner::OsType::Debian => LinuxDistro::Debian,
@@ -34,7 +43,10 @@ impl BootManager<'_> {
             _ => LinuxDistro::Generic,
         };
 
-        let config = self.discover_linux_boot_config(distro)?;
+        let mut config = self.discover_linux_boot_config(distro)?;
+        if self.qemu_linux_serial_console {
+            append_qemu_serial_console(&mut config);
+        }
 
         info!("Kernel: {}", config.kernel_path);
         info!("Initrd: {}", config.initrd_path);
@@ -322,4 +334,17 @@ fn linux_initrd_summary(paths: &[String]) -> String {
     }
 
     out
+}
+
+fn append_qemu_serial_console(config: &mut LinuxBootConfig) {
+    if config
+        .cmdline
+        .split_whitespace()
+        .any(|token| token.starts_with("console=ttyS"))
+    {
+        return;
+    }
+
+    config.add_cmdline("console=tty0");
+    config.add_cmdline("console=ttyS0,115200");
 }

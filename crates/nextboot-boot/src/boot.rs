@@ -48,6 +48,7 @@ pub struct BootManager<'a> {
     rt: &'a RuntimeServices,
     parent_image: Handle,
     iso: &'a IsoFile,
+    qemu_linux_serial_console: bool,
 }
 
 impl<'a> BootManager<'a> {
@@ -57,12 +58,14 @@ impl<'a> BootManager<'a> {
         rt: &'a RuntimeServices,
         parent_image: Handle,
         iso: &'a IsoFile,
+        qemu_linux_serial_console: bool,
     ) -> Self {
         Self {
             bt,
             rt,
             parent_image,
             iso,
+            qemu_linux_serial_console,
         }
     }
 
@@ -95,6 +98,10 @@ impl<'a> BootManager<'a> {
         }
 
         let virtual_device = self.create_virtual_block_io(boot_config)?;
+
+        if self.iso.image_format.is_iso() && self.iso.os_type.is_linux() {
+            return self.boot_linux(&virtual_device);
+        }
 
         match self.boot_virtual_device(&virtual_device) {
             Ok(()) => Ok(()),
@@ -136,14 +143,7 @@ impl<'a> BootManager<'a> {
     fn boot_virtual_config(&self) -> VirtualDeviceConfig {
         use nextboot_virtio::CdRomBootInfo;
 
-        let device_type = if self.iso.image_format.is_iso() {
-            match self.iso.os_type {
-                OsType::Windows | OsType::WinPE => VirtualDeviceType::DvdRom,
-                _ => VirtualDeviceType::HardDisk,
-            }
-        } else {
-            VirtualDeviceType::HardDisk
-        };
+        let device_type = virtual_device_type_for_image(self.iso.image_format);
         let virtual_block_size = if let Some(block_size) = self.iso.virtual_block_size {
             block_size
         } else if self.iso.image_format.uses_512_byte_virtual_sectors() {
@@ -423,5 +423,13 @@ impl<'a> BootManager<'a> {
         }
 
         Ok(())
+    }
+}
+
+fn virtual_device_type_for_image(image_format: ImageFormat) -> VirtualDeviceType {
+    if image_format.is_iso() {
+        VirtualDeviceType::DvdRom
+    } else {
+        VirtualDeviceType::HardDisk
     }
 }

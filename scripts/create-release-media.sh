@@ -44,7 +44,7 @@ Options:
   --skip-build          do not run scripts/build.sh before creating the image
   -h, --help            Show this help
 
-The generated image contains a FAT32 ESP and a user-visible Data partition with
+The generated image contains a small FAT ESP and a user-visible Data partition with
 /ISO already present. exFAT release media reserves growth metadata so NextBoot
 can expand NEXTDATA after the image is written to larger storage. Users flash
 the .img with a normal raw-image writer, then drag ISO, WIM, VHD, VHDX, IMG,

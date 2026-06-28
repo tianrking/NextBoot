@@ -6,6 +6,7 @@
 
 [![CI](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml)
 [![Full QEMU Matrix](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml)
+[![Real ISO QEMU](https://github.com/tianrking/NextBoot/actions/workflows/real-iso-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/real-iso-qemu.yml)
 [![Release](https://img.shields.io/github/v/release/tianrking/NextBoot?include_prereleases&label=release)](https://github.com/tianrking/NextBoot/releases/latest)
 [![Rust](https://img.shields.io/badge/Rust-UEFI-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#architecture)
@@ -59,7 +60,7 @@ It contains:
 | Area | Contents |
 | --- | --- |
 | GPT | Standard partition table suitable for removable and fixed media |
-| ESP | FAT32 partition with `BOOTX64.EFI`, `BOOTIA32.EFI`, and `BOOTAA64.EFI` |
+| ESP | 32MiB FAT ESP with `BOOTX64.EFI`, `BOOTIA32.EFI`, and `BOOTAA64.EFI` |
 | Data | Growable exFAT `NEXTDATA` partition with `/ISO` already created |
 | Flashing tools | balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk Imager, GNOME Disks, and other raw writers |
 | Flashing hosts | Windows, macOS, and Linux |
@@ -100,6 +101,7 @@ style storage:
 | --- | --- |
 | USB 512B FAT32 | QEMU boot smoke reaches `NEXTBOOT_SMOKE_EFI_STARTED` |
 | NVMe 4K exFAT | QEMU boot smoke reaches `NEXTBOOT_SMOKE_EFI_STARTED` |
+| Real Linux ISOs | QEMU boots Alpine standard to login, Ubuntu Server to installer, and Kali netinst to debian-installer |
 | USB SSD 4K layouts | QEMU image matrix covers exFAT, FAT32, NTFS, UDF, ext2/3/4, and Btrfs smoke cases |
 | SD-style media | QEMU image/filesystem verification exists; firmware boot behavior still needs real-device evidence |
 | Real hardware | Structured report tooling exists, but the public compatibility matrix still needs real pass rows |
@@ -118,7 +120,7 @@ flowchart LR
   User["User flashes universal NextBoot image"] --> Media["USB stick / USB SSD / SD / external SSD"]
 
   subgraph Disk["GPT storage device"]
-    ESP["FAT32 ESP<br/>BOOTX64 / BOOTIA32 / BOOTAA64"]
+    ESP["32MiB FAT ESP<br/>BOOTX64 / BOOTIA32 / BOOTAA64"]
     DATA["NEXTDATA partition<br/>/ISO/*.iso / *.wim / *.vhdx / *.efi"]
   end
 
@@ -151,7 +153,7 @@ disk as a bootable virtual block device.
 | Area | Status |
 | --- | --- |
 | GPT split layout | Supported |
-| FAT32 ESP fallback loaders | `BOOTX64.EFI`, `BOOTIA32.EFI`, `BOOTAA64.EFI` |
+| FAT ESP fallback loaders | `BOOTX64.EFI`, `BOOTIA32.EFI`, `BOOTAA64.EFI` |
 | Release media growth | Single universal image with first-boot GPT/exFAT expansion |
 | Data filesystems | FAT32, exFAT, ext2, ext3, ext4, NTFS, UDF, limited XFS, limited Btrfs |
 | Storage buses in QEMU | virtio, NVMe, SATA, USB mass storage, SDHCI SD |
@@ -197,6 +199,8 @@ target/release-media/
 
 CI runs the project health gate, UEFI target checks, QEMU image generation
 matrix, and default QEMU boot smoke on every push and pull request.
+The scheduled/manual Real ISO QEMU workflow additionally downloads SHA256-pinned
+Alpine, Ubuntu Server, and Kali netinst ISOs and boots them through NextBoot.
 
 Useful local checks:
 
@@ -209,6 +213,10 @@ scripts/qemu-smoke-matrix.sh
 
 # Full local matrix when you need the broader compatibility set.
 NEXTBOOT_FULL_QEMU_MATRIX=1 scripts/qemu-smoke-matrix.sh
+
+# Real ISO boot checks. Set NEXTBOOT_VENTOY_ASSETS_DIR to a Ventoy asset dir
+# when you want to use a local Ventoy checkout instead of the pinned download.
+scripts/check-real-iso-qemu.py
 ```
 
 Direct release-media QA example:

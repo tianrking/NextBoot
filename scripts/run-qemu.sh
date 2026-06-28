@@ -2,7 +2,7 @@
 # NextBoot QEMU Test Script
 #
 # Creates GPT test disk images with NextBoot installed as the removable/fallback
-# UEFI bootloader.  Split layouts use a FAT32 ESP plus an exFAT, FAT32, or NTFS
+# UEFI bootloader.  Split layouts use a small FAT ESP plus an exFAT, FAT32, or NTFS
 # Data partition so fixed-disk, NVMe, SATA, USB, SD, and virtio paths can be tested
 # without rewriting real media.
 #

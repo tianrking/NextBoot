@@ -22,7 +22,7 @@ USB volume will not work.
 The image already contains:
 
 - A GPT partition table.
-- A FAT32 ESP with `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and
+- A 32MiB FAT ESP with `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and
   `EFI/BOOT/BOOTAA64.EFI`.
 - A growable exFAT Data partition labeled `NEXTDATA`.
 - An empty `/ISO` directory for user boot images.

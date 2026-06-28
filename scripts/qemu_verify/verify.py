@@ -19,12 +19,15 @@ from .common import (
 from .btrfs import BtrfsVolume
 from .exfat import ExFatVolume
 from .ext4 import Ext4Volume
+from .fat16 import Fat16Volume
 from .fat32 import Fat32Volume
 from .ntfs import NtfsVolume
 from .udf import UdfVolume
 from .xfs import XfsVolume
 
 def make_volume(image: DiskImage, partition: Partition, expected_fs: str):
+    if expected_fs == "fat16":
+        return Fat16Volume(image, partition)
     if expected_fs == "fat32":
         return Fat32Volume(image, partition)
     if expected_fs == "exfat":
@@ -126,6 +129,21 @@ def find_partition(partitions: list[Partition], name: str) -> Partition:
     raise VerifyError(f"missing GPT partition {name}")
 
 
+def verify_efi_compat_partition(image: DiskImage, partition: Partition) -> None:
+    require(partition.number == 2, "split ESP partition must be GPT entry 2")
+    require(
+        partition.block_count * image.sector_size == 32 * 1024 * 1024,
+        "split ESP partition must be exactly 32MiB",
+    )
+    require(
+        partition.type_guid == ESP_GUID,
+        "split ESP partition has wrong type GUID",
+    )
+    boot = image.read_blocks(partition.start_lba)
+    require(boot[510:512] == b"\x55\xaa", "split ESP partition missing FAT boot signature")
+    require(boot[54:62] == b"FAT16   ", "split ESP partition is not FAT16")
+
+
 def verify_layout(args: argparse.Namespace) -> None:
     image = DiskImage(args.disk_image, args.sector_size)
     try:
@@ -143,14 +161,24 @@ def verify_layout(args: argparse.Namespace) -> None:
             require(len(partitions) == 2, f"split layout expected 2 partitions, got {len(partitions)}")
             esp = find_partition(partitions, "NEXBOOT_EFI")
             data = find_partition(partitions, "NEXBOOT_DATA")
+            require(data.number == 1, "split Data partition must be GPT entry 1")
+            require(esp.number == 2, "split ESP partition must be GPT entry 2")
             require(esp.type_guid == ESP_GUID, "split ESP partition has wrong type GUID")
             require(data.type_guid == MS_BASIC_GUID, "split Data partition has wrong type GUID")
-            esp_volume = make_volume(image, esp, "fat32")
+            require(
+                all(part.start_lba <= data.start_lba for part in partitions),
+                "split Data partition must be physically last",
+            )
+            verify_efi_compat_partition(image, esp)
+            esp_volume = make_volume(image, esp, "fat16")
             data_volume = make_volume(image, data, args.data_fs)
             for boot_name, source in args.efi_entries:
                 verify_efi(esp_volume, image, source, boot_name)
             verify_iso_directory(data_volume, image, args.image)
-            print(f"verified split GPT layout: {esp.name}=FAT32 {data.name}={args.data_fs}")
+            print(
+                f"verified split GPT layout: {data.name}={args.data_fs} "
+                f"{esp.name}=FAT16-32MiB"
+            )
         print(f"verified {len(args.efi_entries)} EFI fallback loader(s)")
         print(f"verified {len(args.image)} /ISO image file(s) on {args.sector_size} byte sectors")
     finally:

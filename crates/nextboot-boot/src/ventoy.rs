@@ -41,7 +41,7 @@ const VENTOY_RESERVED_CHAIN_TYPE_OFFSET: usize = 2;
 const VENTOY_RESERVED_ISO_FORMAT_OFFSET: usize = 3;
 const VENTOY_RESERVED_WINDOWS_CD_PROMPT_OFFSET: usize = 4;
 const VENTOY_RESERVED_LINUX_REMOUNT_OFFSET: usize = 5;
-const VENTOY_RESERVED_VLNK_OFFSET: usize = 6;
+const VENTOY_RESERVED_OS_PARAM_DISK_LOOKUP_OFFSET: usize = 6;
 const VENTOY_RESERVED_DISK_SIGNATURE_OFFSET: usize = 7;
 const VENTOY_RESERVED_WINDOWS_MAX_RES_OFFSET: usize = 11;
 
@@ -67,6 +67,16 @@ impl VentoyReserved {
         }
     }
 
+    pub fn with_break_level(mut self, level: u8) -> Self {
+        self.bytes[0] = level;
+        self
+    }
+
+    pub fn with_debug_level(mut self, level: u8) -> Self {
+        self.bytes[1] = level;
+        self
+    }
+
     pub fn with_chain_type(mut self, chain_type: u8) -> Self {
         self.bytes[VENTOY_RESERVED_CHAIN_TYPE_OFFSET] = chain_type;
         self
@@ -87,9 +97,13 @@ impl VentoyReserved {
         self
     }
 
-    pub fn with_vlnk(mut self, enabled: bool) -> Self {
-        self.bytes[VENTOY_RESERVED_VLNK_OFFSET] = if enabled { 1 } else { 0 };
+    pub fn with_os_param_disk_lookup(mut self, enabled: bool) -> Self {
+        self.bytes[VENTOY_RESERVED_OS_PARAM_DISK_LOOKUP_OFFSET] = if enabled { 1 } else { 0 };
         self
+    }
+
+    pub fn with_vlnk(self, enabled: bool) -> Self {
+        self.with_os_param_disk_lookup(enabled)
     }
 
     pub fn with_disk_signature(mut self, signature: [u8; 4]) -> Self {
