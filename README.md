@@ -4,6 +4,12 @@
 
 [![CI](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml)
 [![Full QEMU Matrix](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml)
+[![Release](https://img.shields.io/github/v/release/tianrking/NextBoot?include_prereleases&label=release)](https://github.com/tianrking/NextBoot/releases/latest)
+[![Rust](https://img.shields.io/badge/Rust-UEFI-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Boot](https://img.shields.io/badge/boot-UEFI%20x86__64-blue)](#architecture)
+[![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#current-confidence)
+[![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#feature-coverage)
+[![Release Media](https://img.shields.io/badge/release-burnable%20.img.xz-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.1)
 
 NextBoot is a Rust UEFI boot medium for USB sticks, USB SSDs, SD cards, and
 fixed-disk style SSD/NVMe deployments. The release artifact is a compressed raw
@@ -12,6 +18,18 @@ drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and choose the device from the
 firmware UEFI boot menu.
 
 No end-user command line or flasher UI is required after the image is burned.
+
+## Can I Use It Now?
+
+Yes, for technical preview and real-device bring-up.
+
+The `v0.0.1` release produces a burnable `.img.xz` image. After burning it to a
+USB stick, USB SSD, SD card, or external SSD, the user should see a `NEXTDATA`
+partition and can drag boot images into `/ISO`. The UEFI boot path and storage
+layout are covered by CI, QEMU smoke tests, and release-media verification.
+
+Do not call it production-universal yet. The two remaining hard gaps are broad
+physical hardware pass rows and production-grade public Secure Boot signing.
 
 ## Release Shape
 
@@ -87,16 +105,29 @@ enclosures, SD readers, motherboard firmware, and Secure Boot policies.
 
 NextBoot uses a small UEFI loader plus a visible data partition:
 
-```text
-+------------------------- storage device -------------------------+
-| GPT                                                               |
-|                                                                  |
-|  +-------------------+   +-------------------------------------+  |
-|  | FAT32 ESP         |   | exFAT/FAT32/NTFS/... Data           |  |
-|  | EFI/BOOT/*.EFI    |   | /ISO/*.iso, *.wim, *.vhdx, ...      |  |
-|  +-------------------+   +-------------------------------------+  |
-|                                                                  |
-+------------------------------------------------------------------+
+```mermaid
+flowchart LR
+  User["User burns NextBoot .img.xz"] --> Media["USB stick / USB SSD / SD / external SSD"]
+
+  subgraph Disk["GPT storage device"]
+    ESP["FAT32 ESP<br/>EFI/BOOT/BOOTX64.EFI"]
+    DATA["NEXTDATA partition<br/>/ISO/*.iso / *.wim / *.vhdx / *.efi"]
+  end
+
+  Media --> ESP
+  Media --> DATA
+  DATA --> Scan["NextBoot scanner<br/>UEFI FS + raw partitions"]
+  Scan --> Menu["UEFI menu"]
+  Menu --> Choice["Selected boot image"]
+  Choice --> ISO["ISO chain-load<br/>El Torito EFI"]
+  Choice --> Windows["Windows path<br/>WIMBOOT assets"]
+  Choice --> Linux["Linux path<br/>kernel/initrd/plugins"]
+  Choice --> VDisk["Virtual disk path<br/>IMG / VHD / VHDX / VDI"]
+
+  ISO --> Firmware["Firmware boots selected OS"]
+  Windows --> Firmware
+  Linux --> Firmware
+  VDisk --> Firmware
 ```
 
 At boot, NextBoot scans visible UEFI file systems and raw block-device
@@ -195,7 +226,7 @@ device and can copy boot images during media creation:
 ```
 
 This is not the preferred end-user flow; public users should receive a release
-`.img` and burn it with their normal imaging tool.
+`.img.xz` and burn it with their normal imaging tool.
 
 ## Secure Boot
 
