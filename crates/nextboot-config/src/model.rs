@@ -1,7 +1,7 @@
 use super::md5::{md5_digest, parse_md5_hex};
 use super::{
-    find_matching_rule, normalize_config_path, path_parent_matches, path_pattern_eq,
-    target_matches_image, JsonParser,
+    find_matching_rule, normalize_config_path, path_dir_matches, path_parent_matches,
+    path_pattern_eq, target_matches_image, JsonParser,
 };
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -335,14 +335,25 @@ impl VentoyConfig {
     }
 
     pub fn menu_tip_for_image(&self, path: &str) -> Option<&VentoyMenuTip> {
-        self.menu_tips
+        let image_tip = self
+            .menu_tips
             .iter()
             .find(|entry| match &entry.target {
                 VentoyMenuTipTarget::Image(pattern) => path_pattern_eq(pattern.as_str(), path),
                 VentoyMenuTipTarget::Dir(_) => false,
             })
             .map(|entry| &entry.tip)
-            .filter(|tip| !tip.is_empty())
+            .filter(|tip| !tip.is_empty());
+        image_tip.or_else(|| {
+            self.menu_tips
+                .iter()
+                .find(|entry| match &entry.target {
+                    VentoyMenuTipTarget::Dir(dir) => path_dir_matches(dir.as_str(), path),
+                    VentoyMenuTipTarget::Image(_) => false,
+                })
+                .map(|entry| &entry.tip)
+                .filter(|tip| !tip.is_empty())
+        })
     }
 
     pub fn menu_class_for_image(&self, path: &str) -> Option<&str> {
@@ -359,6 +370,14 @@ impl VentoyConfig {
         for rule in &self.menu_classes {
             if let VentoyMenuClassTarget::Parent(parent) = &rule.target {
                 if path_parent_matches(parent.as_str(), path) {
+                    return Some(rule.class.as_str());
+                }
+            }
+        }
+
+        for rule in &self.menu_classes {
+            if let VentoyMenuClassTarget::Dir(dir) = &rule.target {
+                if path_dir_matches(dir.as_str(), path) {
                     return Some(rule.class.as_str());
                 }
             }

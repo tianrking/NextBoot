@@ -17,7 +17,7 @@ fn parses_core_ventoy_plugins() {
             "menu_alias": [
                 { "image": "/ISO/win11.iso", "alias": "Windows 11" }
             ],
-            "image_blacklist": ["/ISO/old.iso"]
+            "image_blacklist": ["/ISO/Win*.iso"]
         }"#;
 
     let config = VentoyConfig::parse(json).expect("config");
@@ -32,8 +32,8 @@ fn parses_core_ventoy_plugins() {
     assert_eq!(config.default_search_root.as_deref(), Some("/ISO"));
     assert_eq!(config.max_search_level, Some(2));
     assert_eq!(config.image_list_mode, VentoyImageListMode::Deny);
-    assert!(!config.allows_image_path("/iso/old.iso"));
-    assert!(config.allows_image_path("/iso/win11.iso"));
+    assert!(!config.allows_image_path("/iso/win11-enterprise.iso"));
+    assert!(config.allows_image_path("/iso/old.iso"));
     assert_eq!(config.menu_alias_for("/iso/WIN11.ISO"), Some("Windows 11"));
     assert!(!config.supports_image_name("boot.wim"));
 }
@@ -113,7 +113,13 @@ fn parses_menu_tip_and_class_plugins() {
             tip2: String::new(),
         })
     );
-    assert!(config.menu_tip_for_image("/ISO/tools/rescue.iso").is_none());
+    assert_eq!(
+        config.menu_tip_for_image("/ISO/tools/rescue.iso"),
+        Some(&VentoyMenuTip {
+            tip1: "Tools".to_string(),
+            tip2: "Diagnostics".to_string(),
+        })
+    );
     assert_eq!(
         config.menu_class_for_image("/ISO/ubuntu.iso"),
         Some("ubuntu")
@@ -121,6 +127,10 @@ fn parses_menu_tip_and_class_plugins() {
     assert_eq!(
         config.menu_class_for_image("/ISO/rescue.iso"),
         Some("iso-root")
+    );
+    assert_eq!(
+        config.menu_class_for_image("/ISO/tools/rescue.iso"),
+        Some("folder-tools")
     );
     assert!(config.menu_class_for_image("/Other/rescue.iso").is_none());
 }
@@ -264,9 +274,42 @@ fn parses_boot_plugin_metadata_for_image() {
     assert!(plugin.auto_memdisk);
 
     let dud = config
-        .image_plugin_for("/ISO/rhel8.iso")
+        .image_plugin_for("/ISO/rhel-server-8.iso")
         .expect("dud plugin");
     assert_eq!(dud.dud.expect("dud").files, ["/dud/dd.iso"]);
+}
+
+#[test]
+fn ventoy_glob_star_matches_multiple_path_bytes() {
+    let json = br#"{
+            "image_list": ["/ISO/*rescue*.iso", "/Other/exact.iso"],
+            "menu_alias": [
+                { "image": "/ISO/Win*.iso", "alias": "Windows family" }
+            ],
+            "injection": [
+                { "parent": "/ISO/Linux*", "archive": "/inject/linux.tar" }
+            ]
+        }"#;
+
+    let config = VentoyConfig::parse(json).expect("config");
+
+    assert!(config.allows_image_path("/iso/debian-rescue-live.iso"));
+    assert!(!config.allows_image_path("/iso/debian-live.iso"));
+    assert_eq!(
+        config.menu_alias_for("/ISO/Win11_24H2.iso"),
+        Some("Windows family")
+    );
+    assert_eq!(
+        config
+            .image_plugin_for("/ISO/Linux Tools/ubuntu.iso")
+            .expect("glob parent")
+            .injection_archive
+            .as_deref(),
+        Some("/inject/linux.tar")
+    );
+    assert!(config
+        .image_plugin_for("/ISO/Linux Tools/nested/ubuntu.iso")
+        .is_none());
 }
 
 #[test]

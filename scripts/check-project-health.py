@@ -6,12 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 
-from health.common import (
-    DEFAULT_BUILD_TARGET,
-    DEFAULT_LINE_LIMIT,
-    HOST_TEST_PACKAGE,
-    CheckResult,
-)
+from health.common import DEFAULT_BUILD_TARGET, DEFAULT_LINE_LIMIT, HOST_TEST_PACKAGES, CheckResult
 from health.integration_checks import (
     check_flash_dry_run,
     check_hardware_matrix_fixture,
@@ -108,7 +103,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-host-tests",
         action="store_true",
-        help=f"skip host cargo test for {HOST_TEST_PACKAGE}",
+        help=f"skip host cargo test for {', '.join(HOST_TEST_PACKAGES)}",
     )
     parser.add_argument(
         "--build-target",

@@ -1,0 +1,6 @@
+[package]
+name = "nextboot-config"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

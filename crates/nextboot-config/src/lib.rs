@@ -5,6 +5,10 @@
 //! file filters, image white/black lists, menu aliases, and the boot-affecting
 //! plugin metadata used later by Linux initrd and Windows runtime hooks.
 
+#![no_std]
+
+extern crate alloc;
+
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -62,34 +66,81 @@ fn target_matches_image(target: &VentoyPathTarget, path: &str) -> bool {
 fn path_pattern_eq(pattern: &str, path: &str) -> bool {
     let pattern = normalize_config_path(pattern);
     let path = normalize_config_path(path);
-    pattern_bytes_eq(pattern.as_bytes(), path.as_bytes())
+    glob_bytes_match(pattern.as_bytes(), path.as_bytes(), true)
 }
 
 fn path_parent_matches(parent: &str, path: &str) -> bool {
     let parent = normalize_config_path(parent);
     let path = normalize_config_path(path);
-    let parent_bytes = parent.as_bytes();
-    let path_bytes = path.as_bytes();
+    let Some(path_parent) = parent_dir(&path) else {
+        return false;
+    };
 
-    if parent_bytes == b"/" {
-        return path_bytes.starts_with(b"/") && !path_bytes[1..].contains(&b'/');
-    }
-    if parent_bytes.len() >= path_bytes.len() || path_bytes.get(parent_bytes.len()) != Some(&b'/') {
-        return false;
-    }
-    if !pattern_bytes_eq(parent_bytes, &path_bytes[..parent_bytes.len()]) {
-        return false;
+    if parent == "/" {
+        return path_parent == "/";
     }
 
-    !path_bytes[parent_bytes.len() + 1..].contains(&b'/')
+    glob_bytes_match(parent.as_bytes(), path_parent.as_bytes(), false)
 }
 
-fn pattern_bytes_eq(pattern: &[u8], path: &[u8]) -> bool {
-    pattern.len() == path.len()
-        && pattern
-            .iter()
-            .zip(path)
-            .all(|(left, right)| *left == b'*' || ascii_byte_eq(*left, *right))
+fn path_dir_matches(dir: &str, path: &str) -> bool {
+    if is_absolute_config_path(dir) {
+        return path_parent_matches(dir, path);
+    }
+
+    let path = normalize_config_path(path);
+    let Some(path_parent) = parent_dir(&path) else {
+        return false;
+    };
+    let folder = path_parent
+        .rsplit('/')
+        .next()
+        .unwrap_or(path_parent.as_str());
+    glob_bytes_match(dir.trim().as_bytes(), folder.as_bytes(), false)
+}
+
+fn parent_dir(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "/" {
+        return None;
+    }
+    let slash = trimmed.rfind('/')?;
+    if slash == 0 {
+        Some(String::from("/"))
+    } else {
+        Some(trimmed[..slash].to_string())
+    }
+}
+
+fn glob_bytes_match(pattern: &[u8], path: &[u8], star_matches_separator: bool) -> bool {
+    let (mut p, mut s) = (0usize, 0usize);
+    let mut star = None;
+    let mut star_match = 0usize;
+
+    while s < path.len() {
+        if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            p += 1;
+            star_match = s;
+        } else if p < pattern.len() && ascii_byte_eq(pattern[p], path[s]) {
+            p += 1;
+            s += 1;
+        } else if let Some(star_pos) = star {
+            if !star_matches_separator && path.get(star_match) == Some(&b'/') {
+                return false;
+            }
+            p = star_pos + 1;
+            star_match += 1;
+            s = star_match;
+        } else {
+            return false;
+        }
+    }
+
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
 }
 
 fn ascii_byte_eq(left: u8, right: u8) -> bool {

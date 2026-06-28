@@ -8,6 +8,7 @@ uefi.workspace = true
 uefi-services.workspace = true
 log.workspace = true
 nextboot-fs.workspace = true
+nextboot-config.workspace = true
 nextboot-virtio.workspace = true
 nextboot-menu.workspace = true
 nextboot-linux.workspace = true

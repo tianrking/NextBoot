@@ -6,7 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from health.common import CheckResult, HOST_TEST_PACKAGE, PROJECT_DIR
+from health.common import CheckResult, HOST_TEST_PACKAGES, PROJECT_DIR
 
 
 def rust_toolchain_channel() -> str | None:
@@ -97,25 +97,30 @@ def check_host_tests() -> CheckResult:
 
     env = os.environ.copy()
     env["RUSTC"] = str(rustc)
-    result = subprocess.run(
-        [
-            str(cargo),
-            "test",
-            "-p",
-            HOST_TEST_PACKAGE,
-            "--lib",
-            "--target",
-            host_target,
-        ],
-        cwd=PROJECT_DIR,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    name = f"Rust host unit tests ({HOST_TEST_PACKAGE}, {host_target})"
-    return CheckResult(name, result.returncode == 0, result.stdout)
+    outputs: list[str] = []
+    failed = False
+    for package in HOST_TEST_PACKAGES:
+        result = subprocess.run(
+            [
+                str(cargo),
+                "test",
+                "-p",
+                package,
+                "--lib",
+                "--target",
+                host_target,
+            ],
+            cwd=PROJECT_DIR,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        outputs.append(f"== {package} ==\n{result.stdout}")
+        failed = failed or result.returncode != 0
+    name = f"Rust host unit tests ({', '.join(HOST_TEST_PACKAGES)}, {host_target})"
+    return CheckResult(name, not failed, "\n".join(outputs))
 
 
 def check_build(build_target: str) -> CheckResult:
