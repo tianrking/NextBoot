@@ -63,6 +63,15 @@ CASES = (
         ),
     ),
     ImageCase(
+        "USB 4K split FAT32 smoke ISO",
+        ("--bus", "usb", "--layout", "split", "--data-fs", "fat32", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32",
+            "logical_block_size=4096",
+            "usb-storage",
+        ),
+    ),
+    ImageCase(
         "USB 4K split NTFS smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "ntfs", "--sector-size", "4096", "--smoke-efi-iso"),
         (
