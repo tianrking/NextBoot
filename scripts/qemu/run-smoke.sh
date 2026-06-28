@@ -116,7 +116,10 @@ run_qemu_smoke() {
                 else
                     EXPECT_ARGS+=(--expect "Loaded EFI image")
                 fi
-                EXPECT_ARGS+=(--expect "NEXTBOOT_SMOKE_EFI_STARTED")
+                EXPECT_ARGS+=(
+                    --expect "NEXTBOOT_MINIOS_STARTED"
+                    --expect "NEXTBOOT_SMOKE_EFI_STARTED"
+                )
             elif [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ] || [ "$SMOKE_DYNAMIC_VHD" -eq 1 ] || [ "$SMOKE_VHDX" -eq 1 ] || [ "$SMOKE_VDI" -eq 1 ]; then
                 if [ "$SMOKE_MISSING_PARENT_VHDX" -eq 1 ]; then
                     EXPECT_ARGS+=(
