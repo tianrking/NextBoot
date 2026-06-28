@@ -109,6 +109,19 @@ def check_qemu_matrix() -> CheckResult:
     return CheckResult("QEMU smoke matrix declaration", result.returncode == 0, result.stdout)
 
 
+def check_hardware_report() -> CheckResult:
+    script = PROJECT_DIR / "scripts" / "check-hardware-report.py"
+    result = subprocess.run(
+        [str(script)],
+        cwd=PROJECT_DIR,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    return CheckResult("hardware report generation", result.returncode == 0, result.stdout)
+
+
 def check_build(build_target: str) -> CheckResult:
     env = os.environ.copy()
     env["TARGET"] = build_target
@@ -128,6 +141,7 @@ def run_checks(
     line_limit: int,
     skip_flash: bool,
     skip_qemu_matrix: bool,
+    skip_hardware_report: bool,
     skip_build: bool,
     build_target: str,
 ) -> list[CheckResult]:
@@ -140,6 +154,8 @@ def run_checks(
         checks.append(check_flash_dry_run())
     if not skip_qemu_matrix:
         checks.append(check_qemu_matrix())
+    if not skip_hardware_report:
+        checks.append(check_hardware_report())
     if not skip_build:
         checks.append(check_build(build_target))
     return checks
@@ -176,6 +192,11 @@ def parse_args() -> argparse.Namespace:
         help="skip scripts/build.sh check",
     )
     parser.add_argument(
+        "--skip-hardware-report",
+        action="store_true",
+        help="skip hardware-report.sh Markdown/CSV generation checks",
+    )
+    parser.add_argument(
         "--build-target",
         default=os.environ.get("TARGET", DEFAULT_BUILD_TARGET),
         help=f"UEFI target for scripts/build.sh check (default: TARGET or {DEFAULT_BUILD_TARGET})",
@@ -194,6 +215,7 @@ def main() -> int:
         args.line_limit,
         args.skip_flash_dry_run,
         args.skip_qemu_matrix,
+        args.skip_hardware_report,
         args.skip_build_check,
         args.build_target,
     )
