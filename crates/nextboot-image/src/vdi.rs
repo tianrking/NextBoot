@@ -3,6 +3,9 @@
 //! This module parses the VirtualBox/QEMU VDI 1.1 header and block map needed
 //! to expose dynamic or static VDI images as a read-only UEFI Block IO device.
 
+mod planner;
+pub use planner::*;
+
 pub const VDI_HEADER_SIZE: usize = 512;
 pub const VDI_SIGNATURE: u32 = 0xbeda_107f;
 pub const VDI_VERSION_1_1: u32 = 0x0001_0001;

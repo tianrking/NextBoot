@@ -39,6 +39,10 @@ workflows and which gaps are still worth pursuing.
   differencing UUID linkage fields are parsed and covered by unit tests, giving
   the future parent-chain reader a verified way to identify parent candidates
   instead of treating all differencing images as opaque failures.
+- The same host-tested image crate now plans virtual disk spans for VHDX and
+  VDI child images, classifying every virtual range as child-image data,
+  parent-backed data, or zero fill. This does not open parent files yet, but it
+  gives the boot layer a tested handoff contract for parent-chain read fallback.
 - Local Secure Boot signing workflow: `scripts/secure-boot.sh` can generate a
   local test certificate, sign the UEFI binary with sbsigntools, verify the
   signed binary where `sbverify` is available, and document firmware db or shim
@@ -64,10 +68,10 @@ workflows and which gaps are still worth pursuing.
   self-contained partially-present VHDX, dynamic/static VDI, and sparse VDI
   unallocated/discarded blocks have virtual hard-disk boot smoke coverage now;
   differencing VHDX/VDI metadata and parent locator/linkage fields are parsed
-  in host tests, but missing blocks still need full parent image opening,
-  validation, and read fallback support. Parent-required VHDX and VDI are still
-  covered as negative smoke tests so unsupported media is reported
-  deterministically.
+  in host tests, and child/parent/zero spans are planned in reusable code.
+  Missing blocks still need full parent image opening, validation, and read
+  fallback support. Parent-required VHDX and VDI are still covered as negative
+  smoke tests so unsupported media is reported deterministically.
 - More filesystems: Ventoy covers a broader set of user storage formats. UDF,
   ext2/3/4, XFS extent/local-directory/dir2-directory reads, and a Btrfs
   superblock plus NextBoot extent/directory smoke map are now covered in QEMU

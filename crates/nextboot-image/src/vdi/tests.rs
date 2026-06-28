@@ -1,4 +1,6 @@
 use super::*;
+use crate::{ImagePlanError, ImageSpan, ImageSpanSource};
+use alloc::vec;
 
 #[test]
 fn parses_modern_dynamic_vdi_header() {
@@ -63,6 +65,50 @@ fn block_map_entries_classify_sparse_and_allocated_blocks() {
     assert!(is_allocated_block(read_block_map_entry(&map, 0).unwrap()));
     assert!(!is_allocated_block(read_block_map_entry(&map, 1).unwrap()));
     assert!(!is_allocated_block(read_block_map_entry(&map, 2).unwrap()));
+}
+
+#[test]
+fn plans_differencing_vdi_parent_and_child_spans() {
+    let header = make_vdi_header(VDI_TYPE_DIFFERENCING, 3 * 1024 * 1024, 1024 * 1024, 3, 1);
+    let metadata = parse_vdi_metadata(&header).unwrap();
+    let mut block_map = [0u8; 12];
+    write_le_u32(&mut block_map, 0, 0);
+    write_le_u32(&mut block_map, 4, VDI_UNALLOCATED);
+    write_le_u32(&mut block_map, 8, VDI_DISCARDED);
+
+    let spans = plan_vdi_spans(&metadata, &block_map).expect("plan");
+
+    assert_eq!(
+        spans,
+        vec![
+            ImageSpan {
+                virtual_offset: 0,
+                byte_count: 1024 * 1024,
+                source: ImageSpanSource::Image {
+                    file_offset: metadata.offset_data
+                }
+            },
+            ImageSpan {
+                virtual_offset: 1024 * 1024,
+                byte_count: 2 * 1024 * 1024,
+                source: ImageSpanSource::Parent
+            }
+        ]
+    );
+}
+
+#[test]
+fn rejects_vdi_block_map_entry_past_allocated_blocks() {
+    let header = make_vdi_header(VDI_TYPE_DYNAMIC, 2 * 1024 * 1024, 1024 * 1024, 2, 1);
+    let metadata = parse_vdi_metadata(&header).unwrap();
+    let mut block_map = [0u8; 8];
+    write_le_u32(&mut block_map, 0, 1);
+    write_le_u32(&mut block_map, 4, VDI_UNALLOCATED);
+
+    assert_eq!(
+        plan_vdi_spans(&metadata, &block_map),
+        Err(ImagePlanError::Invalid)
+    );
 }
 
 fn make_vdi_header(

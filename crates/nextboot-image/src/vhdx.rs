@@ -8,6 +8,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+mod planner;
+pub use planner::*;
+
 pub const VHDX_HEADER_SECTION_SIZE: usize = 1024 * 1024;
 pub const VHDX_REGION_TABLE_SIZE: usize = 64 * 1024;
 pub const VHDX_REGION_TABLE_1_OFFSET: usize = 192 * 1024;

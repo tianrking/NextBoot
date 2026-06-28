@@ -1,4 +1,5 @@
 use super::*;
+use crate::{ImagePlanError, ImageSpan, ImageSpanSource};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -95,6 +96,108 @@ fn parses_bat_entry_state_and_offset() {
 
     assert_eq!(entry.state, VHDX_BAT_STATE_FULLY_PRESENT);
     assert_eq!(entry.file_offset, 3 * VHDX_MIB);
+}
+
+#[test]
+fn plans_parent_required_vhdx_spans() {
+    let mut metadata = parse_vhdx_metadata(&make_metadata_region(true, 512)).expect("metadata");
+    metadata.virtual_disk_size = 4 * metadata.block_size as u64;
+    let chunk_ratio = metadata.chunk_ratio().expect("chunk ratio");
+    let mut bat = vec![0u8; ((chunk_ratio + 1) * 8) as usize];
+    write_payload_bat(
+        &mut bat,
+        0,
+        chunk_ratio,
+        VHDX_BAT_STATE_FULLY_PRESENT,
+        3 * VHDX_MIB,
+    );
+    write_payload_bat(&mut bat, 1, chunk_ratio, VHDX_BAT_STATE_NOT_PRESENT, 0);
+    write_payload_bat(&mut bat, 2, chunk_ratio, VHDX_BAT_STATE_ZERO, 0);
+    write_payload_bat(
+        &mut bat,
+        3,
+        chunk_ratio,
+        VHDX_BAT_STATE_PARTIALLY_PRESENT,
+        5 * VHDX_MIB,
+    );
+
+    let spans = plan_vhdx_spans(&metadata, &bat, |_| Ok(false)).expect("plan");
+
+    assert_eq!(
+        spans,
+        vec![
+            ImageSpan {
+                virtual_offset: 0,
+                byte_count: u64::from(metadata.block_size),
+                source: ImageSpanSource::Image {
+                    file_offset: 3 * VHDX_MIB
+                }
+            },
+            ImageSpan {
+                virtual_offset: u64::from(metadata.block_size),
+                byte_count: u64::from(metadata.block_size),
+                source: ImageSpanSource::Parent
+            },
+            ImageSpan {
+                virtual_offset: 2 * u64::from(metadata.block_size),
+                byte_count: u64::from(metadata.block_size),
+                source: ImageSpanSource::Zero
+            },
+            ImageSpan {
+                virtual_offset: 3 * u64::from(metadata.block_size),
+                byte_count: u64::from(metadata.block_size),
+                source: ImageSpanSource::Parent
+            }
+        ]
+    );
+}
+
+#[test]
+fn plans_self_contained_partial_vhdx_block_as_child_image() {
+    let mut metadata = parse_vhdx_metadata(&make_metadata_region(true, 512)).expect("metadata");
+    metadata.virtual_disk_size = u64::from(metadata.block_size);
+    let chunk_ratio = metadata.chunk_ratio().expect("chunk ratio");
+    let mut bat = vec![0u8; ((chunk_ratio + 1) * 8) as usize];
+    write_payload_bat(
+        &mut bat,
+        0,
+        chunk_ratio,
+        VHDX_BAT_STATE_PARTIALLY_PRESENT,
+        6 * VHDX_MIB,
+    );
+
+    let spans = plan_vhdx_spans(&metadata, &bat, |_| Ok(true)).expect("plan");
+
+    assert_eq!(
+        spans,
+        vec![ImageSpan {
+            virtual_offset: 0,
+            byte_count: u64::from(metadata.block_size),
+            source: ImageSpanSource::Image {
+                file_offset: 6 * VHDX_MIB
+            }
+        }]
+    );
+}
+
+#[test]
+fn rejects_partial_vhdx_parent_reference_without_parent_metadata() {
+    let mut metadata = parse_vhdx_metadata(&make_metadata_region(false, 512)).expect("metadata");
+    metadata.virtual_disk_size = u64::from(metadata.block_size);
+    let chunk_ratio = metadata.chunk_ratio().expect("chunk ratio");
+    let mut bat = vec![0u8; ((chunk_ratio + 1) * 8) as usize];
+    write_payload_bat(
+        &mut bat,
+        0,
+        chunk_ratio,
+        VHDX_BAT_STATE_PARTIALLY_PRESENT,
+        6 * VHDX_MIB,
+    );
+
+    assert_eq!(
+        plan_vhdx_spans(&metadata, &bat, |_| Ok(false)),
+        Err(ImagePlanError::Unsupported)
+    );
 }
 
 fn make_header_section() -> Vec<u8> {
@@ -206,6 +309,18 @@ fn write_metadata_entry(
     write_le_u32(metadata, offset + 16, item_offset);
     write_le_u32(metadata, offset + 20, length);
     write_le_u32(metadata, offset + 24, 0x6);
+}
+
+fn write_payload_bat(
+    bat: &mut [u8],
+    payload_index: u64,
+    chunk_ratio: u64,
+    state: u8,
+    file_offset: u64,
+) {
+    let bat_index = payload_bat_index(payload_index, chunk_ratio).expect("bat index");
+    let raw = ((file_offset / VHDX_MIB) << 20) | u64::from(state);
+    write_le_u64(bat, (bat_index * 8) as usize, raw);
 }
 
 fn write_le_u16(data: &mut [u8], offset: usize, value: u16) {

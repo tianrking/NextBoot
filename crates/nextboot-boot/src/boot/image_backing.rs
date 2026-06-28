@@ -179,7 +179,7 @@ impl BootManager<'_> {
                 continue;
             }
 
-            if map_entry >= metadata.block_count {
+            if map_entry >= metadata.blocks_allocated {
                 warn!(
                     "Invalid VDI block map entry {} at virtual block {} in {}",
                     map_entry, block_index, self.iso.path
