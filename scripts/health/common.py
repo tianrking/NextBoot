@@ -11,7 +11,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_LINE_LIMIT = 500
 DEFAULT_BUILD_TARGET = "x86_64-unknown-uefi"
 CHECK_EXTENSIONS = {".py", ".rs", ".sh"}
-HOST_TEST_PACKAGES = ("nextboot-fs", "nextboot-config", "nextboot-image")
+HOST_TEST_PACKAGES = ("nextboot-fs", "nextboot-config", "nextboot-image", "nextboot-linux")
 
 
 @dataclass

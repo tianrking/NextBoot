@@ -226,9 +226,17 @@ impl BootManager<'_> {
         }
 
         let Some(kernel_path) = self.first_existing_iso_file(LINUX_KERNEL_CANDIDATES)? else {
+            warn!(
+                "No Linux kernel candidate found in {}; tried {:?}",
+                self.iso.path, LINUX_KERNEL_CANDIDATES
+            );
             return Ok(None);
         };
         let Some(initrd_path) = self.first_existing_iso_file(LINUX_INITRD_CANDIDATES)? else {
+            warn!(
+                "Linux kernel candidate {} was found in {}, but no initrd candidate was found; tried {:?}",
+                kernel_path, self.iso.path, LINUX_INITRD_CANDIDATES
+            );
             return Ok(None);
         };
 

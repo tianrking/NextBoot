@@ -47,6 +47,10 @@ create_generated_smoke_images() {
             SMOKE_ISO_PROFILE="linux"
             SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-linux.iso"
         fi
+        if [ "$SMOKE_LINUX_GRUB" -eq 1 ]; then
+            SMOKE_ISO_PROFILE="linux-grub"
+            SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-linux-grub.iso"
+        fi
         SMOKE_ISO_FILE="${PROJECT_DIR}/target/${SMOKE_ISO_BASENAME}"
         require_command python3 "python3 is required to create the smoke ISO"
         warn "Creating ${SMOKE_ISO_PROFILE} UEFI smoke ISO..."

@@ -358,7 +358,28 @@ impl OsType {
         if path_lower.contains("winpe") || path_lower.contains("pe_") {
             return OsType::WinPE;
         }
-        if path_lower.contains("linux") {
+        if path_lower.contains("linux")
+            || path_lower.contains("mint")
+            || path_lower.contains("pop-os")
+            || path_lower.contains("popos")
+            || path_lower.contains("manjaro")
+            || path_lower.contains("opensuse")
+            || path_lower.contains("centos")
+            || path_lower.contains("rhel")
+            || path_lower.contains("rocky")
+            || path_lower.contains("alma")
+            || path_lower.contains("alpine")
+            || path_lower.contains("systemrescue")
+            || path_lower.contains("sysrescue")
+            || path_lower.contains("clonezilla")
+            || path_lower.contains("gparted")
+            || path_lower.contains("proxmox")
+            || path_lower.contains("truenas")
+            || path_lower.contains("openwrt")
+            || path_lower.contains("vyos")
+            || path_lower.contains("rescue")
+            || path_lower.contains("live")
+        {
             return OsType::Linux;
         }
 

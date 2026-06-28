@@ -11,6 +11,7 @@ from pathlib import Path
 from smoke_iso.profiles import (
     PROFILE_GENERIC,
     PROFILE_LINUX,
+    PROFILE_LINUX_GRUB,
     PROFILE_WINDOWS,
     PROFILE_WINDOWS_WIMBOOT,
     make_iso_layout,
@@ -285,6 +286,7 @@ def parse_args() -> argparse.Namespace:
             PROFILE_WINDOWS,
             PROFILE_WINDOWS_WIMBOOT,
             PROFILE_LINUX,
+            PROFILE_LINUX_GRUB,
         ),
         help="file layout to generate",
     )

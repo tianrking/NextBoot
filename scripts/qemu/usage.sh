@@ -67,6 +67,8 @@ Options:
   --smoke-linux-iso  Generate a Linux-style smoke ISO and verify EFI stub/initrd starts
   --smoke-linux-plugins
                      Generate Linux smoke ISO plus Ventoy plugin payloads
+  --smoke-linux-grub
+                     Generate a Linux ISO with real-world GRUB variables and verify config parsing
   --smoke-timeout S  Seconds to wait for --smoke markers (default: 20)
   --no-run           Create the disk image and print the QEMU command only
   -h, --help         Show this help
@@ -100,6 +102,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-missing-parent-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-grub
   $0 --bus nvme --layout split --data-fs ext3 --sector-size 4096 --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs ext4 --sector-size 4096 --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs udf --sector-size 4096 --smoke-efi-iso

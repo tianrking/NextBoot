@@ -7,6 +7,7 @@ PROFILE_GENERIC = "generic"
 PROFILE_WINDOWS = "windows"
 PROFILE_WINDOWS_WIMBOOT = "windows-wimboot"
 PROFILE_LINUX = "linux"
+PROFILE_LINUX_GRUB = "linux-grub"
 
 LINUX_SMOKE_INITRD = b"070701NEXTBOOT SMOKE INITRD\n"
 
@@ -234,6 +235,44 @@ def make_iso_layout(
                     "dir": "/BOOT",
                     "name": b"AUTOINST.CFG;1",
                     "data": b"# original smoke autoinstall\n",
+                    "eltorito": False,
+                },
+            ]
+        )
+    elif profile == PROFILE_LINUX_GRUB:
+        directories.extend(
+            [
+                {"path": "/BOOT", "name": b"BOOT", "parent": "/"},
+                {"path": "/BOOT/GRUB", "name": b"GRUB", "parent": "/BOOT"},
+                {"path": "/CASPER", "name": b"CASPER", "parent": "/"},
+            ]
+        )
+        files.extend(
+            [
+                {
+                    "dir": "/CASPER",
+                    "name": b"VMLINUZ;1",
+                    "data": linux_smoke_kernel(efi_data),
+                    "eltorito": True,
+                },
+                {
+                    "dir": "/CASPER",
+                    "name": b"INITRD;1",
+                    "data": LINUX_SMOKE_INITRD,
+                    "eltorito": False,
+                },
+                {
+                    "dir": "/BOOT/GRUB",
+                    "name": b"GRUB.CFG;1",
+                    "data": (
+                        b"set root='(cd0)'\n"
+                        b"set kernel_path=\"/casper/vmlinuz\"\n"
+                        b"set initrd_path=\"/casper/initrd\"\n"
+                        b"menuentry 'NextBoot complex Linux smoke' {\n"
+                        b"  linuxefi ($root)$kernel_path boot=casper quiet splash --- # trailing comment\n"
+                        b"  initrdefi ($root)$initrd_path\n"
+                        b"}\n"
+                    ),
                     "eltorito": False,
                 },
             ]

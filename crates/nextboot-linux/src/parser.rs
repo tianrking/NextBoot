@@ -1,4 +1,7 @@
-use alloc::string::{String, ToString};
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 
 /// 解析 isolinux/syslinux 配置
 pub fn parse_isolinux_cfg(cfg: &str) -> Option<(String, String, String)> {
@@ -10,11 +13,11 @@ pub fn parse_isolinux_cfg(cfg: &str) -> Option<(String, String, String)> {
         let Some(line) = clean_config_line(line) else {
             continue;
         };
-        let line_lower = line.to_lowercase();
-        let mut parts = line.split_whitespace();
-        let Some(command) = parts.next() else {
+        let tokens = config_tokens(line);
+        let Some(command) = tokens.first() else {
             continue;
         };
+        let mut parts = tokens[1..].iter().map(|token| token.as_str());
 
         if command.eq_ignore_ascii_case("label") {
             kernel = None;
@@ -33,10 +36,10 @@ pub fn parse_isolinux_cfg(cfg: &str) -> Option<(String, String, String)> {
             if let Some(result) = complete_linux_config(&kernel, &initrd, &append) {
                 return Some(result);
             }
-        } else if command.eq_ignore_ascii_case("append") || line_lower.starts_with("append ") {
+        } else if command.eq_ignore_ascii_case("append") {
             append = strip_cmdline_initrd_tokens(parts);
             if initrd.is_none() {
-                initrd = extract_initrd_from_cmdline(line);
+                initrd = extract_initrd_from_cmdline(line, &[]);
             }
             if let Some(result) = complete_linux_config(&kernel, &initrd, &append) {
                 return Some(result);
@@ -53,15 +56,17 @@ pub fn parse_grub_cfg(cfg: &str) -> Option<(String, String, String)> {
     let mut initrd = None;
     let mut cmdline = String::new();
     let mut options = String::new();
+    let mut vars = Vec::new();
 
     for line in cfg.lines() {
         let Some(line) = clean_config_line(line) else {
             continue;
         };
-        let mut parts = line.split_whitespace();
-        let Some(command) = parts.next() else {
+        let tokens = config_tokens(line);
+        let Some(command) = tokens.first() else {
             continue;
         };
+        let mut parts = tokens[1..].iter().map(|token| token.as_str());
 
         if command == "}" || command.starts_with("menuentry") {
             kernel = None;
@@ -70,8 +75,15 @@ pub fn parse_grub_cfg(cfg: &str) -> Option<(String, String, String)> {
             continue;
         }
 
+        if command.eq_ignore_ascii_case("set") {
+            if let Some((name, value)) = parse_grub_set(&tokens[1..]) {
+                set_grub_var(&mut vars, name, value);
+            }
+            continue;
+        }
+
         if command.eq_ignore_ascii_case("options") {
-            options = strip_cmdline_initrd_tokens(parts);
+            options = strip_cmdline_initrd_tokens_with_vars(parts, &vars);
             continue;
         }
 
@@ -79,9 +91,12 @@ pub fn parse_grub_cfg(cfg: &str) -> Option<(String, String, String)> {
             || command.eq_ignore_ascii_case("linux16")
             || command.eq_ignore_ascii_case("linuxefi")
         {
-            if let Some(path) = parts.next().and_then(normalize_config_path_token) {
+            if let Some(path) = parts
+                .next()
+                .and_then(|token| normalize_config_path_token_with_vars(token, &vars))
+            {
                 kernel = Some(path);
-                cmdline = strip_cmdline_initrd_tokens(parts);
+                cmdline = strip_cmdline_initrd_tokens_with_vars(parts, &vars);
                 if cmdline.is_empty() && !options.is_empty() {
                     cmdline = options.clone();
                 }
@@ -90,9 +105,16 @@ pub fn parse_grub_cfg(cfg: &str) -> Option<(String, String, String)> {
             || command.eq_ignore_ascii_case("initrd16")
             || command.eq_ignore_ascii_case("initrdefi")
         {
-            initrd = last_normalized_config_path(parts);
+            initrd = last_normalized_config_path_with_vars(parts, &vars);
             if let Some(result) = complete_linux_config(&kernel, &initrd, &cmdline) {
                 return Some(result);
+            }
+        } else if command.eq_ignore_ascii_case("module")
+            || command.eq_ignore_ascii_case("module2")
+            || command.eq_ignore_ascii_case("module2efi")
+        {
+            if initrd.is_none() {
+                initrd = last_normalized_config_path_with_vars(parts, &vars);
             }
         }
     }
@@ -109,6 +131,92 @@ fn clean_config_line(line: &str) -> Option<&str> {
     Some(trimmed)
 }
 
+fn config_tokens(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+
+    for ch in line.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+
+        if quote.is_none() && ch == '#' {
+            break;
+        }
+
+        if ch == '"' || ch == '\'' {
+            match quote {
+                Some(active) if active == ch => quote = None,
+                None => quote = Some(ch),
+                _ => current.push(ch),
+            }
+            continue;
+        }
+
+        if quote.is_none() && ch.is_whitespace() {
+            if !current.is_empty() {
+                tokens.push(current);
+                current = String::new();
+            }
+            continue;
+        }
+
+        current.push(ch);
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+fn parse_grub_set(tokens: &[String]) -> Option<(String, String)> {
+    for token in tokens {
+        let (name, value) = token.split_once('=')?;
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|ch| ch == '_' || ch == '-' || ch.is_ascii_alphanumeric())
+        {
+            return None;
+        }
+
+        let value = strip_quotes(value);
+        if value.is_empty() {
+            return None;
+        }
+
+        return Some((name.to_string(), value.to_string()));
+    }
+
+    None
+}
+
+fn set_grub_var(vars: &mut Vec<(String, String)>, name: String, value: String) {
+    for (existing, existing_value) in vars.iter_mut() {
+        if existing == &name {
+            *existing_value = value;
+            return;
+        }
+    }
+
+    vars.push((name, value));
+}
+
+fn strip_quotes(value: &str) -> &str {
+    value.trim().trim_matches('"').trim_matches('\'')
+}
+
 fn complete_linux_config(
     kernel: &Option<String>,
     initrd: &Option<String>,
@@ -121,9 +229,16 @@ fn complete_linux_config(
 }
 
 fn last_normalized_config_path<'a>(tokens: impl Iterator<Item = &'a str>) -> Option<String> {
+    last_normalized_config_path_with_vars(tokens, &[])
+}
+
+fn last_normalized_config_path_with_vars<'a>(
+    tokens: impl Iterator<Item = &'a str>,
+    vars: &[(String, String)],
+) -> Option<String> {
     let mut found = None;
     for token in tokens {
-        if let Some(path) = normalize_config_path_token(token) {
+        if let Some(path) = normalize_config_path_token_with_vars(token, vars) {
             found = Some(path);
         }
     }
@@ -131,15 +246,15 @@ fn last_normalized_config_path<'a>(tokens: impl Iterator<Item = &'a str>) -> Opt
     found
 }
 
-fn extract_initrd_from_cmdline(cmdline: &str) -> Option<String> {
+fn extract_initrd_from_cmdline(cmdline: &str, vars: &[(String, String)]) -> Option<String> {
     let mut found = None;
-    for token in cmdline.split_whitespace() {
+    for token in config_tokens(cmdline) {
         let Some(value) = token.strip_prefix("initrd=") else {
             continue;
         };
 
         for part in value.split(',') {
-            if let Some(path) = normalize_config_path_token(part) {
+            if let Some(path) = normalize_config_path_token_with_vars(part, vars) {
                 found = Some(path);
             }
         }
@@ -149,9 +264,19 @@ fn extract_initrd_from_cmdline(cmdline: &str) -> Option<String> {
 }
 
 fn strip_cmdline_initrd_tokens<'a>(tokens: impl Iterator<Item = &'a str>) -> String {
+    strip_cmdline_initrd_tokens_with_vars(tokens, &[])
+}
+
+fn strip_cmdline_initrd_tokens_with_vars<'a>(
+    tokens: impl Iterator<Item = &'a str>,
+    vars: &[(String, String)],
+) -> String {
     let mut out = String::new();
     for token in tokens {
         if token.starts_with("initrd=") {
+            if extract_initrd_from_cmdline(token, vars).is_some() {
+                continue;
+            }
             continue;
         }
 
@@ -165,8 +290,12 @@ fn strip_cmdline_initrd_tokens<'a>(tokens: impl Iterator<Item = &'a str>) -> Str
 }
 
 fn normalize_config_path_token(token: &str) -> Option<String> {
+    normalize_config_path_token_with_vars(token, &[])
+}
+
+fn normalize_config_path_token_with_vars(token: &str, vars: &[(String, String)]) -> Option<String> {
     let mut token = token.trim();
-    token = token.trim_matches('"').trim_matches('\'');
+    token = strip_quotes(token);
 
     if let Some(value) = token.strip_prefix("initrd=") {
         token = value;
@@ -179,6 +308,16 @@ fn normalize_config_path_token(token: &str) -> Option<String> {
     if token.starts_with('(') {
         let (_, suffix) = token.split_once(')')?;
         token = suffix;
+    }
+
+    let expanded;
+    if token.contains('$') {
+        expanded = expand_grub_variables(token, vars)?;
+        token = expanded.as_str();
+        if token.starts_with('(') {
+            let (_, suffix) = token.split_once(')')?;
+            token = suffix;
+        }
     }
 
     while let Some(suffix) = token.strip_prefix("./") {
@@ -202,81 +341,61 @@ fn normalize_config_path_token(token: &str) -> Option<String> {
     Some(path)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{parse_grub_cfg, parse_isolinux_cfg};
-    use alloc::string::String;
+fn expand_grub_variables(token: &str, vars: &[(String, String)]) -> Option<String> {
+    let mut out = String::new();
+    let chars: Vec<char> = token.chars().collect();
+    let mut index = 0;
 
-    #[test]
-    fn grub_parser_extracts_first_menuentry_paths() {
-        let cfg = r#"
-            menuentry 'Try Ubuntu' {
-                linuxefi (loop)/casper/vmlinuz boot=casper quiet splash ---
-                initrdefi (loop)/casper/initrd
+    while index < chars.len() {
+        if chars[index] != '$' {
+            out.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        index += 1;
+        let start = index;
+        if index < chars.len() && chars[index] == '{' {
+            index += 1;
+            let name_start = index;
+            while index < chars.len() && chars[index] != '}' {
+                index += 1;
             }
-        "#;
+            if index >= chars.len() {
+                return None;
+            }
+            let name: String = chars[name_start..index].iter().collect();
+            index += 1;
+            out.push_str(find_grub_var(vars, &name)?);
+            continue;
+        }
 
-        assert_eq!(
-            parse_grub_cfg(cfg),
-            Some((
-                String::from("/casper/vmlinuz"),
-                String::from("/casper/initrd"),
-                String::from("boot=casper quiet splash ---")
-            ))
-        );
+        while index < chars.len()
+            && (chars[index] == '_' || chars[index] == '-' || chars[index].is_ascii_alphanumeric())
+        {
+            index += 1;
+        }
+
+        if index == start {
+            return None;
+        }
+
+        let name: String = chars[start..index].iter().collect();
+        out.push_str(find_grub_var(vars, &name)?);
     }
 
-    #[test]
-    fn grub_parser_uses_last_initrd_component() {
-        let cfg = r#"
-            linux /arch/boot/x86_64/vmlinuz-linux archisobasedir=arch
-            initrd /intel-ucode.img /arch/boot/x86_64/initramfs-linux.img
-        "#;
-
-        assert_eq!(
-            parse_grub_cfg(cfg),
-            Some((
-                String::from("/arch/boot/x86_64/vmlinuz-linux"),
-                String::from("/arch/boot/x86_64/initramfs-linux.img"),
-                String::from("archisobasedir=arch")
-            ))
-        );
-    }
-
-    #[test]
-    fn grub_parser_uses_bls_options_line() {
-        let cfg = r#"
-            title Fedora Live
-            options root=live:CDLABEL=Fedora quiet rhgb
-            linux /images/pxeboot/vmlinuz
-            initrd /images/pxeboot/initrd.img
-        "#;
-
-        assert_eq!(
-            parse_grub_cfg(cfg),
-            Some((
-                String::from("/images/pxeboot/vmlinuz"),
-                String::from("/images/pxeboot/initrd.img"),
-                String::from("root=live:CDLABEL=Fedora quiet rhgb")
-            ))
-        );
-    }
-
-    #[test]
-    fn isolinux_parser_extracts_append_initrd_and_removes_duplicate_arg() {
-        let cfg = r#"
-            label live
-              kernel vmlinuz
-              append initrd=initrd.img boot=live quiet
-        "#;
-
-        assert_eq!(
-            parse_isolinux_cfg(cfg),
-            Some((
-                String::from("vmlinuz"),
-                String::from("initrd.img"),
-                String::from("boot=live quiet")
-            ))
-        );
-    }
+    Some(out)
 }
+
+fn find_grub_var<'a>(vars: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    for (var_name, value) in vars {
+        if var_name == name {
+            return Some(value.as_str());
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests;

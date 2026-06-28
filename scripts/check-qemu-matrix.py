@@ -28,6 +28,10 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
         ("--bus usb", "--layout split", "--data-fs fat32", "--sector-size 512", "--smoke-efi-iso"),
     ),
     MatrixRequirement(
+        "default NVMe 4K split exFAT Linux GRUB boot",
+        ("--bus nvme", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-linux-grub"),
+    ),
+    MatrixRequirement(
         "default SD 512 split FAT32 image verification",
         ("--bus sd", "--layout split", "--data-fs fat32", "--sector-size 512", "--smoke-efi-iso", "--no-run"),
     ),

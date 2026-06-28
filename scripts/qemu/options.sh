@@ -258,6 +258,14 @@ parse_qemu_args() {
                 SMOKE_LINUX_PLUGINS=1
                 shift
                 ;;
+            --smoke-linux-grub)
+                SMOKE=1
+                SMOKE_BOOT=1
+                SMOKE_EFI_ISO=1
+                SMOKE_LINUX_ISO=1
+                SMOKE_LINUX_GRUB=1
+                shift
+                ;;
             --smoke-timeout)
                 [ $# -ge 2 ] || die "--smoke-timeout requires a value"
                 SMOKE_TIMEOUT="$2"

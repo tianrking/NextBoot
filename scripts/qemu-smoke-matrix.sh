@@ -26,6 +26,9 @@ run_case "usb 512 split FAT32 smoke ISO" \
 run_case "nvme 4K split exFAT conf_replace smoke ISO" \
     --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-conf-replace
 
+run_case "nvme 4K split exFAT Linux GRUB smoke ISO" \
+    --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-grub
+
 if [ "${NEXTBOOT_FULL_QEMU_MATRIX:-0}" = "1" ]; then
     run_case "virtio 512 single FAT32 smoke ISO" \
         --bus virtio --sector-size 512 --smoke-efi-iso

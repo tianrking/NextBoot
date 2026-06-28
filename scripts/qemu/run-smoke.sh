@@ -77,16 +77,27 @@ run_qemu_smoke() {
                         )
                     fi
                 elif [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
+                    EXPECT_ARGS+=(--expect "Booting Linux ISO")
+                    if [ "$SMOKE_LINUX_GRUB" -eq 1 ]; then
+                        EXPECT_ARGS+=(
+                            --expect "Discovered Linux boot config from /boot/grub/grub.cfg: kernel=/casper/vmlinuz initrd=/casper/initrd cmdline=boot=casper quiet splash ---"
+                            --expect "Kernel: /casper/vmlinuz"
+                            --expect "Initrd: /casper/initrd"
+                            --expect "Trying Linux EFI stub EFI loader path: /casper/vmlinuz"
+                        )
+                    else
+                        EXPECT_ARGS+=(
+                            --expect "Using distro Linux defaults: kernel=/boot/vmlinuz initrd=/boot/initrd.img"
+                            --expect "Kernel: /boot/vmlinuz"
+                            --expect "Initrd: /boot/initrd.img"
+                            --expect "Trying Linux EFI stub EFI loader path: /boot/vmlinuz"
+                        )
+                    fi
                     EXPECT_ARGS+=(
-                        --expect "Booting Linux ISO"
-                        --expect "Using distro Linux defaults: kernel=/boot/vmlinuz initrd=/boot/initrd.img"
-                        --expect "Kernel: /boot/vmlinuz"
-                        --expect "Initrd: /boot/initrd.img"
                         --expect "Loaded Linux kernel:"
                         --expect "Loaded initrd:"
                         --expect "Prepared Linux EFI stub:"
                         --expect "Registered Linux EFI initrd LoadFile2 provider:"
-                        --expect "Trying Linux EFI stub EFI loader path: /boot/vmlinuz"
                         --expect "Loaded EFI image"
                     )
                     if [ "$SMOKE_LINUX_PLUGINS" -eq 1 ]; then
