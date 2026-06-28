@@ -18,6 +18,7 @@ from disk_image.udf import write_udf_volume
 from disk_image.xfs import write_xfs_volume
 from disk_image.smoke import (
     make_smoke_auto_memdisk_files,
+    make_smoke_conf_replace_files,
     make_smoke_linux_plugin_files,
     make_smoke_windows_wimboot_files,
 )
@@ -34,8 +35,9 @@ smoke_vlnk_iso = sys.argv[9] == "1"
 smoke_vlnk_file = sys.argv[10]
 smoke_helper_file = sys.argv[11]
 smoke_auto_memdisk = sys.argv[12] == "1"
-efi_boot_name = sys.argv[13].upper()
-image_files = sys.argv[14:]
+smoke_conf_replace = sys.argv[13] == "1"
+efi_boot_name = sys.argv[14].upper()
+image_files = sys.argv[15:]
 if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
@@ -70,6 +72,8 @@ def mib_to_sectors(mib):
 extra_files = []
 if smoke_auto_memdisk:
     extra_files.extend(make_smoke_auto_memdisk_files(image_files))
+if smoke_conf_replace:
+    extra_files.extend(make_smoke_conf_replace_files(image_files))
 if smoke_linux_plugins:
     extra_files.extend(make_smoke_linux_plugin_files(image_files))
 if smoke_windows_wimboot:

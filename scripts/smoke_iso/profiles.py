@@ -104,14 +104,39 @@ def make_iso_layout(
     files: list[dict[str, object]] = []
 
     if profile == PROFILE_GENERIC:
-        directories.append({"path": "/EFI/BOOT", "name": b"BOOT", "parent": "/EFI"})
-        files.append(
-            {
-                "dir": "/EFI/BOOT",
-                "name": f"{efi_boot_name};1".encode("ascii"),
-                "data": efi_data,
-                "eltorito": True,
-            }
+        directories.extend(
+            [
+                {"path": "/EFI/BOOT", "name": b"BOOT", "parent": "/EFI"},
+                {"path": "/CFG", "name": b"CFG", "parent": "/"},
+            ]
+        )
+        files.extend(
+            [
+                {
+                    "dir": "/EFI/BOOT",
+                    "name": f"{efi_boot_name};1".encode("ascii"),
+                    "data": efi_data,
+                    "eltorito": True,
+                },
+                {
+                    "dir": "/CFG",
+                    "name": b"GRUB.CFG;1",
+                    "data": b"set timeout=5\nmenuentry 'NextBoot smoke' {}\n",
+                    "eltorito": False,
+                },
+                {
+                    "dir": "/CFG",
+                    "name": b"KICKSTART.CFG;1",
+                    "data": b"# original smoke kickstart\n",
+                    "eltorito": False,
+                },
+                {
+                    "dir": "/CFG",
+                    "name": b"AUTOINST.CFG;1",
+                    "data": b"# original smoke autoinstall\n",
+                    "eltorito": False,
+                },
+            ]
         )
     elif profile == PROFILE_WINDOWS:
         directories.extend(
@@ -191,6 +216,24 @@ def make_iso_layout(
                     "dir": "/BOOT",
                     "name": b"INITRD.IMG;1",
                     "data": LINUX_SMOKE_INITRD,
+                    "eltorito": False,
+                },
+                {
+                    "dir": "/BOOT",
+                    "name": b"GRUB.CFG;1",
+                    "data": b"set timeout=5\nmenuentry 'NextBoot smoke' {}\n",
+                    "eltorito": False,
+                },
+                {
+                    "dir": "/BOOT",
+                    "name": b"KICKSTART.CFG;1",
+                    "data": b"# original smoke kickstart\n",
+                    "eltorito": False,
+                },
+                {
+                    "dir": "/BOOT",
+                    "name": b"AUTOINST.CFG;1",
+                    "data": b"# original smoke autoinstall\n",
                     "eltorito": False,
                 },
             ]

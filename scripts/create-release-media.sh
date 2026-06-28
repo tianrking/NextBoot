@@ -147,7 +147,7 @@ mkdir -p "$(dirname "$OUTPUT")"
 
 CREATE_ARGS=(
     "$OUTPUT" "$SIZE_MB" "$SECTOR_SIZE" split "$DATA_FS" "$EFI_FILE" \
-    0 0 0 "" "" 0 "$BOOT_NAME"
+    0 0 0 "" "" 0 0 "$BOOT_NAME"
 )
 if [ "$IMAGE_COUNT" -gt 0 ]; then
     CREATE_ARGS+=("${IMAGES[@]}")

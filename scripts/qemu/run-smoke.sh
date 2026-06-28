@@ -50,6 +50,11 @@ run_qemu_smoke() {
                         --expect "Using Ventoy auto_memdisk for ${SMOKE_ISO_MENU_PATH}"
                     )
                 fi
+                if [ "$SMOKE_CONF_REPLACE" -eq 1 ]; then
+                    EXPECT_ARGS+=(
+                        --expect "Prepared 3 Ventoy conf_replace overlay(s)"
+                    )
+                fi
                 if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
                     if [ "$SMOKE_WINDOWS_WIMBOOT" -eq 1 ]; then
                         EXPECT_ARGS+=(

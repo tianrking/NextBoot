@@ -7,7 +7,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 const VENTOY_JSON_MAX_SIZE: usize = 256 * 1024;
-const VENTOY_MAX_CONF_REPLACE: usize = 2;
+pub const VENTOY_MAX_CONF_REPLACE: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VentoyConfigError {

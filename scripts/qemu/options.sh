@@ -214,6 +214,13 @@ parse_qemu_args() {
                 SMOKE_AUTO_MEMDISK=1
                 shift
                 ;;
+            --smoke-conf-replace)
+                SMOKE=1
+                SMOKE_BOOT=1
+                SMOKE_EFI_ISO=1
+                SMOKE_CONF_REPLACE=1
+                shift
+                ;;
             --smoke-menu-memdisk)
                 SMOKE=1
                 SMOKE_BOOT=1

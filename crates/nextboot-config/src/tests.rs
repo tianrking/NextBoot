@@ -1,4 +1,5 @@
 use super::*;
+use alloc::format;
 
 #[test]
 fn parses_core_ventoy_plugins() {
@@ -270,13 +271,41 @@ fn parses_boot_plugin_metadata_for_image() {
         plugin.injection_archive.as_deref(),
         Some("/inject/tools.tar.gz")
     );
-    assert_eq!(plugin.conf_replace.len(), 2);
+    assert_eq!(plugin.conf_replace.len(), 3);
+    assert_eq!(plugin.conf_replace[2].org, "/extra.cfg");
+    assert_eq!(plugin.conf_replace[2].new_path, "/cfg/c.cfg");
+    assert_eq!(plugin.conf_replace[2].img, Some(2));
     assert!(plugin.auto_memdisk);
 
     let dud = config
         .image_plugin_for("/ISO/rhel-server-8.iso")
         .expect("dud plugin");
     assert_eq!(dud.dud.expect("dud").files, ["/dud/dd.iso"]);
+}
+
+#[test]
+fn caps_conf_replace_rules_without_dropping_practical_batches() {
+    let mut json =
+        String::from(r#"{"conf_replace":["#).into_bytes();
+    for index in 0..35 {
+        if index > 0 {
+            json.push(b',');
+        }
+        json.extend_from_slice(
+            format!(
+                r#"{{"iso":"/ISO/linux.iso","org":"/boot/file{index}.cfg","new":"/cfg/file{index}.cfg"}}"#
+            )
+            .as_bytes(),
+        );
+    }
+    json.extend_from_slice(br#"]}"#);
+
+    let config = VentoyConfig::parse(&json).expect("config");
+    let plugin = config.image_plugin_for("/ISO/linux.iso").expect("plugin");
+
+    assert_eq!(plugin.conf_replace.len(), VENTOY_MAX_CONF_REPLACE);
+    assert_eq!(plugin.conf_replace[0].org, "/boot/file0.cfg");
+    assert_eq!(plugin.conf_replace[31].org, "/boot/file31.cfg");
 }
 
 #[test]

@@ -55,6 +55,43 @@ def make_smoke_linux_plugin_files(images):
         ),
     ]
 
+def make_smoke_conf_replace_files(images):
+    smoke_image = next(
+        (
+            os.path.basename(image)
+            for image in images
+            if os.path.basename(image).lower().endswith(".iso")
+        ),
+        os.path.basename(images[0]) if images else "nextboot-smoke-efi.iso",
+    )
+    image_path = f"/ISO/{smoke_image}"
+    ventoy_json = f"""{{
+  "conf_replace": [
+    {{
+      "iso": "{image_path}",
+      "org": "/CFG/GRUB.CFG",
+      "new": "/ventoy/replace/grub.cfg"
+    }},
+    {{
+      "iso": "{image_path}",
+      "org": "/CFG/KICKSTART.CFG",
+      "new": "/ventoy/replace/kickstart.cfg"
+    }},
+    {{
+      "iso": "{image_path}",
+      "org": "/CFG/AUTOINST.CFG",
+      "new": "/ventoy/replace/autoinst.cfg"
+    }}
+  ]
+}}
+""".encode("utf-8")
+    return [
+        ("/ventoy/ventoy.json", ventoy_json),
+        ("/ventoy/replace/grub.cfg", b"set timeout=1\nmenuentry 'patched' {}\n"),
+        ("/ventoy/replace/kickstart.cfg", b"# patched smoke kickstart\n"),
+        ("/ventoy/replace/autoinst.cfg", b"# patched smoke autoinstall\n"),
+    ]
+
 def make_smoke_auto_memdisk_files(images):
     smoke_image = next(
         (

@@ -144,6 +144,7 @@ disk as a bootable virtual block device.
 | Storage buses in QEMU | virtio, NVMe, SATA, USB mass storage, SDHCI SD |
 | Sector sizes | 512B and 4K-native style paths where QEMU exposes them |
 | Linux ISO plugins | Persistence, injection, DUD, auto-install smoke coverage |
+| ISO file replacement | Ventoy-style `conf_replace` virtual ISO overlays |
 | Windows ISO | Chain loading plus WIMBOOT fallback assets |
 | Virtual disks | Raw IMG, VHD, VHDX, VDI, parent-chain diagnostics and smoke coverage |
 | Secure Boot | Local owner-key signing workflow; production public signing is not complete |

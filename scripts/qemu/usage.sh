@@ -56,6 +56,8 @@ Options:
                      Generate a differencing VDI without its parent and verify diagnostics
   --smoke-auto-memdisk
                      Generate a minimal UEFI ISO and force Ventoy auto_memdisk
+  --smoke-conf-replace
+                     Generate a minimal UEFI ISO plus Ventoy conf_replace rules
   --smoke-menu-memdisk
                      Generate a minimal UEFI ISO and press M for menu memdisk mode
   --smoke-windows-iso
@@ -78,6 +80,7 @@ Examples:
   TARGET=i686-unknown-uefi $0 --bus virtio --smoke-efi-iso
   TARGET=aarch64-unknown-uefi $0 --bus virtio --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vlnk-iso
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-conf-replace
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-raw-img
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vhd
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-dynamic-vhd

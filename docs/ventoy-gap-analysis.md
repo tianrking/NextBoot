@@ -22,6 +22,11 @@ workflows and which gaps are still worth pursuing.
   including XFS QEMU data partition smoke coverage.
 - Ventoy-style Linux plugin payloads for persistence, injection, DUD, and
   auto-install smoke coverage.
+- Ventoy-style `conf_replace` ISO file replacement rules now keep practical
+  batches of up to 32 matching replacements instead of truncating after two.
+  A QEMU NVMe 4K exFAT smoke case verifies three replacement files are parsed
+  from `ventoy.json`, loaded from the data partition, and prepared as virtual
+  ISO overlays before the El Torito EFI payload starts.
 - Windows ISO chain loading plus WIMBOOT fallback asset integration.
 - Auto memdisk and menu memdisk smoke paths.
 - Raw `.img`, fixed VHD, dynamic VHD, VHDX, and dynamic/static VDI virtual
@@ -72,6 +77,10 @@ workflows and which gaps are still worth pursuing.
 
 ## Useful Ventoy Ideas Still Open
 
+- Legacy BIOS boot: Ventoy supports BIOS and UEFI. NextBoot is intentionally
+  UEFI-first today, so BIOS-only machines still need either a compatibility
+  loader story or a clear out-of-scope decision before full Ventoy parity can
+  be claimed.
 - Secure Boot distribution: local owner-key signing is documented now, but
   NextBoot still needs a production-grade shim or Microsoft UEFI CA story,
   SBAT/revocation policy, release key management, and authenticated variable
@@ -103,6 +112,10 @@ workflows and which gaps are still worth pursuing.
   collect structured rows for real SSD, NVMe enclosure, USB stick, SD reader,
   and motherboard firmware combinations, but the matrix still needs real-world
   entries before it can be considered mature.
+- Advanced menu/plugin polish: menu aliases, tips, classes, passwords, and the
+  boot-affecting plugin data are parsed or partly enforced, but full Ventoy
+  theme parity, richer menu UX, and more plugin choice flows are still lower
+  priority than boot correctness.
 
 ## Current Priority
 
