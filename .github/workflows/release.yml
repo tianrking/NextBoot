@@ -58,39 +58,31 @@ jobs:
       - name: Build burnable release images
         shell: bash
         run: |
-          declare -A sizes=(
-            [8gb]=7000
-            [32gb]=28600
-          )
-
-          for label in 8gb 32gb; do
-            ./scripts/create-release-media.sh \
-              --skip-build \
-              --target all \
-              --mode release \
-              --size "${sizes[$label]}" \
-              --sector-size 512 \
-              --data-fs exfat \
-              --output "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-${label}-512b-exfat.img"
-          done
+          ./scripts/create-release-media.sh \
+            --skip-build \
+            --target all \
+            --mode release \
+            --size 7000 \
+            --sector-size 512 \
+            --data-fs exfat \
+            --output "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img"
 
       - name: Compress and checksum
         shell: bash
         run: |
           cd target/release-media
-          for image in nextboot-${{ steps.version.outputs.version }}-all-uefi-*-512b-exfat.img; do
+          for image in nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img; do
             xz -T0 -0 -f -k "$image"
           done
           sha256sum \
-            nextboot-${{ steps.version.outputs.version }}-all-uefi-*-512b-exfat.img \
-            nextboot-${{ steps.version.outputs.version }}-all-uefi-*-512b-exfat.img.xz \
+            nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img \
+            nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.xz \
             > "SHA256SUMS-${{ steps.version.outputs.version }}.txt"
 
       - name: Verify compressed release assets
         shell: bash
         run: |
-          test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-8gb-512b-exfat.img.xz"
-          test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-32gb-512b-exfat.img.xz"
+          test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.xz"
           test -s "target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt"
           ls -lh target/release-media/*.img.xz target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt
 
@@ -117,7 +109,9 @@ jobs:
             for (const asset of release.data.assets) {
               if (
                 asset.name.includes("x86_64-unknown-uefi") ||
-                asset.name.includes("all-uefi-512b-exfat")
+                asset.name.includes("all-uefi-512b-exfat") ||
+                asset.name.includes("all-uefi-8gb-512b-exfat") ||
+                asset.name.includes("all-uefi-32gb-512b-exfat")
               ) {
                 core.info(`Deleting superseded asset ${asset.name}`);
                 await github.rest.repos.deleteReleaseAsset({
@@ -135,9 +129,7 @@ jobs:
           name: NextBoot ${{ steps.version.outputs.version }}
           overwrite_files: true
           body: |
-            Download the `.img.xz` file for your target capacity and flash it as a whole-disk image to a USB stick, USB SSD, SD card, or external SSD.
-
-            Use the `8gb` image for storage sold as 8GB or larger. Use the `32gb` image for storage sold as 32GB or larger when you want more room for ISO/WIM/VHD files.
+            Download the universal `.img.xz` file and flash it as a whole-disk image to a USB stick, USB SSD, SD card, or external SSD.
 
             You can flash it from Windows, macOS, or Linux with tools such as Rufus, balenaEtcher, Raspberry Pi Imager, GNOME Disks, or another raw image writer. If your writer does not accept `.img.xz` directly, decompress it to `.img` first.
 
@@ -145,8 +137,7 @@ jobs:
 
             The image contains `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and `EFI/BOOT/BOOTAA64.EFI` fallback loaders for x86_64, IA32, and AArch64 UEFI firmware. Legacy BIOS is not included, and Secure Boot still requires disabled Secure Boot or an enrolled local key.
 
-            After flashing, open the visible `NEXTDATA` partition and drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`. Then boot the device from the firmware UEFI boot menu.
+            On large media, boot NextBoot once so it can expand the `NEXTDATA` partition to the target device. Then open `NEXTDATA`, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and boot again from the firmware UEFI boot menu.
           files: |
-            target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-8gb-512b-exfat.img.xz
-            target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-32gb-512b-exfat.img.xz
+            target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.xz
             target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt

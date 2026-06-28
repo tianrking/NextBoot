@@ -102,6 +102,10 @@ def align_up(value, alignment):
 def mib_to_sectors(mib):
     return mib * 1024 * 1024 // sector_size
 
+growable_exfat = os.environ.get("NEXTBOOT_GROWABLE_EXFAT") == "1"
+growable_exfat_max_mib = int(os.environ.get("NEXTBOOT_GROWABLE_EXFAT_MAX_MIB", "16777216"))
+growable_exfat_cluster_size = int(os.environ.get("NEXTBOOT_GROWABLE_EXFAT_CLUSTER_SIZE", "131072"))
+
 extra_files = []
 if smoke_auto_memdisk:
     extra_files.extend(make_smoke_auto_memdisk_files(image_files))
@@ -146,9 +150,20 @@ def log2_power_of_two(value):
 
 def exfat_geometry(part_sectors):
     boot_region_sectors = 24
-    sectors_per_cluster = max(1, 4096 // sector_size)
+    if growable_exfat:
+        if growable_exfat_cluster_size % sector_size != 0:
+            raise SystemExit("growable exFAT cluster size must align to sector size")
+        sectors_per_cluster = growable_exfat_cluster_size // sector_size
+        if sectors_per_cluster <= 0 or sectors_per_cluster & (sectors_per_cluster - 1):
+            raise SystemExit("growable exFAT sectors per cluster must be a power of two")
+    else:
+        sectors_per_cluster = max(1, 4096 // sector_size)
     fat_offset = boot_region_sectors
     fat_length = 1
+    if growable_exfat:
+        max_part_sectors = growable_exfat_max_mib * 1024 * 1024 // sector_size
+        max_clusters = max(16, max_part_sectors // sectors_per_cluster)
+        fat_length = math.ceil((max_clusters + 2) * 4 / sector_size)
     while True:
         cluster_heap_offset = fat_offset + fat_length
         if part_sectors <= cluster_heap_offset:

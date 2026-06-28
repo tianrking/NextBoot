@@ -13,24 +13,24 @@
 
 NextBoot is a Rust UEFI boot medium for USB sticks, USB SSDs, SD cards, and
 fixed-disk style SSD/NVMe deployments. The release artifact is a compressed raw
-disk image: users burn it to storage, open the visible `NEXTDATA` partition,
-drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and choose the device from the
-firmware UEFI boot menu.
+disk image: users burn it to storage, boot once on large media so `NEXTDATA`
+can grow, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and choose the
+device from the firmware UEFI boot menu.
 
 No end-user command line or flasher UI is required after the image is burned.
 
 ## Quick Start
 
-1. Download a capacity-matched image from the latest GitHub release:
-   `nextboot-v0.0.1-all-uefi-8gb-512b-exfat.img.xz` for storage sold as 8GB
-   or larger, or `nextboot-v0.0.1-all-uefi-32gb-512b-exfat.img.xz` for storage
-   sold as 32GB or larger.
+1. Download the universal image from the latest GitHub release:
+   `nextboot-v0.0.1-all-uefi-universal-512b-exfat.img.xz`.
 2. Flash the image from Windows, macOS, or Linux to a USB stick, USB SSD, SD
    card, or external SSD with Rufus, balenaEtcher, Raspberry Pi Imager, GNOME
    Disks, or another raw image writer.
-3. Open the visible `NEXTDATA` partition.
-4. Drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`.
-5. Boot the device from the firmware UEFI boot menu, then pick an image from
+3. On large media, boot the device once from the firmware UEFI boot menu so
+   NextBoot can expand `NEXTDATA` to the target disk.
+4. Reconnect or remount the device, then open the visible `NEXTDATA` partition.
+5. Drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`.
+6. Boot the device from the firmware UEFI boot menu, then pick an image from
    the NextBoot menu.
 
 Flashing writes a whole-disk image and erases the selected target device. Do
@@ -39,11 +39,10 @@ If a writer does not accept `.img.xz` directly, decompress it to `.img` first.
 
 ## Release Shape
 
-The customer-facing release is capacity-tiered:
+The customer-facing release is a single universal image:
 
 ```text
-nextboot-v0.0.1-all-uefi-8gb-512b-exfat.img.xz
-nextboot-v0.0.1-all-uefi-32gb-512b-exfat.img.xz
+nextboot-v0.0.1-all-uefi-universal-512b-exfat.img.xz
 ```
 
 Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.0.1>
@@ -54,7 +53,7 @@ It contains:
 | --- | --- |
 | GPT | Standard partition table suitable for removable and fixed media |
 | ESP | FAT32 partition with `BOOTX64.EFI`, `BOOTIA32.EFI`, and `BOOTAA64.EFI` |
-| Data | exFAT `NEXTDATA` partition with `/ISO` already created and sized for the chosen capacity tier |
+| Data | Growable exFAT `NEXTDATA` partition with `/ISO` already created |
 | Flashing hosts | Windows, macOS, and Linux image writers |
 | Boot target | x86_64, IA32, and AArch64 UEFI firmware |
 | Workflow | Users drag boot images into `/ISO` and boot from UEFI |
@@ -108,7 +107,7 @@ NextBoot uses a small UEFI loader plus a visible data partition:
 
 ```mermaid
 flowchart LR
-  User["User burns NextBoot .img.xz"] --> Media["USB stick / USB SSD / SD / external SSD"]
+  User["User burns universal NextBoot .img.xz"] --> Media["USB stick / USB SSD / SD / external SSD"]
 
   subgraph Disk["GPT storage device"]
     ESP["FAT32 ESP<br/>BOOTX64 / BOOTIA32 / BOOTAA64"]
@@ -117,6 +116,8 @@ flowchart LR
 
   Media --> ESP
   Media --> DATA
+  ESP --> Grow["First-boot grow<br/>GPT + exFAT NEXTDATA"]
+  Grow --> DATA
   DATA --> Scan["NextBoot scanner<br/>UEFI FS + raw partitions"]
   Scan --> Menu["UEFI menu"]
   Menu --> Choice["Selected boot image"]
@@ -143,6 +144,7 @@ disk as a bootable virtual block device.
 | --- | --- |
 | GPT split layout | Supported |
 | FAT32 ESP fallback loaders | `BOOTX64.EFI`, `BOOTIA32.EFI`, `BOOTAA64.EFI` |
+| Release media growth | Single universal image with first-boot GPT/exFAT expansion |
 | Data filesystems | FAT32, exFAT, ext2, ext3, ext4, NTFS, UDF, limited XFS, limited Btrfs |
 | Storage buses in QEMU | virtio, NVMe, SATA, USB mass storage, SDHCI SD |
 | Sector sizes | 512B and 4K-native style paths where QEMU exposes them |

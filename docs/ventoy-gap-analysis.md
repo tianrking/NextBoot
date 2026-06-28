@@ -72,10 +72,11 @@ workflows and which gaps are still worth pursuing.
 - Customer-burnable release media: `scripts/create-release-media.sh` creates a
   raw GPT image with a FAT32 ESP, multi-architecture UEFI fallback loaders, an
   exFAT `NEXTDATA` partition, and an empty `/ISO` directory. GitHub releases
-  publish 8GB-target and 32GB-target capacity tiers so the visible data
-  partition is large enough for practical ISO/WIM/VHD use instead of being a
-  tiny test image. Users can burn the image to USB, SSD, or SD media, then drag
-  boot images into `/ISO` without running NextBoot commands.
+  publish one universal image instead of 8GB/32GB capacity tiers. The release
+  image reserves growable exFAT metadata, and NextBoot can expand GPT plus
+  `NEXTDATA` on first boot after the image is written to larger USB, SSD, or
+  SD media. Users burn the image with a normal image writer, boot once on large
+  media to grow the data partition, then drag boot images into `/ISO`.
 
 ## Useful Ventoy Ideas Still Open
 

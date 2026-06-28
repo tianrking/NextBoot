@@ -14,6 +14,8 @@ use uefi::prelude::*;
 
 mod boot;
 mod init;
+mod media_grow;
+mod media_grow_util;
 mod scanner;
 mod source_disk;
 mod ui;
@@ -65,6 +67,8 @@ fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
 
 /// 主启动流程
 fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
+    media_grow::grow_boot_media(image, st.boot_services());
+
     // Phase 1: 检测存储设备
     info!("Phase 1: Detecting storage devices...");
     let devices = match init::detect_storage_devices(st.boot_services()) {

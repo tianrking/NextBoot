@@ -10,6 +10,7 @@ MODE="release"
 SIZE_MB="7000"
 SECTOR_SIZE="512"
 DATA_FS="exfat"
+GROWABLE_MAX_SIZE_MB="16777216"
 OUTPUT=""
 EFI_OVERRIDE=""
 SKIP_BUILD=0
@@ -33,6 +34,7 @@ Options:
   --size MB             raw disk image size in MiB (default: 7000, fits 8GB media)
   --sector-size BYTES   logical sector size: 512 or 4096 (default: 512)
   --data-fs FS          data partition filesystem: exfat or fat32 (default: exfat)
+  --growable-max-size MB maximum target media size for growable exFAT (default: 16777216)
   --image PATH          preseed an image into /ISO; repeatable
   --output PATH         output .img path
   --efi PATH            use an explicit EFI binary instead of target/TARGET/MODE
@@ -41,8 +43,10 @@ Options:
   -h, --help            Show this help
 
 The generated image contains a FAT32 ESP and a user-visible Data partition with
-/ISO already present. Users burn the .img to USB/SSD/SD media, then drag ISO,
-WIM, VHD, VHDX, IMG, or EFI files into /ISO and boot from the device in UEFI.
+/ISO already present. exFAT release media reserves growth metadata so NextBoot
+can expand NEXTDATA on first boot after the image is written to larger storage.
+Users burn the .img to USB/SSD/SD media, then drag ISO, WIM, VHD, VHDX, IMG,
+or EFI files into /ISO and boot from the device in UEFI.
 USAGE
 }
 
@@ -129,6 +133,11 @@ while [ "$#" -gt 0 ]; do
             DATA_FS="$2"
             shift 2
             ;;
+        --growable-max-size)
+            [ "$#" -ge 2 ] || die "--growable-max-size requires a value"
+            GROWABLE_MAX_SIZE_MB="$2"
+            shift 2
+            ;;
         --image)
             [ "$#" -ge 2 ] || die "--image requires a file path"
             IMAGES+=("$2")
@@ -178,6 +187,9 @@ esac
 case "$DATA_FS" in
     exfat|fat32) ;;
     *) die "--data-fs must be exfat or fat32 for customer release media" ;;
+esac
+case "$GROWABLE_MAX_SIZE_MB" in
+    ''|*[!0-9]*) die "--growable-max-size must be an integer MiB value" ;;
 esac
 
 configure_targets
@@ -231,7 +243,7 @@ fi
 if [ -z "$OUTPUT" ]; then
     OUTPUT_TARGET="$TARGET"
     [ "$TARGET" = "all" ] && OUTPUT_TARGET="all-uefi"
-    OUTPUT="${PROJECT_DIR}/target/release-media/nextboot-${OUTPUT_TARGET}-${SECTOR_SIZE}b-${DATA_FS}.img"
+    OUTPUT="${PROJECT_DIR}/target/release-media/nextboot-${OUTPUT_TARGET}-universal-${SECTOR_SIZE}b-${DATA_FS}.img"
 fi
 mkdir -p "$(dirname "$OUTPUT")"
 
@@ -242,7 +254,13 @@ CREATE_ARGS=(
 if [ "$IMAGE_COUNT" -gt 0 ]; then
     CREATE_ARGS+=("${IMAGES[@]}")
 fi
-python3 "$SCRIPT_DIR/qemu/create-disk-image.py" "${CREATE_ARGS[@]}"
+if [ "$DATA_FS" = "exfat" ]; then
+    NEXTBOOT_GROWABLE_EXFAT=1 \
+    NEXTBOOT_GROWABLE_EXFAT_MAX_MIB="$GROWABLE_MAX_SIZE_MB" \
+        python3 "$SCRIPT_DIR/qemu/create-disk-image.py" "${CREATE_ARGS[@]}"
+else
+    python3 "$SCRIPT_DIR/qemu/create-disk-image.py" "${CREATE_ARGS[@]}"
+fi
 
 VERIFY_ARGS=(
     --disk-image "$OUTPUT"
@@ -266,4 +284,7 @@ python3 "$SCRIPT_DIR/verify-qemu-image.py" "${VERIFY_ARGS[@]}"
 
 echo "Wrote release media image: $OUTPUT"
 echo "Embedded ${#EFI_FILES[@]} UEFI fallback loader(s): ${EFI_BOOT_NAMES[*]}"
-echo "Burn this .img to USB/SSD/SD media, then drag boot images into /ISO."
+if [ "$DATA_FS" = "exfat" ]; then
+    echo "Growable NEXTDATA target ceiling: ${GROWABLE_MAX_SIZE_MB} MiB."
+fi
+echo "Burn this .img to USB/SSD/SD media, boot once to grow large media, then drag boot images into /ISO."
