@@ -13,7 +13,12 @@ DATA_FS="exfat"
 OUTPUT=""
 EFI_OVERRIDE=""
 SKIP_BUILD=0
-IMAGES=()
+EXTRA_EFI_OVERRIDE_COUNT=0
+declare -a IMAGES=()
+declare -a EXTRA_EFI_OVERRIDES=()
+declare -a RELEASE_TARGETS=()
+declare -a EFI_BOOT_NAMES=()
+declare -a EFI_FILES=()
 
 usage() {
     cat <<USAGE
@@ -23,7 +28,7 @@ Usage:
   $0 [options]
 
 Options:
-  --target TARGET       x86_64-unknown-uefi, i686-unknown-uefi, or aarch64-unknown-uefi
+  --target TARGET       x86_64-unknown-uefi, i686-unknown-uefi, aarch64-unknown-uefi, or all
   --mode MODE           debug or release build artifact to embed (default: release)
   --size MB             raw disk image size in MiB (default: 1024)
   --sector-size BYTES   logical sector size: 512 or 4096 (default: 512)
@@ -31,6 +36,7 @@ Options:
   --image PATH          preseed an image into /ISO; repeatable
   --output PATH         output .img path
   --efi PATH            use an explicit EFI binary instead of target/TARGET/MODE
+  --extra-efi NAME=PATH add an extra fallback EFI loader for QA media; repeatable
   --skip-build          do not run scripts/build.sh before creating the image
   -h, --help            Show this help
 
@@ -52,6 +58,48 @@ boot_name_for_target() {
         aarch64-unknown-uefi) printf 'BOOTAA64.EFI\n' ;;
         *) die "unsupported target: $1" ;;
     esac
+}
+
+configure_targets() {
+    case "$TARGET" in
+        x86_64-unknown-uefi)
+            RELEASE_TARGETS=("x86_64-unknown-uefi")
+            EFI_BOOT_NAMES=("BOOTX64.EFI")
+            ;;
+        i686-unknown-uefi)
+            RELEASE_TARGETS=("i686-unknown-uefi")
+            EFI_BOOT_NAMES=("BOOTIA32.EFI")
+            ;;
+        aarch64-unknown-uefi)
+            RELEASE_TARGETS=("aarch64-unknown-uefi")
+            EFI_BOOT_NAMES=("BOOTAA64.EFI")
+            ;;
+        all)
+            RELEASE_TARGETS=("x86_64-unknown-uefi" "i686-unknown-uefi" "aarch64-unknown-uefi")
+            EFI_BOOT_NAMES=("BOOTX64.EFI" "BOOTIA32.EFI" "BOOTAA64.EFI")
+            ;;
+        *) die "unsupported target: $TARGET" ;;
+    esac
+}
+
+append_extra_efi_override() {
+    local entry="$1"
+    local name="${entry%%=*}"
+    local source="${entry#*=}"
+    [ "$name" != "$entry" ] || die "--extra-efi must be NAME=PATH"
+    [ -n "$source" ] || die "--extra-efi source path is empty"
+    name="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
+    case "$name" in
+        BOOTX64.EFI|BOOTIA32.EFI|BOOTAA64.EFI) ;;
+        *) die "--extra-efi name must be BOOTX64.EFI, BOOTIA32.EFI, or BOOTAA64.EFI" ;;
+    esac
+    [ -f "$source" ] || die "extra EFI file not found: $source"
+    local existing
+    for existing in "${EFI_BOOT_NAMES[@]}"; do
+        [ "$existing" != "$name" ] || die "duplicate EFI boot loader: $name"
+    done
+    EFI_BOOT_NAMES+=("$name")
+    EFI_FILES+=("$source")
 }
 
 while [ "$#" -gt 0 ]; do
@@ -96,6 +144,12 @@ while [ "$#" -gt 0 ]; do
             EFI_OVERRIDE="$2"
             shift 2
             ;;
+        --extra-efi)
+            [ "$#" -ge 2 ] || die "--extra-efi requires NAME=PATH"
+            EXTRA_EFI_OVERRIDES+=("$2")
+            EXTRA_EFI_OVERRIDE_COUNT=$((EXTRA_EFI_OVERRIDE_COUNT + 1))
+            shift 2
+            ;;
         --skip-build)
             SKIP_BUILD=1
             shift
@@ -126,13 +180,47 @@ case "$DATA_FS" in
     *) die "--data-fs must be exfat or fat32 for customer release media" ;;
 esac
 
-BOOT_NAME="$(boot_name_for_target "$TARGET")"
+configure_targets
 if [ "$SKIP_BUILD" -eq 0 ] && [ -z "$EFI_OVERRIDE" ]; then
     TARGET="$TARGET" "$SCRIPT_DIR/build.sh" "$MODE"
 fi
 
-EFI_FILE="${EFI_OVERRIDE:-${PROJECT_DIR}/target/${TARGET}/${MODE}/nextboot-boot.efi}"
-[ -f "$EFI_FILE" ] || die "EFI file not found: $EFI_FILE"
+if [ -n "$EFI_OVERRIDE" ] && [ "$TARGET" = "all" ]; then
+    die "--efi is only supported with a single --target; use --extra-efi for QA multi-loader media"
+fi
+
+EFI_FILES=()
+if [ -n "$EFI_OVERRIDE" ]; then
+    EFI_FILES=("$EFI_OVERRIDE")
+else
+    for release_target in "${RELEASE_TARGETS[@]}"; do
+        EFI_FILES+=("${PROJECT_DIR}/target/${release_target}/${MODE}/nextboot-boot.efi")
+    done
+fi
+
+for efi_file in "${EFI_FILES[@]}"; do
+    [ -f "$efi_file" ] || die "EFI file not found: $efi_file"
+done
+if [ "$EXTRA_EFI_OVERRIDE_COUNT" -gt 0 ]; then
+    for extra_efi in "${EXTRA_EFI_OVERRIDES[@]}"; do
+        append_extra_efi_override "$extra_efi"
+    done
+fi
+
+EFI_FILE="${EFI_FILES[0]}"
+BOOT_NAME="${EFI_BOOT_NAMES[0]}"
+EXTRA_EFI_SPEC=""
+if [ "${#EFI_FILES[@]}" -gt 1 ]; then
+    for index in $(seq 1 $((${#EFI_FILES[@]} - 1))); do
+        entry="${EFI_BOOT_NAMES[$index]}=${EFI_FILES[$index]}"
+        if [ -z "$EXTRA_EFI_SPEC" ]; then
+            EXTRA_EFI_SPEC="$entry"
+        else
+            EXTRA_EFI_SPEC="${EXTRA_EFI_SPEC};${entry}"
+        fi
+    done
+fi
+
 IMAGE_COUNT="${#IMAGES[@]}"
 if [ "$IMAGE_COUNT" -gt 0 ]; then
     for image in "${IMAGES[@]}"; do
@@ -141,13 +229,15 @@ if [ "$IMAGE_COUNT" -gt 0 ]; then
 fi
 
 if [ -z "$OUTPUT" ]; then
-    OUTPUT="${PROJECT_DIR}/target/release-media/nextboot-${TARGET}-${SECTOR_SIZE}b-${DATA_FS}.img"
+    OUTPUT_TARGET="$TARGET"
+    [ "$TARGET" = "all" ] && OUTPUT_TARGET="all-uefi"
+    OUTPUT="${PROJECT_DIR}/target/release-media/nextboot-${OUTPUT_TARGET}-${SECTOR_SIZE}b-${DATA_FS}.img"
 fi
 mkdir -p "$(dirname "$OUTPUT")"
 
 CREATE_ARGS=(
     "$OUTPUT" "$SIZE_MB" "$SECTOR_SIZE" split "$DATA_FS" "$EFI_FILE" \
-    0 0 0 "" "" 0 0 "$BOOT_NAME"
+    0 0 0 "" "" 0 0 "$BOOT_NAME" "$EXTRA_EFI_SPEC"
 )
 if [ "$IMAGE_COUNT" -gt 0 ]; then
     CREATE_ARGS+=("${IMAGES[@]}")
@@ -162,6 +252,11 @@ VERIFY_ARGS=(
     --efi-file "$EFI_FILE"
     --efi-boot-name "$BOOT_NAME"
 )
+if [ "${#EFI_FILES[@]}" -gt 1 ]; then
+    for index in $(seq 1 $((${#EFI_FILES[@]} - 1))); do
+        VERIFY_ARGS+=(--efi-loader "${EFI_BOOT_NAMES[$index]}=${EFI_FILES[$index]}")
+    done
+fi
 if [ "$IMAGE_COUNT" -gt 0 ]; then
     for image in "${IMAGES[@]}"; do
         VERIFY_ARGS+=(--image "$image")
@@ -170,4 +265,5 @@ fi
 python3 "$SCRIPT_DIR/verify-qemu-image.py" "${VERIFY_ARGS[@]}"
 
 echo "Wrote release media image: $OUTPUT"
+echo "Embedded ${#EFI_FILES[@]} UEFI fallback loader(s): ${EFI_BOOT_NAMES[*]}"
 echo "Burn this .img to USB/SSD/SD media, then drag boot images into /ISO."

@@ -37,7 +37,12 @@ smoke_helper_file = sys.argv[11]
 smoke_auto_memdisk = sys.argv[12] == "1"
 smoke_conf_replace = sys.argv[13] == "1"
 efi_boot_name = sys.argv[14].upper()
-image_files = sys.argv[15:]
+if len(sys.argv) > 15 and (sys.argv[15] == "" or "=" in sys.argv[15]):
+    extra_efi_spec = sys.argv[15]
+    image_files = sys.argv[16:]
+else:
+    extra_efi_spec = ""
+    image_files = sys.argv[15:]
 if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
@@ -46,6 +51,34 @@ if data_fs not in ("btrfs", "exfat", "ext2", "ext3", "ext4", "fat32", "ntfs", "u
     raise SystemExit("data filesystem must be btrfs, exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs")
 if efi_boot_name not in ("BOOTX64.EFI", "BOOTIA32.EFI", "BOOTAA64.EFI"):
     raise SystemExit("EFI boot name must be BOOTX64.EFI, BOOTIA32.EFI, or BOOTAA64.EFI")
+
+VALID_EFI_BOOT_NAMES = ("BOOTX64.EFI", "BOOTIA32.EFI", "BOOTAA64.EFI")
+
+def parse_extra_efi_entries(spec):
+    entries = [(efi_boot_name, efi_file)]
+    seen = {efi_boot_name}
+    if not spec:
+        return entries
+    for raw_entry in spec.split(";"):
+        if not raw_entry:
+            continue
+        if "=" not in raw_entry:
+            raise SystemExit(f"extra EFI entry must be NAME=PATH: {raw_entry}")
+        name, source = raw_entry.split("=", 1)
+        name = name.upper()
+        if name not in VALID_EFI_BOOT_NAMES:
+            raise SystemExit(
+                "extra EFI boot name must be BOOTX64.EFI, BOOTIA32.EFI, or BOOTAA64.EFI"
+            )
+        if name in seen:
+            raise SystemExit(f"duplicate EFI boot entry: {name}")
+        if not source:
+            raise SystemExit(f"missing source file for EFI boot entry: {name}")
+        entries.append((name, source))
+        seen.add(name)
+    return entries
+
+efi_entries = parse_extra_efi_entries(extra_efi_spec)
 total_bytes = size_mb * 1024 * 1024
 if total_bytes % sector_size != 0:
     raise SystemExit("disk size must be aligned to the sector size")
@@ -285,6 +318,7 @@ volume_deps = {
     "align_up": align_up,
     "efi_file": efi_file,
     "efi_boot_name": efi_boot_name,
+    "efi_entries": efi_entries,
     "smoke_vlnk_iso": smoke_vlnk_iso,
     "image_files": image_files,
     "extra_files": extra_files,

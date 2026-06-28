@@ -66,14 +66,14 @@ workflows and which gaps are still worth pursuing.
   with edk2-i386 firmware or `qemu-system-aarch64` with AAVMF/edk2-aarch64
   firmware.
 - Cross-architecture release media: `TARGET=all` builds x86_64, IA32, and
-  AArch64 UEFI artifacts, and `flash.sh --target all` installs
-  `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and `EFI/BOOT/BOOTAA64.EFI`
-  on one ESP for portable SSD, USB, or SD media.
+  AArch64 UEFI artifacts, and both `flash.sh --target all` and the GitHub
+  release image install `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and
+  `EFI/BOOT/BOOTAA64.EFI` on one ESP for portable SSD, USB, or SD media.
 - Customer-burnable release media: `scripts/create-release-media.sh` creates a
-  raw GPT image with a FAT32 ESP, `EFI/BOOT/BOOTX64.EFI`, an exFAT `NEXTDATA`
-  partition, and an empty `/ISO` directory. Users can burn the image to USB,
-  SSD, or SD media, then drag boot images into `/ISO` without running NextBoot
-  commands.
+  raw GPT image with a FAT32 ESP, multi-architecture UEFI fallback loaders, an
+  exFAT `NEXTDATA` partition, and an empty `/ISO` directory. Users can burn the
+  image to USB, SSD, or SD media, then drag boot images into `/ISO` without
+  running NextBoot commands.
 
 ## Useful Ventoy Ideas Still Open
 
@@ -103,10 +103,6 @@ workflows and which gaps are still worth pursuing.
   superblock plus NextBoot extent/directory smoke map are now covered in QEMU
   data partition paths. Real `mkfs.xfs` btree-scale directories and real
   `mkfs.btrfs` checksum/B-tree metadata still need broader compatibility work.
-- Cross-architecture boot: x86_64, IA32, and AArch64 build/QEMU smoke paths and
-  shared ESP release layout exist now. The QEMU architecture map is isolated in
-  `scripts/qemu/arch.sh`; ARM 32-bit remains out of scope until Rust exposes an
-  `arm*-unknown-uefi` target.
 - Compatibility database: Ventoy has years of device reports. NextBoot now has
   `scripts/hardware-report.sh` and `docs/hardware-compatibility-matrix.md` to
   collect structured rows for real SSD, NVMe enclosure, USB stick, SD reader,

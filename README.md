@@ -6,7 +6,7 @@
 [![Full QEMU Matrix](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml)
 [![Release](https://img.shields.io/github/v/release/tianrking/NextBoot?include_prereleases&label=release)](https://github.com/tianrking/NextBoot/releases/latest)
 [![Rust](https://img.shields.io/badge/Rust-UEFI-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Boot](https://img.shields.io/badge/boot-UEFI%20x86__64-blue)](#architecture)
+[![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#architecture)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#compatibility-coverage)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#feature-coverage)
 [![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.1)
@@ -21,15 +21,15 @@ No end-user command line or flasher UI is required after the image is burned.
 
 ## Quick Start
 
-1. Download `nextboot-v0.0.1-x86_64-unknown-uefi-512b-exfat.img.xz` from the
+1. Download `nextboot-v0.0.1-all-uefi-512b-exfat.img.xz` from the
    latest GitHub release.
 2. Flash the image from Windows, macOS, or Linux to a USB stick, USB SSD, SD
    card, or external SSD with Rufus, balenaEtcher, Raspberry Pi Imager, GNOME
    Disks, or another raw image writer.
 3. Open the visible `NEXTDATA` partition.
 4. Drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`.
-5. Boot the device on an x86_64 UEFI machine, then pick an image from the
-   NextBoot menu.
+5. Boot the device from the firmware UEFI boot menu, then pick an image from
+   the NextBoot menu.
 
 Flashing writes a whole-disk image and erases the selected target device. Do
 not copy the `.img.xz` file into an existing USB drive; use an image writer.
@@ -40,7 +40,7 @@ If a writer does not accept `.img.xz` directly, decompress it to `.img` first.
 The customer-facing release is:
 
 ```text
-nextboot-v0.0.1-x86_64-unknown-uefi-512b-exfat.img.xz
+nextboot-v0.0.1-all-uefi-512b-exfat.img.xz
 ```
 
 Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.0.1>
@@ -50,10 +50,10 @@ It contains:
 | Area | Contents |
 | --- | --- |
 | GPT | Standard partition table suitable for removable and fixed media |
-| ESP | FAT32 partition with `EFI/BOOT/BOOTX64.EFI` |
+| ESP | FAT32 partition with `BOOTX64.EFI`, `BOOTIA32.EFI`, and `BOOTAA64.EFI` |
 | Data | exFAT `NEXTDATA` partition with `/ISO` already created |
 | Flashing hosts | Windows, macOS, and Linux image writers |
-| Boot target | x86_64 UEFI machines |
+| Boot target | x86_64, IA32, and AArch64 UEFI firmware |
 | Workflow | Users drag boot images into `/ISO` and boot from UEFI |
 
 The maintainer build command is:
@@ -108,7 +108,7 @@ flowchart LR
   User["User burns NextBoot .img.xz"] --> Media["USB stick / USB SSD / SD / external SSD"]
 
   subgraph Disk["GPT storage device"]
-    ESP["FAT32 ESP<br/>EFI/BOOT/BOOTX64.EFI"]
+    ESP["FAT32 ESP<br/>BOOTX64 / BOOTIA32 / BOOTAA64"]
     DATA["NEXTDATA partition<br/>/ISO/*.iso / *.wim / *.vhdx / *.efi"]
   end
 

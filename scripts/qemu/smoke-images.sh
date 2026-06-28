@@ -5,7 +5,7 @@ create_smoke_raw_disk() {
     require_command python3 "python3 is required to create the smoke raw disk image"
     python3 "${SCRIPT_DIR}/qemu/create-disk-image.py" \
         "$output" 64 512 single exfat "$SMOKE_EFI_FILE" \
-        0 0 0 "" "" 0 0 "$EFI_BOOT_NAME"
+        0 0 0 "" "" 0 0 "$EFI_BOOT_NAME" ""
 }
 
 parent_chain_file() {

@@ -49,25 +49,26 @@ jobs:
       - name: Install Rust target
         run: |
           rustup component add rust-src llvm-tools
-          rustup target add x86_64-unknown-uefi
+          rustup target add x86_64-unknown-uefi i686-unknown-uefi aarch64-unknown-uefi
 
       - name: Build burnable release image
         run: |
           ./scripts/create-release-media.sh \
+            --target all \
             --mode release \
             --size 1024 \
             --sector-size 512 \
             --data-fs exfat \
-            --output "target/release-media/nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img"
+            --output "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-512b-exfat.img"
 
       - name: Compress and checksum
         shell: bash
         run: |
           cd target/release-media
-          xz -T0 -f -k "nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img"
+          xz -T0 -f -k "nextboot-${{ steps.version.outputs.version }}-all-uefi-512b-exfat.img"
           sha256sum \
-            "nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img" \
-            "nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img.xz" \
+            "nextboot-${{ steps.version.outputs.version }}-all-uefi-512b-exfat.img" \
+            "nextboot-${{ steps.version.outputs.version }}-all-uefi-512b-exfat.img.xz" \
             > "SHA256SUMS-${{ steps.version.outputs.version }}.txt"
 
       - name: Publish GitHub Release
@@ -83,7 +84,9 @@ jobs:
 
             Flashing erases the selected target device. Do not copy the `.img.xz` file into an existing USB drive; write the image to the device.
 
-            After flashing, open the visible `NEXTDATA` partition and drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`. Then boot the device on an x86_64 UEFI machine.
+            The image contains `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and `EFI/BOOT/BOOTAA64.EFI` fallback loaders for x86_64, IA32, and AArch64 UEFI firmware. Legacy BIOS is not included, and Secure Boot still requires disabled Secure Boot or an enrolled local key.
+
+            After flashing, open the visible `NEXTDATA` partition and drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`. Then boot the device from the firmware UEFI boot menu.
           files: |
-            target/release-media/nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img.xz
+            target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-512b-exfat.img.xz
             target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt

@@ -44,6 +44,9 @@ nextboot-menu = { path = "crates/nextboot-menu" }
 nextboot-linux = { path = "crates/nextboot-linux" }
 nextboot-windows = { path = "crates/nextboot-windows" }
 
+[patch.crates-io]
+uefi = { path = "vendor/uefi-0.28.0-nextboot" }
+
 [profile.dev]
 opt-level = 1
 debug = true

@@ -18,10 +18,11 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def run_case(workdir: Path, with_image: bool) -> subprocess.CompletedProcess[str]:
-    efi = workdir / "nextboot-boot.efi"
-    efi.write_bytes(b"NEXTBOOT RELEASE EFI FIXTURE\n")
-    output = workdir / ("release-with-image.img" if with_image else "release-empty.img")
+def run_case(workdir: Path, with_image: bool, multi_efi: bool) -> subprocess.CompletedProcess[str]:
+    efi = workdir / "nextboot-boot-x64.efi"
+    efi.write_bytes(b"NEXTBOOT RELEASE EFI X64 FIXTURE\n")
+    output_name = "release-multi-efi.img" if multi_efi else ("release-with-image.img" if with_image else "release-empty.img")
+    output = workdir / output_name
     command = [
         str(RELEASE_SCRIPT),
         "--skip-build",
@@ -38,6 +39,13 @@ def run_case(workdir: Path, with_image: bool) -> subprocess.CompletedProcess[str
         "--output",
         str(output),
     ]
+    if multi_efi:
+        ia32 = workdir / "nextboot-boot-ia32.efi"
+        aa64 = workdir / "nextboot-boot-aa64.efi"
+        ia32.write_bytes(b"NEXTBOOT RELEASE EFI IA32 FIXTURE\n")
+        aa64.write_bytes(b"NEXTBOOT RELEASE EFI AA64 FIXTURE\n")
+        command.extend(["--extra-efi", f"BOOTIA32.EFI={ia32}"])
+        command.extend(["--extra-efi", f"BOOTAA64.EFI={aa64}"])
     if with_image:
         image = workdir / "customer.iso"
         image.write_bytes(b"NEXTBOOT CUSTOMER ISO FIXTURE\n")
@@ -59,15 +67,22 @@ def main() -> int:
         target_dir.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="release-media-check-", dir=target_dir) as tmp:
             workdir = Path(tmp)
-            empty = run_case(workdir, with_image=False)
+            empty = run_case(workdir, with_image=False, multi_efi=False)
             require(empty.returncode == 0, empty.stdout)
+            require("verified 1 EFI fallback loader(s)" in empty.stdout, empty.stdout)
             require("verified 0 /ISO image file(s)" in empty.stdout, empty.stdout)
             require("release-empty.img" in empty.stdout, empty.stdout)
 
-            seeded = run_case(workdir, with_image=True)
+            seeded = run_case(workdir, with_image=True, multi_efi=False)
             require(seeded.returncode == 0, seeded.stdout)
             require("verified 1 /ISO image file(s)" in seeded.stdout, seeded.stdout)
             require("Burn this .img to USB/SSD/SD media" in seeded.stdout, seeded.stdout)
+
+            multi = run_case(workdir, with_image=True, multi_efi=True)
+            require(multi.returncode == 0, multi.stdout)
+            require("verified 3 EFI fallback loader(s)" in multi.stdout, multi.stdout)
+            require("BOOTX64.EFI BOOTIA32.EFI BOOTAA64.EFI" in multi.stdout, multi.stdout)
+            require("verified 1 /ISO image file(s)" in multi.stdout, multi.stdout)
     except AssertionError as error:
         print(f"release media check failed: {error}", file=sys.stderr)
         return 1

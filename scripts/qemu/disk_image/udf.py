@@ -82,8 +82,7 @@ class UdfNode:
 
 def write_udf_volume(f, part, deps):
     sector_size = deps["sector_size"]
-    efi_file = deps["efi_file"]
-    efi_boot_name = deps["efi_boot_name"]
+    efi_entries = deps["efi_entries"]
     smoke_vlnk_iso = deps["smoke_vlnk_iso"]
     image_files = deps["image_files"]
     extra_files = deps["extra_files"]
@@ -120,7 +119,8 @@ def write_udf_volume(f, part, deps):
         directory.children_by_name[node.name.lower()] = node
 
     if part["include_efi"]:
-        add_file(f"/EFI/BOOT/{efi_boot_name}", source=efi_file)
+        for efi_boot_name, efi_file in efi_entries:
+            add_file(f"/EFI/BOOT/{efi_boot_name}", source=efi_file)
 
     if part["include_images"]:
         if not smoke_vlnk_iso:

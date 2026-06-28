@@ -169,6 +169,7 @@ PY_ARGS=(
     "$SMOKE_AUTO_MEMDISK"
     "$SMOKE_CONF_REPLACE"
     "$EFI_BOOT_NAME"
+    ""
 )
 if [ "${#IMAGES[@]}" -gt 0 ] || [ "${#SUPPORT_IMAGES[@]}" -gt 0 ]; then
     PY_ARGS+=("${IMAGES[@]}")

@@ -31,8 +31,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         choices=("BOOTX64.EFI", "BOOTIA32.EFI", "BOOTAA64.EFI"),
         help="fallback EFI filename under /EFI/BOOT",
     )
+    parser.add_argument(
+        "--efi-loader",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="additional expected fallback EFI source file; repeatable",
+    )
     parser.add_argument("--image", action="append", default=[], help="expected /ISO image file; repeatable")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    efi_entries: list[tuple[str, str | None]] = [(args.efi_boot_name, args.efi_file)]
+    seen = {args.efi_boot_name}
+    for loader in args.efi_loader:
+        if "=" not in loader:
+            parser.error(f"--efi-loader must be NAME=PATH: {loader}")
+        boot_name, source = loader.split("=", 1)
+        boot_name = boot_name.upper()
+        if boot_name not in ("BOOTX64.EFI", "BOOTIA32.EFI", "BOOTAA64.EFI"):
+            parser.error(
+                "--efi-loader NAME must be BOOTX64.EFI, BOOTIA32.EFI, or BOOTAA64.EFI"
+            )
+        if boot_name in seen:
+            parser.error(f"duplicate EFI fallback loader: {boot_name}")
+        if not source:
+            parser.error(f"--efi-loader source path is empty for {boot_name}")
+        efi_entries.append((boot_name, source))
+        seen.add(boot_name)
+    args.efi_entries = efi_entries
+    return args
 
 
 def main(argv: list[str]) -> int:
