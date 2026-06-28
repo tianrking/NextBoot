@@ -9,7 +9,7 @@
 //! - Arch (arch/boot)
 //! - 通用 Linux (grub/isolinux)
 //!
-//! # PRD 对应
+//! # 需求对应
 //! - 模块 C: Linux 引导 (P0)
 
 #![no_std]

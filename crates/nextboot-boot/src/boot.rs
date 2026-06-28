@@ -26,6 +26,7 @@ mod source_volume;
 mod util;
 mod vhd;
 mod vhdx_backing;
+mod vhdx_parent;
 mod virtual_boot;
 mod virtual_device;
 mod wimboot_callbacks;

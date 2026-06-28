@@ -327,7 +327,7 @@ impl VirtualBlockIo {
 
     /// 写入虚拟块 (总是失败 - 只读)
     pub fn write_blocks(&self, _media_id: u32, _lba: u64, _buf: &[u8]) -> Result<(), VirtIoError> {
-        // PRD 要求: 拦截所有 Write 请求
+        // 需求要求: 拦截所有 Write 请求
         Err(VirtIoError::WriteProtected)
     }
 

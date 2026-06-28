@@ -200,6 +200,42 @@ fn rejects_partial_vhdx_parent_reference_without_parent_metadata() {
     );
 }
 
+#[test]
+fn resolves_same_volume_parent_paths() {
+    assert_eq!(
+        resolve_same_volume_parent_path("/ISO/children/diff.vhdx", "..\\base.vhdx"),
+        Some("/ISO/base.vhdx".into())
+    );
+    assert_eq!(
+        resolve_same_volume_parent_path("/ISO/children/diff.vhdx", "\\parents\\base.vhdx"),
+        Some("/parents/base.vhdx".into())
+    );
+    assert_eq!(
+        resolve_same_volume_parent_path("/ISO/diff.vhdx", "..\\base.vhdx"),
+        Some("/base.vhdx".into())
+    );
+    assert_eq!(
+        resolve_same_volume_parent_path("/diff.vhdx", "..\\base.vhdx"),
+        None
+    );
+    assert_eq!(
+        resolve_same_volume_parent_path("ISO/diff.vhdx", "base.vhdx"),
+        None
+    );
+    assert_eq!(
+        resolve_same_volume_parent_path("/ISO/diff.vhdx", "C:\\base.vhdx"),
+        None
+    );
+    assert_eq!(
+        resolve_same_volume_parent_path("/ISO/diff.vhdx", "\\\\??\\Volume{abc}\\base.vhdx"),
+        None
+    );
+    assert_eq!(
+        resolve_same_volume_parent_path("/ISO/diff.vhdx", "\\\\server\\share\\base.vhdx"),
+        None
+    );
+}
+
 fn make_header_section() -> Vec<u8> {
     let mut header = vec![0u8; VHDX_HEADER_SECTION_SIZE];
     header[0..8].copy_from_slice(VHDX_FILE_IDENTIFIER);

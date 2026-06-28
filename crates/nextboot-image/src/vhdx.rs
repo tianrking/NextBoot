@@ -1,14 +1,16 @@
 //! VHDX metadata helpers.
 //!
-//! This module parses only the read-only metadata needed to expose a clean
-//! fixed or dynamic VHDX as a UEFI Block IO device. Differencing images still
-//! need full parent-chain support, but self-contained partially-present blocks
-//! can be validated through their sector bitmaps.
+//! This module parses the read-only metadata needed to expose fixed, dynamic,
+//! and simple differencing VHDX images as UEFI Block IO devices. Full
+//! parent-chain support still belongs in the boot layer, but sector bitmaps and
+//! parent locators are decoded here so they can be host-tested.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
+mod path;
 mod planner;
+pub use path::*;
 pub use planner::*;
 
 pub const VHDX_HEADER_SECTION_SIZE: usize = 1024 * 1024;

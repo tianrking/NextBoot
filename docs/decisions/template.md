@@ -49,7 +49,7 @@
 - 不选择的原因
 
 ## Related
-- 相关的 PRD 章节
+- 相关的需求章节
 - 相关的其他 ADR
 - 参考资料
 
@@ -99,5 +99,5 @@ NextBoot 是一个 UEFI 启动加载器，需要在 UEFI 环境中运行。传�
 - 但 C++ 在 no_std 环境支持有限
 
 ## Related
-- PRD Section 3: 技术栈
+- Requirements Section 3: 技术栈
 - uefi-rs: https://github.com/rust-osdev/uefi-rs
