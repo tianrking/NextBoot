@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, for example v0.0.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  release-media:
+    name: Build Release Media
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $version" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust target
+        run: |
+          rustup component add rust-src llvm-tools
+          rustup target add x86_64-unknown-uefi
+
+      - name: Build burnable release image
+        run: |
+          ./scripts/create-release-media.sh \
+            --mode release \
+            --size 1024 \
+            --sector-size 512 \
+            --data-fs exfat \
+            --output "target/release-media/nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img"
+
+      - name: Compress and checksum
+        shell: bash
+        run: |
+          cd target/release-media
+          xz -T0 -f -k "nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img"
+          sha256sum \
+            "nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img" \
+            "nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img.xz" \
+            > "SHA256SUMS-${{ steps.version.outputs.version }}.txt"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: NextBoot ${{ steps.version.outputs.version }}
+          body: |
+            Burn the `.img.xz` release media to a USB stick, USB SSD, SD card, or external SSD.
+
+            After burning, open the visible `NEXTDATA` partition and drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`.
+
+            Current automated confidence covers USB, NVMe, SATA, SD-style image paths, 512B/4K-style media, and FAT32/exFAT/NTFS/UDF/ext/Btrfs smoke cases. Real hardware compatibility rows are still being collected.
+          files: |
+            target/release-media/nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img.xz
+            target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt

@@ -6,10 +6,10 @@
 [![Full QEMU Matrix](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml)
 
 NextBoot is a Rust UEFI boot medium for USB sticks, USB SSDs, SD cards, and
-fixed-disk style SSD/NVMe deployments. The release artifact is a raw disk image:
-users burn it to storage, open the visible `NEXTDATA` partition, drag ISO/WIM/
-VHD/VHDX/IMG/EFI files into `/ISO`, and choose the device from the firmware UEFI
-boot menu.
+fixed-disk style SSD/NVMe deployments. The release artifact is a compressed raw
+disk image: users burn it to storage, open the visible `NEXTDATA` partition,
+drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and choose the device from the
+firmware UEFI boot menu.
 
 No end-user command line or flasher UI is required after the image is burned.
 
@@ -46,9 +46,10 @@ Optional QA builds can preseed images:
 
 ## User Flow
 
-1. Download the NextBoot `.img` release artifact.
+1. Download the NextBoot `.img.xz` release artifact.
 2. Burn it to a USB stick, USB SSD, SD card, or external SSD with a normal image
-   writer such as Rufus, balenaEtcher, Raspberry Pi Imager, or `dd`.
+   writer such as Rufus, balenaEtcher, or Raspberry Pi Imager. For `dd`, first
+   decompress the `.img.xz` to `.img`.
 3. Open the visible `NEXTDATA` partition.
 4. Drag boot files into `/ISO`.
 5. Reboot and select the device in the firmware UEFI boot menu.
