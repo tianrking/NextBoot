@@ -30,6 +30,8 @@ FILE_PARAMETERS_GUID = bytes.fromhex("3767a1ca36fa434db3b633f0aa44e76b")
 VIRTUAL_DISK_SIZE_GUID = bytes.fromhex("2442a52f1bcd7648b2115dbed83bf4b8")
 LOGICAL_SECTOR_SIZE_GUID = bytes.fromhex("1dbf41816fa90947ba47f233a8faab5f")
 PHYSICAL_SECTOR_SIZE_GUID = bytes.fromhex("c748a3cd5d4471449cc9e9885251c556")
+PARENT_LOCATOR_METADATA_GUID = bytes.fromhex("2d5fd3a80bb34d45abf7d3d84834ab0c")
+VHDX_PARENT_LOCATOR_TYPE_GUID = bytes.fromhex("b7ef4ab09ed1814ab78925b8e9445913")
 
 
 def align_up(value: int, alignment: int) -> int:
@@ -79,6 +81,10 @@ def write_metadata_entry(
     put_u32(metadata, offset + 24, 0x6)
 
 
+def utf16le(text: str) -> bytes:
+    return text.encode("utf-16le")
+
+
 def is_zero_block(chunk: bytes) -> bool:
     return not any(chunk)
 
@@ -100,10 +106,36 @@ def header_section() -> bytes:
     return bytes(header)
 
 
+def parent_locator_region() -> bytes:
+    entries = [
+        ("parent_linkage", "{83ed0ec3-24c8-49a6-a959-5e4bf1288bfb}"),
+        ("relative_path", "nextboot-smoke-parent-base.vhdx"),
+        ("absolute_win32_path", "C:\\nextboot\\nextboot-smoke-parent-base.vhdx"),
+    ]
+    locator = bytearray(20 + len(entries) * 12)
+    locator[0:16] = VHDX_PARENT_LOCATOR_TYPE_GUID
+    put_u16(locator, 18, len(entries))
+
+    for index, (key, value) in enumerate(entries):
+        table_offset = 20 + index * 12
+        key_bytes = utf16le(key)
+        value_bytes = utf16le(value)
+        key_offset = len(locator)
+        locator.extend(key_bytes)
+        value_offset = len(locator)
+        locator.extend(value_bytes)
+        put_u32(locator, table_offset, key_offset)
+        put_u32(locator, table_offset + 4, value_offset)
+        put_u16(locator, table_offset + 8, len(key_bytes))
+        put_u16(locator, table_offset + 10, len(value_bytes))
+
+    return bytes(locator)
+
+
 def metadata_region(virtual_size: int, has_parent: bool) -> bytes:
     metadata = bytearray(MIB)
     metadata[0:8] = b"metadata"
-    put_u16(metadata, 10, 4)
+    put_u16(metadata, 10, 5 if has_parent else 4)
 
     write_metadata_entry(metadata, 32, FILE_PARAMETERS_GUID, 0x10000, 8)
     put_u32(metadata, 0x10000, BLOCK_SIZE)
@@ -117,6 +149,10 @@ def metadata_region(virtual_size: int, has_parent: bool) -> bytes:
 
     write_metadata_entry(metadata, 128, PHYSICAL_SECTOR_SIZE_GUID, 0x10014, 4)
     put_u32(metadata, 0x10014, PHYSICAL_SECTOR_SIZE)
+    if has_parent:
+        locator = parent_locator_region()
+        write_metadata_entry(metadata, 160, PARENT_LOCATOR_METADATA_GUID, 0x10018, len(locator))
+        metadata[0x10018 : 0x10018 + len(locator)] = locator
     return bytes(metadata)
 
 

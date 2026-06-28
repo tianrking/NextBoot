@@ -4,6 +4,7 @@ members = [
     "crates/nextboot-boot",
     "crates/nextboot-config",
     "crates/nextboot-fs",
+    "crates/nextboot-image",
     "crates/nextboot-virtio",
     "crates/nextboot-menu",
     "crates/nextboot-linux",
@@ -37,6 +38,7 @@ xz4rust = { version = "0.2.1", default-features = false, features = ["alloc", "b
 # 内部 crate
 nextboot-fs = { path = "crates/nextboot-fs" }
 nextboot-config = { path = "crates/nextboot-config" }
+nextboot-image = { path = "crates/nextboot-image" }
 nextboot-virtio = { path = "crates/nextboot-virtio" }
 nextboot-menu = { path = "crates/nextboot-menu" }
 nextboot-linux = { path = "crates/nextboot-linux" }

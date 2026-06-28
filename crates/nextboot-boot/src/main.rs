@@ -17,10 +17,8 @@ mod init;
 mod scanner;
 mod source_disk;
 mod ui;
-mod vdi;
 mod ventoy;
 mod ventoy_linux;
-mod vhdx;
 mod virtual_fs;
 mod vlnk;
 mod wim;
@@ -28,6 +26,7 @@ mod wimboot;
 mod xz;
 
 pub(crate) use nextboot_config as ventoy_config;
+pub(crate) use nextboot_image::{vdi, vhdx};
 
 use boot::BootManager;
 use scanner::IsoScanner;

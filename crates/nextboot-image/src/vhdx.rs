@@ -5,6 +5,9 @@
 //! need full parent-chain support, but self-contained partially-present blocks
 //! can be validated through their sector bitmaps.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 pub const VHDX_HEADER_SECTION_SIZE: usize = 1024 * 1024;
 pub const VHDX_REGION_TABLE_SIZE: usize = 64 * 1024;
 pub const VHDX_REGION_TABLE_1_OFFSET: usize = 192 * 1024;
@@ -44,6 +47,18 @@ const LOGICAL_SECTOR_SIZE_GUID: [u8; 16] = [
 const PHYSICAL_SECTOR_SIZE_GUID: [u8; 16] = [
     0xC7, 0x48, 0xA3, 0xCD, 0x5D, 0x44, 0x71, 0x44, 0x9C, 0xC9, 0xE9, 0x88, 0x52, 0x51, 0xC5, 0x56,
 ];
+const PARENT_LOCATOR_METADATA_GUID: [u8; 16] = [
+    0x2D, 0x5F, 0xD3, 0xA8, 0x0B, 0xB3, 0x4D, 0x45, 0xAB, 0xF7, 0xD3, 0xD8, 0x48, 0x34, 0xAB, 0x0C,
+];
+const VHDX_PARENT_LOCATOR_TYPE_GUID: [u8; 16] = [
+    0xB7, 0xEF, 0x4A, 0xB0, 0x9E, 0xD1, 0x81, 0x4A, 0xB7, 0x89, 0x25, 0xB8, 0xE9, 0x44, 0x59, 0x13,
+];
+
+pub const VHDX_PARENT_KEY_RELATIVE_PATH: &str = "relative_path";
+pub const VHDX_PARENT_KEY_VOLUME_PATH: &str = "volume_path";
+pub const VHDX_PARENT_KEY_ABSOLUTE_WIN32_PATH: &str = "absolute_win32_path";
+pub const VHDX_PARENT_KEY_PARENT_LINKAGE: &str = "parent_linkage";
+pub const VHDX_PARENT_KEY_PARENT_LINKAGE2: &str = "parent_linkage2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VhdxRegions {
@@ -53,13 +68,14 @@ pub struct VhdxRegions {
     pub metadata_length: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VhdxMetadata {
     pub virtual_disk_size: u64,
     pub block_size: u32,
     pub logical_sector_size: u32,
     pub physical_sector_size: u32,
     pub has_parent: bool,
+    pub parent_locator: Option<VhdxParentLocator>,
 }
 
 impl VhdxMetadata {
@@ -77,12 +93,74 @@ impl VhdxMetadata {
             Some(ratio)
         }
     }
+
+    pub fn parent_paths(&self) -> Vec<&str> {
+        self.parent_locator
+            .as_ref()
+            .map(VhdxParentLocator::parent_paths)
+            .unwrap_or_default()
+    }
+
+    pub fn parent_linkages(&self) -> Vec<&str> {
+        self.parent_locator
+            .as_ref()
+            .map(VhdxParentLocator::parent_linkages)
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VhdxBatEntry {
     pub state: u8,
     pub file_offset: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VhdxParentLocator {
+    pub locator_type: [u8; 16],
+    pub entries: Vec<VhdxParentLocatorEntry>,
+}
+
+impl VhdxParentLocator {
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|entry| entry.key == key)
+            .map(|entry| entry.value.as_str())
+    }
+
+    pub fn parent_paths(&self) -> Vec<&str> {
+        let mut paths = Vec::new();
+        for key in [
+            VHDX_PARENT_KEY_RELATIVE_PATH,
+            VHDX_PARENT_KEY_VOLUME_PATH,
+            VHDX_PARENT_KEY_ABSOLUTE_WIN32_PATH,
+        ] {
+            if let Some(path) = self.get(key) {
+                paths.push(path);
+            }
+        }
+        paths
+    }
+
+    pub fn parent_linkages(&self) -> Vec<&str> {
+        let mut linkages = Vec::new();
+        for key in [
+            VHDX_PARENT_KEY_PARENT_LINKAGE,
+            VHDX_PARENT_KEY_PARENT_LINKAGE2,
+        ] {
+            if let Some(linkage) = self.get(key) {
+                linkages.push(linkage);
+            }
+        }
+        linkages
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VhdxParentLocatorEntry {
+    pub key: String,
+    pub value: String,
 }
 
 pub fn parse_vhdx_regions(header_section: &[u8]) -> Option<VhdxRegions> {
@@ -109,6 +187,7 @@ pub fn parse_vhdx_metadata(metadata_region: &[u8]) -> Option<VhdxMetadata> {
     let mut virtual_disk_size = None;
     let mut logical_sector_size = None;
     let mut physical_sector_size = None;
+    let mut parent_locator = None;
 
     for index in 0..usize::from(entry_count) {
         let entry_offset = 32usize.checked_add(index.checked_mul(32)?)?;
@@ -140,6 +219,8 @@ pub fn parse_vhdx_metadata(metadata_region: &[u8]) -> Option<VhdxMetadata> {
                 return None;
             }
             physical_sector_size = Some(read_le_u32(item, 0)?);
+        } else if item_id == PARENT_LOCATOR_METADATA_GUID {
+            parent_locator = Some(parse_vhdx_parent_locator(item)?);
         }
     }
 
@@ -164,6 +245,52 @@ pub fn parse_vhdx_metadata(metadata_region: &[u8]) -> Option<VhdxMetadata> {
         logical_sector_size,
         physical_sector_size,
         has_parent: file_parameters & VHDX_FILE_PARAMETERS_HAS_PARENT != 0,
+        parent_locator,
+    })
+}
+
+pub fn parse_vhdx_parent_locator(data: &[u8]) -> Option<VhdxParentLocator> {
+    if data.len() < 20 {
+        return None;
+    }
+
+    let mut locator_type = [0u8; 16];
+    locator_type.copy_from_slice(data.get(0..16)?);
+    if locator_type != VHDX_PARENT_LOCATOR_TYPE_GUID {
+        return None;
+    }
+
+    if read_le_u16(data, 16)? != 0 {
+        return None;
+    }
+    let entry_count = usize::from(read_le_u16(data, 18)?);
+    let table_bytes = entry_count.checked_mul(12)?;
+    data.get(20..20usize.checked_add(table_bytes)?)?;
+
+    let mut entries = Vec::new();
+    entries.try_reserve_exact(entry_count).ok()?;
+
+    for index in 0..entry_count {
+        let entry_offset = 20usize.checked_add(index.checked_mul(12)?)?;
+        let key_offset = usize::try_from(read_le_u32(data, entry_offset)?).ok()?;
+        let value_offset = usize::try_from(read_le_u32(data, entry_offset + 4)?).ok()?;
+        let key_length = usize::from(read_le_u16(data, entry_offset + 8)?);
+        let value_length = usize::from(read_le_u16(data, entry_offset + 10)?);
+        if key_length == 0 || key_length % 2 != 0 || value_length % 2 != 0 {
+            return None;
+        }
+
+        entries.push(VhdxParentLocatorEntry {
+            key: decode_utf16le(data.get(key_offset..key_offset.checked_add(key_length)?)?)?,
+            value: decode_utf16le(
+                data.get(value_offset..value_offset.checked_add(value_length)?)?,
+            )?,
+        });
+    }
+
+    Some(VhdxParentLocator {
+        locator_type,
+        entries,
     })
 }
 
@@ -279,145 +406,15 @@ fn div_round_up(value: u64, divisor: u64) -> Option<u64> {
     value.checked_add(divisor - 1).map(|value| value / divisor)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloc::vec;
-    use alloc::vec::Vec;
-
-    #[test]
-    fn parses_region_table_from_header_section() {
-        let header = make_header_section();
-        let regions = parse_vhdx_regions(&header).expect("regions");
-
-        assert_eq!(regions.bat_offset, 2 * VHDX_MIB);
-        assert_eq!(regions.bat_length, 1024 * 1024);
-        assert_eq!(regions.metadata_offset, VHDX_MIB);
-        assert_eq!(regions.metadata_length, 1024 * 1024);
+fn decode_utf16le(data: &[u8]) -> Option<String> {
+    let mut out = String::new();
+    for chunk in data.chunks_exact(2) {
+        let code_unit = u16::from_le_bytes([chunk[0], chunk[1]]);
+        let ch = char::from_u32(u32::from(code_unit))?;
+        out.push(ch);
     }
-
-    #[test]
-    fn parses_required_metadata_items() {
-        let metadata = make_metadata_region(false, 4096);
-        let parsed = parse_vhdx_metadata(&metadata).expect("metadata");
-
-        assert_eq!(parsed.virtual_disk_size, 64 * VHDX_MIB);
-        assert_eq!(parsed.block_size, 2 * 1024 * 1024);
-        assert_eq!(parsed.logical_sector_size, 4096);
-        assert_eq!(parsed.physical_sector_size, 4096);
-        assert!(!parsed.has_parent);
-        assert_eq!(parsed.chunk_ratio(), Some(16_384));
-    }
-
-    #[test]
-    fn detects_parent_vhdx_metadata() {
-        let metadata = make_metadata_region(true, 512);
-        let parsed = parse_vhdx_metadata(&metadata).expect("metadata");
-
-        assert!(parsed.has_parent);
-        assert_eq!(parsed.logical_sector_size, 512);
-    }
-
-    #[test]
-    fn calculates_interleaved_bat_entry_count() {
-        assert_eq!(bat_entry_count(4, 4), Some(5));
-        assert_eq!(bat_entry_count(5, 4), Some(10));
-        assert_eq!(payload_bat_index(0, 4), Some(0));
-        assert_eq!(payload_bat_index(3, 4), Some(3));
-        assert_eq!(payload_bat_index(4, 4), Some(5));
-        assert_eq!(sector_bitmap_bat_index(0, 4), Some(4));
-        assert_eq!(sector_bitmap_bat_index(3, 4), Some(4));
-        assert_eq!(sector_bitmap_bat_index(4, 4), Some(9));
-    }
-
-    #[test]
-    fn parses_bat_entry_state_and_offset() {
-        let raw = (3u64 << 20) | u64::from(VHDX_BAT_STATE_FULLY_PRESENT);
-        let entry = parse_bat_entry(raw);
-
-        assert_eq!(entry.state, VHDX_BAT_STATE_FULLY_PRESENT);
-        assert_eq!(entry.file_offset, 3 * VHDX_MIB);
-    }
-
-    fn make_header_section() -> Vec<u8> {
-        let mut header = vec![0u8; VHDX_HEADER_SECTION_SIZE];
-        header[0..8].copy_from_slice(VHDX_FILE_IDENTIFIER);
-
-        let table = &mut header
-            [VHDX_REGION_TABLE_1_OFFSET..VHDX_REGION_TABLE_1_OFFSET + VHDX_REGION_TABLE_SIZE];
-        table[0..4].copy_from_slice(VHDX_REGION_SIGNATURE);
-        write_le_u32(table, 8, 2);
-        write_region_entry(table, 16, BAT_REGION_GUID, 2 * VHDX_MIB, 1024 * 1024, 1);
-        write_region_entry(table, 48, METADATA_REGION_GUID, VHDX_MIB, 1024 * 1024, 1);
-
-        header
-    }
-
-    fn make_metadata_region(has_parent: bool, logical_sector_size: u32) -> Vec<u8> {
-        let mut metadata = vec![0u8; 0x10100];
-        metadata[0..8].copy_from_slice(VHDX_METADATA_SIGNATURE);
-        write_le_u16(&mut metadata, 10, 4);
-
-        write_metadata_entry(&mut metadata, 32, FILE_PARAMETERS_GUID, 0x10000, 8);
-        write_le_u32(&mut metadata, 0x10000, 2 * 1024 * 1024);
-        write_le_u32(
-            &mut metadata,
-            0x10004,
-            if has_parent {
-                VHDX_FILE_PARAMETERS_HAS_PARENT
-            } else {
-                0
-            },
-        );
-
-        write_metadata_entry(&mut metadata, 64, VIRTUAL_DISK_SIZE_GUID, 0x10008, 8);
-        write_le_u64(&mut metadata, 0x10008, 64 * VHDX_MIB);
-
-        write_metadata_entry(&mut metadata, 96, LOGICAL_SECTOR_SIZE_GUID, 0x10010, 4);
-        write_le_u32(&mut metadata, 0x10010, logical_sector_size);
-
-        write_metadata_entry(&mut metadata, 128, PHYSICAL_SECTOR_SIZE_GUID, 0x10014, 4);
-        write_le_u32(&mut metadata, 0x10014, 4096);
-
-        metadata
-    }
-
-    fn write_region_entry(
-        table: &mut [u8],
-        offset: usize,
-        guid: [u8; 16],
-        file_offset: u64,
-        length: u32,
-        flags: u32,
-    ) {
-        table[offset..offset + 16].copy_from_slice(&guid);
-        write_le_u64(table, offset + 16, file_offset);
-        write_le_u32(table, offset + 24, length);
-        write_le_u32(table, offset + 28, flags);
-    }
-
-    fn write_metadata_entry(
-        metadata: &mut [u8],
-        offset: usize,
-        guid: [u8; 16],
-        item_offset: u32,
-        length: u32,
-    ) {
-        metadata[offset..offset + 16].copy_from_slice(&guid);
-        write_le_u32(metadata, offset + 16, item_offset);
-        write_le_u32(metadata, offset + 20, length);
-        write_le_u32(metadata, offset + 24, 0x6);
-    }
-
-    fn write_le_u16(data: &mut [u8], offset: usize, value: u16) {
-        data[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
-    }
-
-    fn write_le_u32(data: &mut [u8], offset: usize, value: u32) {
-        data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-    }
-
-    fn write_le_u64(data: &mut [u8], offset: usize, value: u64) {
-        data[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-    }
+    Some(out)
 }
+
+#[cfg(test)]
+mod tests;
