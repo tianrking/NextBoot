@@ -74,9 +74,10 @@ workflows and which gaps are still worth pursuing.
   exFAT `NEXTDATA` partition, and an empty `/ISO` directory. GitHub releases
   publish one universal image instead of 8GB/32GB capacity tiers. The release
   image reserves growable exFAT metadata, and NextBoot can expand GPT plus
-  `NEXTDATA` on first boot after the image is written to larger USB, SSD, or
-  SD media. Users burn the image with a normal image writer, boot once on large
-  media to grow the data partition, then drag boot images into `/ISO`.
+  `NEXTDATA` after the image is written to larger USB, SSD, or SD media.
+  The release burn tool performs that write-and-grow flow in one command so
+  users can drag boot images into `/ISO` immediately after flashing. Firmware
+  first-boot growth remains a fallback for generic raw image writers.
 
 ## Useful Ventoy Ideas Still Open
 

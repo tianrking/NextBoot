@@ -138,8 +138,8 @@ def grow_exfat_boot(handle, sector_size: int, data: GptPartition, new_blocks: in
     return grown_blocks
 
 
-def grow(path: str, sector_size: int) -> str:
-    size = os.path.getsize(path)
+def grow(path: str, sector_size: int, media_size_bytes: int | None = None) -> str:
+    size = media_size_bytes if media_size_bytes is not None else os.path.getsize(path)
     require(size % sector_size == 0, "image size is not sector aligned")
     total_blocks = size // sector_size
     require(total_blocks > 128, "image is too small")
@@ -206,6 +206,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--disk-image", required=True, help="raw NextBoot disk image")
     parser.add_argument("--sector-size", type=int, default=512, choices=(512, 4096))
     parser.add_argument("--target-size-mib", type=int, help="resize file before growing")
+    parser.add_argument(
+        "--media-size-bytes",
+        type=int,
+        help="explicit target media size for block devices that do not report st_size",
+    )
     return parser.parse_args()
 
 
@@ -215,7 +220,7 @@ def main() -> int:
         with open(args.disk_image, "ab") as handle:
             handle.truncate(args.target_size_mib * 1024 * 1024)
     try:
-        print(grow(args.disk_image, args.sector_size))
+        print(grow(args.disk_image, args.sector_size, args.media_size_bytes))
     except GrowError as error:
         print(f"grow-release-media: {error}")
         return 1

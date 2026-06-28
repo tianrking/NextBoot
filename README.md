@@ -13,29 +13,36 @@
 
 NextBoot is a Rust UEFI boot medium for USB sticks, USB SSDs, SD cards, and
 fixed-disk style SSD/NVMe deployments. The release artifact is a compressed raw
-disk image: users burn it to storage, boot once on large media so `NEXTDATA`
-can grow, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and choose the
-device from the firmware UEFI boot menu.
+disk image plus a burn tool: users write it to storage, open the visible
+`NEXTDATA` partition, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and
+choose the device from the firmware UEFI boot menu.
 
 No end-user command line or flasher UI is required after the image is burned.
 
 ## Quick Start
 
-1. Download the universal image from the latest GitHub release:
+1. Download these files from the latest GitHub release:
    `nextboot-v0.0.1-all-uefi-universal-512b-exfat.img.xz`.
-2. Flash the image from Windows, macOS, or Linux to a USB stick, USB SSD, SD
-   card, or external SSD with Rufus, balenaEtcher, Raspberry Pi Imager, GNOME
-   Disks, or another raw image writer.
-3. On large media, boot the device once from the firmware UEFI boot menu so
-   NextBoot can expand `NEXTDATA` to the target disk.
-4. Reconnect or remount the device, then open the visible `NEXTDATA` partition.
+   `nextboot-v0.0.1-tools.tar.gz`.
+2. Extract the tools archive.
+3. Burn the image to a USB stick, USB SSD, SD card, or external SSD:
+
+```bash
+./scripts/burn-release-media.sh \
+  --image nextboot-v0.0.1-all-uefi-universal-512b-exfat.img.xz \
+  /dev/diskX
+```
+
+4. Open the visible `NEXTDATA` partition.
 5. Drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`.
 6. Boot the device from the firmware UEFI boot menu, then pick an image from
    the NextBoot menu.
 
 Flashing writes a whole-disk image and erases the selected target device. Do
-not copy the `.img.xz` file into an existing USB drive; use an image writer.
-If a writer does not accept `.img.xz` directly, decompress it to `.img` first.
+not copy the `.img.xz` file into an existing USB drive. The burn tool writes
+the image and expands `NEXTDATA` to the target device in one step. Generic raw
+image writers still work, but on large media they may require one NextBoot boot
+before the data partition grows.
 
 ## Release Shape
 
@@ -43,6 +50,7 @@ The customer-facing release is a single universal image:
 
 ```text
 nextboot-v0.0.1-all-uefi-universal-512b-exfat.img.xz
+nextboot-v0.0.1-tools.tar.gz
 ```
 
 Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.0.1>
@@ -54,6 +62,7 @@ It contains:
 | GPT | Standard partition table suitable for removable and fixed media |
 | ESP | FAT32 partition with `BOOTX64.EFI`, `BOOTIA32.EFI`, and `BOOTAA64.EFI` |
 | Data | Growable exFAT `NEXTDATA` partition with `/ISO` already created |
+| Burn tool | macOS/Linux writer that burns the image and expands `NEXTDATA` |
 | Flashing hosts | Windows, macOS, and Linux image writers |
 | Boot target | x86_64, IA32, and AArch64 UEFI firmware |
 | Workflow | Users drag boot images into `/ISO` and boot from UEFI |

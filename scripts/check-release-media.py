@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import lzma
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,6 +13,7 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 RELEASE_SCRIPT = PROJECT_DIR / "scripts" / "create-release-media.sh"
+BURN_SCRIPT = PROJECT_DIR / "scripts" / "burn-release-media.sh"
 GROW_SCRIPT = PROJECT_DIR / "scripts" / "grow-release-media.py"
 VERIFY_SCRIPT = PROJECT_DIR / "scripts" / "verify-qemu-image.py"
 
@@ -74,6 +77,11 @@ def run_case(
     )
 
 
+def compress_xz(source: Path, target: Path) -> None:
+    with source.open("rb") as src, lzma.open(target, "wb", preset=0) as dst:
+        shutil.copyfileobj(src, dst, length=1024 * 1024)
+
+
 def main() -> int:
     try:
         target_dir = PROJECT_DIR / "target"
@@ -96,6 +104,59 @@ def main() -> int:
             require("verified 3 EFI fallback loader(s)" in multi.stdout, multi.stdout)
             require("BOOTX64.EFI BOOTIA32.EFI BOOTAA64.EFI" in multi.stdout, multi.stdout)
             require("verified 1 /ISO image file(s)" in multi.stdout, multi.stdout)
+
+            compressed_multi = workdir / "release-multi-efi.img.xz"
+            compress_xz(workdir / "release-multi-efi.img", compressed_multi)
+
+            burn_target = workdir / "burned-target.img"
+            with burn_target.open("wb") as target:
+                target.truncate(256 * 1024 * 1024)
+            burn = subprocess.run(
+                [
+                    str(BURN_SCRIPT),
+                    "--allow-file",
+                    "--no-mount",
+                    "-y",
+                    "--image",
+                    str(compressed_multi),
+                    str(burn_target),
+                ],
+                cwd=PROJECT_DIR,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+            require(burn.returncode == 0, burn.stdout)
+            require("Done. Open NEXTDATA" in burn.stdout, burn.stdout)
+
+            verify_burn = subprocess.run(
+                [
+                    str(VERIFY_SCRIPT),
+                    "--disk-image",
+                    str(burn_target),
+                    "--sector-size",
+                    "512",
+                    "--layout",
+                    "split",
+                    "--data-fs",
+                    "exfat",
+                    "--efi-file",
+                    str(workdir / "nextboot-boot-x64.efi"),
+                    "--efi-loader",
+                    f"BOOTIA32.EFI={workdir / 'nextboot-boot-ia32.efi'}",
+                    "--efi-loader",
+                    f"BOOTAA64.EFI={workdir / 'nextboot-boot-aa64.efi'}",
+                    "--image",
+                    str(workdir / "customer.iso"),
+                ],
+                cwd=PROJECT_DIR,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+            require(verify_burn.returncode == 0, verify_burn.stdout)
 
             default_capacity = run_case(
                 workdir,
