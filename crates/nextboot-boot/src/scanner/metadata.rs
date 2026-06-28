@@ -51,10 +51,10 @@ impl<'a> IsoScanner<'a> {
         let extents: Vec<IsoExtent> = extents.into_iter().map(IsoExtent::from).collect();
         let (image_format, virtual_size, virtual_block_size) =
             self.detect_image_virtual_metadata(&block_io, block_size, size, &extents, image_format);
-        let (boot_info, is_udf) = if image_format.is_iso() {
+        let (boot_info, is_udf, os_type_hint) = if image_format.is_iso() {
             self.resolve_iso_metadata(&block_io, block_size, size, &extents)
         } else {
-            (None, false)
+            (None, false, None)
         };
         let wim_info = if image_format.is_wim_container() {
             self.read_wim_boot_info(&block_io, block_size, size, &extents)
@@ -68,6 +68,7 @@ impl<'a> IsoScanner<'a> {
             boot_info,
             is_udf,
             wim_info,
+            os_type_hint,
             image_format,
             virtual_size,
             virtual_block_size,
@@ -98,10 +99,10 @@ impl<'a> IsoScanner<'a> {
             &read_extents,
             image_format,
         );
-        let (boot_info, is_udf) = if image_format.is_iso() {
+        let (boot_info, is_udf, os_type_hint) = if image_format.is_iso() {
             self.resolve_iso_metadata(block_io, block_size, size, &read_extents)
         } else {
-            (None, false)
+            (None, false, None)
         };
         let wim_info = if image_format.is_wim_container() {
             self.read_wim_boot_info(block_io, block_size, size, &read_extents)
@@ -115,6 +116,7 @@ impl<'a> IsoScanner<'a> {
             boot_info,
             is_udf,
             wim_info,
+            os_type_hint,
             image_format,
             virtual_size,
             virtual_block_size,

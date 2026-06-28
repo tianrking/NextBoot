@@ -109,6 +109,7 @@ impl<'a> IsoScanner<'a> {
                     boot_info,
                     is_udf,
                     wim_info,
+                    os_type_hint,
                     image_format,
                     virtual_size,
                     virtual_block_size,
@@ -125,12 +126,14 @@ impl<'a> IsoScanner<'a> {
                         boot_info: None,
                         is_udf: false,
                         wim_info: None,
+                        os_type_hint: None,
                         image_format,
                         virtual_size: entry.file_size(),
                         virtual_block_size: default_virtual_block_size(image_format),
                     });
                 let start_lba = extents.first().map_or(0, |extent| extent.physical_lba);
-                let os_type = self.detect_image_os_type(&full_path, image_format, wim_info);
+                let os_type =
+                    self.detect_image_os_type(&full_path, image_format, wim_info, os_type_hint);
 
                 files.push(IsoFile {
                     path: full_path.clone(),

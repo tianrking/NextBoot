@@ -190,6 +190,7 @@ impl<'a> IsoScanner<'a> {
         path: &str,
         image_format: ImageFormat,
         wim_info: Option<WimBootInfo>,
+        os_type_hint: Option<OsType>,
     ) -> OsType {
         if image_format.is_wim_container() {
             if let Some(info) = wim_info {
@@ -197,6 +198,10 @@ impl<'a> IsoScanner<'a> {
                     return OsType::WinPE;
                 }
             }
+        }
+
+        if let Some(os_type) = os_type_hint {
+            return os_type;
         }
 
         self.detect_iso_type(path)

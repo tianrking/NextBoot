@@ -1,12 +1,36 @@
 use super::block_io::{UefiBlockIo, VirtualIsoBlockIo};
 use super::helpers::{default_virtual_block_size, parse_vhd_footer};
-use super::model::{ImageFormat, IsoBootInfo, IsoExtent, WimBootInfo};
+use super::model::{ImageFormat, IsoBootInfo, IsoExtent, OsType, WimBootInfo};
 use super::IsoScanner;
 use crate::{vdi, vhdx, wim};
+use alloc::rc::Rc;
 use alloc::vec::Vec;
-use nextboot_fs::iso9660::{detect_udf_volume, read_efi_eltorito_boot_info};
+use nextboot_fs::iso9660::{detect_udf_volume, read_efi_eltorito_boot_info, Iso9660};
+use nextboot_fs::udf::Udf;
+use nextboot_fs::FileSystem;
 use nextboot_virtio::{VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
 use uefi::proto::media::block::BlockIO;
+
+const WINDOWS_ISO_MARKERS: &[&str] = &[
+    "/sources/boot.wim",
+    "/sources/install.wim",
+    "/sources/install.esd",
+    "/sources/install.swm",
+    "/efi/microsoft/boot/bootmgfw.efi",
+    "/efi/microsoft/boot/bcd",
+    "/boot/bcd",
+];
+
+const LINUX_ISO_MARKERS: &[&str] = &[
+    "/boot/grub/grub.cfg",
+    "/boot/grub/loopback.cfg",
+    "/isolinux/isolinux.cfg",
+    "/syslinux/syslinux.cfg",
+    "/casper/vmlinuz",
+    "/live/vmlinuz",
+    "/images/pxeboot/vmlinuz",
+    "/arch/boot/x86_64/vmlinuz-linux",
+];
 
 impl<'a> IsoScanner<'a> {
     pub(super) fn detect_image_virtual_metadata(
@@ -207,9 +231,9 @@ impl<'a> IsoScanner<'a> {
         source_block_size: u32,
         size: u64,
         extents: &[IsoExtent],
-    ) -> (Option<IsoBootInfo>, bool) {
+    ) -> (Option<IsoBootInfo>, bool, Option<OsType>) {
         if extents.is_empty() || size == 0 {
-            return (None, false);
+            return (None, false, None);
         }
 
         let config = VirtualDeviceConfig::new(VirtualDeviceType::DvdRom, 0, size, 2048)
@@ -218,7 +242,7 @@ impl<'a> IsoScanner<'a> {
 
         let mut vbio = VirtualBlockIo::from_file_extents(config, &extent_map);
         let Some(reader) = UefiBlockIo::new(block_io) else {
-            return (None, false);
+            return (None, false, None);
         };
         vbio.set_physical_reader(reader);
         let iso_io = VirtualIsoBlockIo::new(vbio);
@@ -228,9 +252,39 @@ impl<'a> IsoScanner<'a> {
             .flatten()
             .map(IsoBootInfo::from);
         let is_udf = detect_udf_volume(&iso_io).unwrap_or(false);
+        let os_type_hint = detect_iso_os_type(iso_io, is_udf);
 
-        (boot_info, is_udf)
+        (boot_info, is_udf, os_type_hint)
     }
+}
+
+fn detect_iso_os_type(iso_io: VirtualIsoBlockIo, is_udf: bool) -> Option<OsType> {
+    let shared: nextboot_fs::SharedBlockIo = Rc::new(iso_io);
+
+    if is_udf {
+        if let Ok(udf) = Udf::open(shared.clone()) {
+            if filesystem_has_any_marker(&udf, WINDOWS_ISO_MARKERS) {
+                return Some(OsType::Windows);
+            }
+            if filesystem_has_any_marker(&udf, LINUX_ISO_MARKERS) {
+                return Some(OsType::Linux);
+            }
+        }
+    }
+
+    let iso = Iso9660::open(shared).ok()?;
+    if filesystem_has_any_marker(&iso, WINDOWS_ISO_MARKERS) {
+        return Some(OsType::Windows);
+    }
+    if filesystem_has_any_marker(&iso, LINUX_ISO_MARKERS) {
+        return Some(OsType::Linux);
+    }
+
+    None
+}
+
+fn filesystem_has_any_marker<F: FileSystem>(fs: &F, paths: &[&str]) -> bool {
+    paths.iter().any(|path| fs.stat(path).is_ok())
 }
 
 fn extent_map(extents: &[IsoExtent]) -> Vec<(u64, u64, u64)> {

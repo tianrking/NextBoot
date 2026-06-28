@@ -213,7 +213,7 @@ CASES = (
     ImageCase(
         "NVMe 4K split UDF Windows smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "udf", "--sector-size", "4096", "--smoke-windows-iso"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf", f"nextboot-smoke-{ARCH_TAG}-windows.iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf", f"Win11_23H2-{ARCH_TAG}.iso"),
     ),
     ImageCase(
         "NVMe 4K split ext2 smoke ISO",
@@ -252,7 +252,7 @@ CASES = (
     ImageCase(
         "NVMe 4K split exFAT Linux GRUB smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-linux-grub"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", f"nextboot-smoke-{ARCH_TAG}-linux-grub.iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", f"Daily_Install_GRUB-{ARCH_TAG}.iso"),
     ),
     ImageCase(
         "NVMe 4K split XFS VLNK smoke ISO",
@@ -449,7 +449,10 @@ def case_expectations(case: ImageCase, artifact_tag: str) -> tuple[str, ...]:
 
 
 def tagged_artifact(text: str, artifact_tag: str) -> str:
-    return text.replace(f"nextboot-smoke-{ARCH_TAG}", f"nextboot-smoke-{ARCH_TAG}-{artifact_tag}")
+    text = text.replace(f"nextboot-smoke-{ARCH_TAG}", f"nextboot-smoke-{ARCH_TAG}-{artifact_tag}")
+    text = text.replace(f"Win11_23H2-{ARCH_TAG}", f"Win11_23H2-{ARCH_TAG}-{artifact_tag}")
+    text = text.replace(f"Daily_Install_GRUB-{ARCH_TAG}", f"Daily_Install_GRUB-{ARCH_TAG}-{artifact_tag}")
+    return text
 
 
 def main() -> int:

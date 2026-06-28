@@ -298,8 +298,12 @@ impl<'a> IsoScanner<'a> {
             .extents
             .first()
             .map_or(0, |extent| extent.physical_lba);
-        let os_type =
-            self.detect_image_os_type(target_path, metadata.image_format, metadata.wim_info);
+        let os_type = self.detect_image_os_type(
+            target_path,
+            metadata.image_format,
+            metadata.wim_info,
+            metadata.os_type_hint,
+        );
 
         log::info!(
             "Resolved Ventoy VLNK {} -> {} ({} bytes, {})",

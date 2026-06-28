@@ -37,11 +37,11 @@ create_generated_smoke_images() {
         SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-efi.iso"
         if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
             SMOKE_ISO_PROFILE="windows"
-            SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-windows.iso"
+            SMOKE_ISO_BASENAME="Win11_23H2-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}.iso"
         fi
         if [ "$SMOKE_WINDOWS_WIMBOOT" -eq 1 ]; then
             SMOKE_ISO_PROFILE="windows-wimboot"
-            SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-windows-wimboot.iso"
+            SMOKE_ISO_BASENAME="Win11_23H2-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-wimboot.iso"
         fi
         if [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
             SMOKE_ISO_PROFILE="linux"
@@ -49,7 +49,7 @@ create_generated_smoke_images() {
         fi
         if [ "$SMOKE_LINUX_GRUB" -eq 1 ]; then
             SMOKE_ISO_PROFILE="linux-grub"
-            SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-linux-grub.iso"
+            SMOKE_ISO_BASENAME="Daily_Install_GRUB-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}.iso"
         fi
         SMOKE_ISO_FILE="${PROJECT_DIR}/target/${SMOKE_ISO_BASENAME}"
         require_command python3 "python3 is required to create the smoke ISO"

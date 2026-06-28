@@ -187,6 +187,7 @@ pub(super) struct ResolvedImageMetadata {
     pub(super) boot_info: Option<IsoBootInfo>,
     pub(super) is_udf: bool,
     pub(super) wim_info: Option<WimBootInfo>,
+    pub(super) os_type_hint: Option<OsType>,
     pub(super) image_format: ImageFormat,
     pub(super) virtual_size: u64,
     pub(super) virtual_block_size: Option<u32>,
@@ -339,9 +340,14 @@ impl OsType {
     /// 从文件名检测
     pub fn detect_from_path(path: &str) -> Self {
         let path_lower = path.to_lowercase();
+        let compact = compact_ascii_identifier(&path_lower);
 
-        if path_lower.contains("windows") {
-            return OsType::Windows;
+        if path_lower.contains("winpe")
+            || path_lower.contains("win_pe")
+            || path_lower.contains("winre")
+            || path_lower.contains("pe_")
+        {
+            return OsType::WinPE;
         }
         if path_lower.contains("ubuntu") {
             return OsType::Ubuntu;
@@ -355,8 +361,19 @@ impl OsType {
         if path_lower.contains("arch") || path_lower.contains("manjaro") {
             return OsType::Arch;
         }
-        if path_lower.contains("winpe") || path_lower.contains("pe_") {
-            return OsType::WinPE;
+        if path_lower.contains("windows")
+            || compact.contains("win11")
+            || compact.contains("win10")
+            || compact.contains("win81")
+            || compact.contains("win8")
+            || compact.contains("win7")
+            || compact.contains("server2016")
+            || compact.contains("server2019")
+            || compact.contains("server2022")
+            || compact.contains("server2025")
+            || compact.contains("windowsserver")
+        {
+            return OsType::Windows;
         }
         if path_lower.contains("linux")
             || path_lower.contains("mint")
@@ -385,6 +402,17 @@ impl OsType {
 
         OsType::Unknown
     }
+}
+
+fn compact_ascii_identifier(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        }
+    }
+
+    out
 }
 
 pub struct IsoCache {
