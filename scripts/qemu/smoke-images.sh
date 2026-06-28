@@ -105,6 +105,10 @@ create_generated_smoke_images() {
             SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-discarded.vdi"
             VDI_ARGS+=(--sparse-mode discarded)
         fi
+        if [ "$SMOKE_PARENT_VDI" -eq 1 ]; then
+            SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-parent.vdi"
+            VDI_ARGS+=(--format differencing --sparse-mode unallocated)
+        fi
         require_command python3 "python3 is required to create the smoke VDI"
         warn "Wrapping smoke disk image as VDI..."
         python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "${VDI_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_FILE"

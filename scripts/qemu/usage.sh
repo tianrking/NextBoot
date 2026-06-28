@@ -40,6 +40,8 @@ Options:
   --smoke-sparse-vdi Generate a sparse bootable dynamic VDI and verify it starts
   --smoke-discarded-vdi
                      Generate a dynamic VDI with discarded zero blocks
+  --smoke-parent-vdi
+                     Generate a differencing VDI that requires an unsupported parent chain
   --smoke-auto-memdisk
                      Generate a minimal UEFI ISO and force Ventoy auto_memdisk
   --smoke-menu-memdisk
@@ -75,6 +77,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-static-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-sparse-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-discarded-vdi
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
   $0 --bus nvme --layout split --data-fs ext3 --sector-size 4096 --smoke-efi-iso

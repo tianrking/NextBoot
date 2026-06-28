@@ -57,6 +57,7 @@ SMOKE_VDI=0
 SMOKE_STATIC_VDI=0
 SMOKE_SPARSE_VDI=0
 SMOKE_DISCARDED_VDI=0
+SMOKE_PARENT_VDI=0
 SMOKE_AUTO_MEMDISK=0
 SMOKE_MENU_MEMDISK=0
 SMOKE_WINDOWS_ISO=0
@@ -241,6 +242,13 @@ while [ $# -gt 0 ]; do
             SMOKE_BOOT=1
             SMOKE_VDI=1
             SMOKE_DISCARDED_VDI=1
+            shift
+            ;;
+        --smoke-parent-vdi)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_VDI=1
+            SMOKE_PARENT_VDI=1
             shift
             ;;
         --smoke-auto-memdisk)

@@ -168,6 +168,13 @@ impl BootManager<'_> {
             let map_entry = vdi::read_block_map_entry(&block_map, block_index)
                 .ok_or(uefi::Status::LOAD_ERROR)?;
             if !vdi::is_allocated_block(map_entry) {
+                if metadata.is_differencing() {
+                    warn!(
+                        "VDI block {} in {} requires an unsupported parent chain",
+                        block_index, self.iso.path
+                    );
+                    return Err(uefi::Status::UNSUPPORTED.into());
+                }
                 zero_blocks += 1;
                 continue;
             }

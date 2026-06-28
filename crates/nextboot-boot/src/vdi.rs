@@ -8,6 +8,7 @@ pub const VDI_SIGNATURE: u32 = 0xbeda_107f;
 pub const VDI_VERSION_1_1: u32 = 0x0001_0001;
 pub const VDI_TYPE_DYNAMIC: u32 = 1;
 pub const VDI_TYPE_STATIC: u32 = 2;
+pub const VDI_TYPE_DIFFERENCING: u32 = 4;
 pub const VDI_UNALLOCATED: u32 = 0xffff_ffff;
 pub const VDI_DISCARDED: u32 = 0xffff_fffe;
 pub const VDI_DEFAULT_SECTOR_SIZE: u32 = 512;
@@ -46,6 +47,10 @@ impl VdiMetadata {
     pub fn is_static(&self) -> bool {
         self.image_type == VDI_TYPE_STATIC
     }
+
+    pub fn is_differencing(&self) -> bool {
+        self.image_type == VDI_TYPE_DIFFERENCING
+    }
 }
 
 pub fn parse_vdi_metadata(header: &[u8]) -> Option<VdiMetadata> {
@@ -66,7 +71,10 @@ pub fn parse_vdi_metadata(header: &[u8]) -> Option<VdiMetadata> {
     }
 
     let image_type = read_le_u32(header, VDI_IMAGE_TYPE_OFFSET)?;
-    if !matches!(image_type, VDI_TYPE_DYNAMIC | VDI_TYPE_STATIC) {
+    if !matches!(
+        image_type,
+        VDI_TYPE_DYNAMIC | VDI_TYPE_STATIC | VDI_TYPE_DIFFERENCING
+    ) {
         return None;
     }
 
@@ -166,6 +174,16 @@ mod tests {
         assert_eq!(metadata.virtual_disk_size, 4 * 1024 * 1024);
         assert_eq!(metadata.block_count, 4);
         assert_eq!(metadata.blocks_allocated, 4);
+    }
+
+    #[test]
+    fn parses_differencing_vdi_header() {
+        let header = make_vdi_header(VDI_TYPE_DIFFERENCING, 4 * 1024 * 1024, 1024 * 1024, 4, 2);
+
+        let metadata = parse_vdi_metadata(&header).unwrap();
+        assert!(metadata.is_differencing());
+        assert_eq!(metadata.virtual_disk_size, 4 * 1024 * 1024);
+        assert_eq!(metadata.blocks_allocated, 2);
     }
 
     #[test]

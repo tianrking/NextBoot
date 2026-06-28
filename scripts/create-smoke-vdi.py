@@ -15,6 +15,7 @@ SIGNATURE = 0xBEDA107F
 VERSION_1_1 = 0x00010001
 IMAGE_TYPE_DYNAMIC = 1
 IMAGE_TYPE_STATIC = 2
+IMAGE_TYPE_DIFFERENCING = 4
 DISCARDED_BLOCK = 0xFFFFFFFE
 UNALLOCATED_BLOCK = 0xFFFFFFFF
 BLOCK_SIZE = 1024 * 1024
@@ -54,11 +55,17 @@ def vdi_image(raw: bytes, source: Path, image_format: str, sparse_mode: str) -> 
     block_count = ceil_div(len(raw), BLOCK_SIZE)
     chunks = [raw[index * BLOCK_SIZE : (index + 1) * BLOCK_SIZE] for index in range(block_count)]
     allocated = [sparse_mode == "allocated" or not is_zero_block(chunk) for chunk in chunks]
+    if image_format == "differencing" and all(allocated):
+        raise ValueError("differencing VDI smoke image needs at least one sparse parent-backed block")
     allocated_count = sum(1 for value in allocated if value)
     blocks_offset = HEADER_SIZE
     map_size = align_up(block_count * 4, SECTOR_SIZE)
     data_offset = blocks_offset + map_size
-    image_type = IMAGE_TYPE_STATIC if image_format == "static" else IMAGE_TYPE_DYNAMIC
+    image_type = {
+        "dynamic": IMAGE_TYPE_DYNAMIC,
+        "static": IMAGE_TYPE_STATIC,
+        "differencing": IMAGE_TYPE_DIFFERENCING,
+    }[image_format]
 
     header = bytearray(HEADER_SIZE)
     file_info = f"<<< NextBoot Smoke {image_format.title()} VDI >>>\n".encode()
@@ -107,7 +114,7 @@ def vdi_image(raw: bytes, source: Path, image_format: str, sparse_mode: str) -> 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--format", choices=("dynamic", "static"), default="dynamic")
+    parser.add_argument("--format", choices=("dynamic", "static", "differencing"), default="dynamic")
     parser.add_argument(
         "--sparse-mode",
         choices=("allocated", "unallocated", "discarded"),
