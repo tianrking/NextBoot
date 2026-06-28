@@ -35,6 +35,8 @@ Options:
                      Generate a partially-present VHDX with a full sector bitmap
   --smoke-parent-vhdx
                      Generate a sparse VHDX plus same-volume parent and verify it starts
+  --smoke-parent-chain-vhdx
+                     Generate a sparse VHDX plus two-level parent chain
   --smoke-parent-partial-vhdx
                      Generate a partially-present VHDX plus parent and verify it starts
   --smoke-vdi        Generate a bootable dynamic VDI and verify it starts
@@ -44,6 +46,8 @@ Options:
                      Generate a dynamic VDI with discarded zero blocks
   --smoke-parent-vdi
                      Generate a differencing VDI plus same-directory parent and verify it starts
+  --smoke-parent-chain-vdi
+                     Generate a differencing VDI plus two-level parent chain
   --smoke-auto-memdisk
                      Generate a minimal UEFI ISO and force Ventoy auto_memdisk
   --smoke-menu-memdisk
@@ -75,12 +79,14 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-sparse-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-partial-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-vhdx
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-chain-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-partial-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-static-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-sparse-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-discarded-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-vdi
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-chain-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
   $0 --bus nvme --layout split --data-fs ext3 --sector-size 4096 --smoke-efi-iso

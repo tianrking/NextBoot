@@ -267,6 +267,28 @@ CASES = (
         f"nextboot-smoke-{ARCH_TAG}-parent.vhdx",
     ),
     ImageCase(
+        "NVMe 4K split parent-chain VHDX",
+        (
+            "--bus",
+            "nvme",
+            "--layout",
+            "split",
+            "--data-fs",
+            "exfat",
+            "--sector-size",
+            "4096",
+            "--smoke-parent-chain-vhdx",
+        ),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            f"nextboot-smoke-{ARCH_TAG}-parent-chain.vhdx",
+            f"nextboot-smoke-{ARCH_TAG}-parent-middle.vhdbase",
+            f"nextboot-smoke-{ARCH_TAG}-parent-base.vhdbase",
+            "verified 3 /ISO image file(s)",
+        ),
+        f"nextboot-smoke-{ARCH_TAG}-parent-chain.vhdx",
+    ),
+    ImageCase(
         "NVMe 4K split parent-backed partial VHDX",
         (
             "--bus",
@@ -297,6 +319,28 @@ CASES = (
             "verified 2 /ISO image file(s)",
         ),
         f"nextboot-smoke-{ARCH_TAG}-parent.vdi",
+    ),
+    ImageCase(
+        "NVMe 4K split parent-chain VDI",
+        (
+            "--bus",
+            "nvme",
+            "--layout",
+            "split",
+            "--data-fs",
+            "exfat",
+            "--sector-size",
+            "4096",
+            "--smoke-parent-chain-vdi",
+        ),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            f"nextboot-smoke-{ARCH_TAG}-parent-chain.vdi",
+            f"nextboot-smoke-{ARCH_TAG}-parent-middle.vdibase",
+            f"nextboot-smoke-{ARCH_TAG}-parent-base.vdibase",
+            "verified 3 /ISO image file(s)",
+        ),
+        f"nextboot-smoke-{ARCH_TAG}-parent-chain.vdi",
     ),
 )
 

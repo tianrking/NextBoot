@@ -1,6 +1,7 @@
 use super::source_volume::{SourceVolumeFileMetadata, SourceVolumeFileSystem};
 use super::BootManager;
 use crate::vdi;
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use log::{info, warn};
@@ -8,11 +9,14 @@ use nextboot_image::ImageSpanSource;
 use nextboot_virtio::mapping::ByteMappingTable;
 use uefi::proto::media::block::BlockIO;
 
+const MAX_VDI_PARENT_DEPTH: u8 = 8;
+
 pub(super) struct VdiParentBacking {
     path: String,
     file: SourceVolumeFileMetadata,
     metadata: vdi::VdiMetadata,
     block_map: Vec<u8>,
+    parent: Option<Box<VdiParentBacking>>,
 }
 
 impl BootManager<'_> {
@@ -21,12 +25,29 @@ impl BootManager<'_> {
         source_block_io: &BlockIO,
         child_metadata: &vdi::VdiMetadata,
     ) -> uefi::Result<Option<VdiParentBacking>> {
+        self.open_vdi_parent_backing_for_child(source_block_io, &self.iso.path, child_metadata, 0)
+    }
+
+    fn open_vdi_parent_backing_for_child(
+        &self,
+        source_block_io: &BlockIO,
+        child_path: &str,
+        child_metadata: &vdi::VdiMetadata,
+        depth: u8,
+    ) -> uefi::Result<Option<VdiParentBacking>> {
         if !child_metadata.is_differencing() {
+            return Ok(None);
+        }
+        if depth >= MAX_VDI_PARENT_DEPTH {
+            warn!(
+                "VDI parent chain for {} exceeded {} levels",
+                child_path, MAX_VDI_PARENT_DEPTH
+            );
             return Ok(None);
         }
 
         let fs = SourceVolumeFileSystem::open(source_block_io, self.iso.source_disk)?;
-        let parent_dir = parent_dir(&self.iso.path);
+        let parent_dir = parent_dir(child_path);
         let entries = fs.read_dir(&parent_dir)?;
         for entry in entries {
             if entry.is_dir || !is_vdi_parent_candidate_name(&entry.name) {
@@ -34,7 +55,7 @@ impl BootManager<'_> {
             }
 
             let candidate_path = join_path(&parent_dir, &entry.name);
-            if candidate_path.eq_ignore_ascii_case(&self.iso.path) {
+            if candidate_path.eq_ignore_ascii_case(child_path) {
                 continue;
             }
 
@@ -52,21 +73,27 @@ impl BootManager<'_> {
 
             let block_map =
                 self.read_vdi_block_map(&parent_vbio, &parent_metadata, parent_file.size)?;
-            info!(
-                "Resolved VDI parent for {}: {}",
-                self.iso.path, candidate_path
-            );
+            let parent = self
+                .open_vdi_parent_backing_for_child(
+                    source_block_io,
+                    &candidate_path,
+                    &parent_metadata,
+                    depth + 1,
+                )?
+                .map(Box::new);
+            info!("Resolved VDI parent for {}: {}", child_path, candidate_path);
             return Ok(Some(VdiParentBacking {
                 path: candidate_path,
                 file: parent_file,
                 metadata: parent_metadata,
                 block_map,
+                parent,
             }));
         }
 
         warn!(
             "VDI parent for {} was not found from same-directory UUID linkage",
-            self.iso.path
+            child_path
         );
         Ok(None)
     }
@@ -111,11 +138,19 @@ impl BootManager<'_> {
                 }
                 ImageSpanSource::Zero => {}
                 ImageSpanSource::Parent => {
-                    warn!(
-                        "VDI parent {} still requires a higher parent chain",
-                        parent.path
-                    );
-                    return Err(uefi::Status::UNSUPPORTED.into());
+                    let Some(next_parent) = parent.parent.as_ref() else {
+                        warn!(
+                            "VDI parent {} still requires a missing higher parent chain",
+                            parent.path
+                        );
+                        return Err(uefi::Status::UNSUPPORTED.into());
+                    };
+                    self.map_parent_vdi_range(
+                        byte_mapping,
+                        next_parent,
+                        overlap_start,
+                        overlap_len,
+                    )?;
                 }
             }
         }

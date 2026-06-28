@@ -48,10 +48,11 @@ def is_zero_block(chunk: bytes) -> bool:
 
 def vdi_image(
     raw: bytes,
-    source: Path,
     image_format: str,
     sparse_mode: str,
     link_to_parent: bool,
+    uuid_seed: str,
+    parent_uuid_seed: str,
 ) -> bytes:
     if not raw or len(raw) % SECTOR_SIZE:
         raise ValueError("VDI payload size must be a non-zero multiple of 512 bytes")
@@ -88,12 +89,13 @@ def vdi_image(
     put_u32(header, 0x17C, 0)
     put_u32(header, 0x180, block_count)
     put_u32(header, 0x184, allocated_count)
-    base_uuid = f"nextboot-vdi:{source.resolve()}"
+    base_uuid = f"nextboot-vdi:{uuid_seed}"
+    parent_uuid = f"nextboot-vdi:{parent_uuid_seed}"
     put_uuid(header, 0x188, f"{base_uuid}:create")
     put_uuid(header, 0x198, f"{base_uuid}:modify")
     if link_to_parent:
-        put_uuid(header, 0x1A8, f"{base_uuid}:create")
-        put_uuid(header, 0x1B8, f"{base_uuid}:modify")
+        put_uuid(header, 0x1A8, f"{parent_uuid}:create")
+        put_uuid(header, 0x1B8, f"{parent_uuid}:modify")
     else:
         put_uuid(header, 0x1A8, f"{base_uuid}:linkage")
         put_uuid(header, 0x1B8, f"{base_uuid}:parent")
@@ -143,14 +145,31 @@ def main() -> None:
         action="store_true",
         help="for differencing images, point linkage UUIDs at a parent generated from the same raw image",
     )
+    parser.add_argument(
+        "--uuid-seed",
+        help="stable UUID seed for this VDI; defaults to the raw image path",
+    )
+    parser.add_argument(
+        "--parent-uuid-seed",
+        help="stable UUID seed for the parent VDI when --link-to-parent is set",
+    )
     parser.add_argument("raw_image", type=Path)
     parser.add_argument("vdi_image", type=Path)
     args = parser.parse_args()
 
     raw = args.raw_image.read_bytes()
+    uuid_seed = args.uuid_seed or str(args.raw_image.resolve())
+    parent_uuid_seed = args.parent_uuid_seed or uuid_seed
     args.vdi_image.parent.mkdir(parents=True, exist_ok=True)
     args.vdi_image.write_bytes(
-        vdi_image(raw, args.raw_image, args.format, args.sparse_mode, args.link_to_parent)
+        vdi_image(
+            raw,
+            args.format,
+            args.sparse_mode,
+            args.link_to_parent,
+            uuid_seed,
+            parent_uuid_seed,
+        )
     )
     print(f"created {args.vdi_image} ({args.vdi_image.stat().st_size} bytes)")
 

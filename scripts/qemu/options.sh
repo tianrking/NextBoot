@@ -125,6 +125,15 @@ parse_qemu_args() {
                 SMOKE_PARENT_VHDX=1
                 shift
                 ;;
+            --smoke-parent-chain-vhdx)
+                SMOKE=1
+                SMOKE_BOOT=1
+                SMOKE_VHDX=1
+                SMOKE_SPARSE_VHDX=1
+                SMOKE_PARENT_VHDX=1
+                SMOKE_PARENT_CHAIN_VHDX=1
+                shift
+                ;;
             --smoke-parent-partial-vhdx)
                 SMOKE=1
                 SMOKE_BOOT=1
@@ -166,6 +175,14 @@ parse_qemu_args() {
                 SMOKE_BOOT=1
                 SMOKE_VDI=1
                 SMOKE_PARENT_VDI=1
+                shift
+                ;;
+            --smoke-parent-chain-vdi)
+                SMOKE=1
+                SMOKE_BOOT=1
+                SMOKE_VDI=1
+                SMOKE_PARENT_VDI=1
+                SMOKE_PARENT_CHAIN_VDI=1
                 shift
                 ;;
             --smoke-auto-memdisk)

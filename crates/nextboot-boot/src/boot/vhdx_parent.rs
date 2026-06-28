@@ -1,6 +1,7 @@
 use super::source_volume::{SourceVolumeFileMetadata, SourceVolumeFileSystem, SourceVolumeReader};
 use super::{vhd, BootManager};
 use crate::vhdx;
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use log::{info, warn};
@@ -9,11 +10,14 @@ use nextboot_virtio::mapping::ByteMappingTable;
 use nextboot_virtio::{VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
 use uefi::proto::media::block::BlockIO;
 
+const MAX_VHDX_PARENT_DEPTH: u8 = 8;
+
 pub(super) struct VhdxParentBacking {
     path: String,
     file: SourceVolumeFileMetadata,
     metadata: vhdx::VhdxMetadata,
     bat: Vec<u8>,
+    parent: Option<Box<VhdxParentBacking>>,
 }
 
 impl BootManager<'_> {
@@ -22,7 +26,24 @@ impl BootManager<'_> {
         source_block_io: &BlockIO,
         child_metadata: &vhdx::VhdxMetadata,
     ) -> uefi::Result<Option<VhdxParentBacking>> {
+        self.open_vhdx_parent_backing_for_child(source_block_io, &self.iso.path, child_metadata, 0)
+    }
+
+    fn open_vhdx_parent_backing_for_child(
+        &self,
+        source_block_io: &BlockIO,
+        child_path: &str,
+        child_metadata: &vhdx::VhdxMetadata,
+        depth: u8,
+    ) -> uefi::Result<Option<VhdxParentBacking>> {
         if !child_metadata.has_parent {
+            return Ok(None);
+        }
+        if depth >= MAX_VHDX_PARENT_DEPTH {
+            warn!(
+                "VHDX parent chain for {} exceeded {} levels",
+                child_path, MAX_VHDX_PARENT_DEPTH
+            );
             return Ok(None);
         }
 
@@ -30,19 +51,18 @@ impl BootManager<'_> {
         if candidates.is_empty() {
             warn!(
                 "VHDX {} has parent flag but no same-volume parent candidates",
-                self.iso.path
+                child_path
             );
             return Ok(None);
         }
 
         let fs = SourceVolumeFileSystem::open(source_block_io, self.iso.source_disk)?;
         for locator_path in candidates {
-            let Some(parent_path) =
-                vhdx::resolve_same_volume_parent_path(&self.iso.path, locator_path)
+            let Some(parent_path) = vhdx::resolve_same_volume_parent_path(child_path, locator_path)
             else {
                 continue;
             };
-            if parent_path.eq_ignore_ascii_case(&self.iso.path) {
+            if parent_path.eq_ignore_ascii_case(child_path) {
                 continue;
             }
 
@@ -57,7 +77,7 @@ impl BootManager<'_> {
             {
                 warn!(
                     "VHDX parent {} does not match child {} geometry",
-                    parent_path, self.iso.path
+                    parent_path, child_path
                 );
                 continue;
             }
@@ -71,21 +91,27 @@ impl BootManager<'_> {
                 .chunk_ratio()
                 .ok_or(uefi::Status::LOAD_ERROR)?;
             let bat = self.read_vhdx_bat(&parent_vbio, &regions, payload_blocks, chunk_ratio)?;
-            info!(
-                "Resolved VHDX parent for {}: {}",
-                self.iso.path, parent_path
-            );
+            let parent = self
+                .open_vhdx_parent_backing_for_child(
+                    source_block_io,
+                    &parent_path,
+                    &parent_metadata,
+                    depth + 1,
+                )?
+                .map(Box::new);
+            info!("Resolved VHDX parent for {}: {}", child_path, parent_path);
             return Ok(Some(VhdxParentBacking {
                 path: parent_path,
                 file: parent_file,
                 metadata: parent_metadata,
                 bat,
+                parent,
             }));
         }
 
         warn!(
             "VHDX parent for {} was not found from locator paths",
-            self.iso.path
+            child_path
         );
         Ok(None)
     }
@@ -166,11 +192,19 @@ impl BootManager<'_> {
                 }
                 ImageSpanSource::Zero => {}
                 ImageSpanSource::Parent => {
-                    warn!(
-                        "VHDX parent {} still requires a higher parent chain",
-                        parent.path
-                    );
-                    return Err(uefi::Status::UNSUPPORTED.into());
+                    let Some(next_parent) = parent.parent.as_ref() else {
+                        warn!(
+                            "VHDX parent {} still requires a missing higher parent chain",
+                            parent.path
+                        );
+                        return Err(uefi::Status::UNSUPPORTED.into());
+                    };
+                    self.map_parent_vhdx_range(
+                        byte_mapping,
+                        next_parent,
+                        overlap_start,
+                        overlap_len,
+                    )?;
                 }
             }
         }

@@ -84,6 +84,11 @@ create_generated_smoke_images() {
             SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent.vhdx"
             SMOKE_VHDX_PARENT_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-base.vhdbase"
             VHDX_ARGS+=(--parent-required --parent-path "$(basename "$SMOKE_VHDX_PARENT_FILE")")
+            if [ "$SMOKE_PARENT_CHAIN_VHDX" -eq 1 ]; then
+                SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-chain.vhdx"
+                SMOKE_VHDX_MIDDLE_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-middle.vhdbase"
+                VHDX_ARGS=(--sparse --parent-required --parent-path "$(basename "$SMOKE_VHDX_MIDDLE_FILE")")
+            fi
             if [ "$SMOKE_PARENT_PARTIAL_VHDX" -eq 1 ]; then
                 SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-partial.vhdx"
                 VHDX_ARGS+=(--partial-parent-mix)
@@ -94,7 +99,16 @@ create_generated_smoke_images() {
         if [ "$SMOKE_PARENT_VHDX" -eq 1 ]; then
             warn "Wrapping smoke disk image as same-volume VHDX parent..."
             python3 "${SCRIPT_DIR}/create-smoke-vhdx.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHDX_PARENT_FILE"
-            SUPPORT_IMAGES=("$SMOKE_VHDX_PARENT_FILE" "${SUPPORT_IMAGES[@]}")
+            if [ "$SMOKE_PARENT_CHAIN_VHDX" -eq 1 ]; then
+                warn "Wrapping smoke disk image as middle VHDX parent..."
+                python3 "${SCRIPT_DIR}/create-smoke-vhdx.py" \
+                    --sparse --parent-required \
+                    --parent-path "$(basename "$SMOKE_VHDX_PARENT_FILE")" \
+                    "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHDX_MIDDLE_FILE"
+                SUPPORT_IMAGES=("$SMOKE_VHDX_PARENT_FILE" "$SMOKE_VHDX_MIDDLE_FILE" "${SUPPORT_IMAGES[@]}")
+            else
+                SUPPORT_IMAGES=("$SMOKE_VHDX_PARENT_FILE" "${SUPPORT_IMAGES[@]}")
+            fi
         fi
         python3 "${SCRIPT_DIR}/create-smoke-vhdx.py" "${VHDX_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHDX_FILE"
         IMAGES=("$SMOKE_VHDX_FILE" "${IMAGES[@]}")
@@ -119,13 +133,39 @@ create_generated_smoke_images() {
             SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent.vdi"
             SMOKE_VDI_PARENT_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-base.vdibase"
             VDI_ARGS+=(--format differencing --sparse-mode unallocated --link-to-parent)
+            if [ "$SMOKE_PARENT_CHAIN_VDI" -eq 1 ]; then
+                SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-chain.vdi"
+                SMOKE_VDI_MIDDLE_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-middle.vdibase"
+                VDI_ARGS=(
+                    --format differencing
+                    --sparse-mode unallocated
+                    --link-to-parent
+                    --uuid-seed "nextboot-vdi-child-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}"
+                    --parent-uuid-seed "nextboot-vdi-middle-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}"
+                )
+            fi
         fi
         require_command python3 "python3 is required to create the smoke VDI"
         warn "Wrapping smoke disk image as VDI..."
         if [ "$SMOKE_PARENT_VDI" -eq 1 ]; then
             warn "Wrapping smoke disk image as same-directory VDI parent..."
-            python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_PARENT_FILE"
-            SUPPORT_IMAGES=("$SMOKE_VDI_PARENT_FILE" "${SUPPORT_IMAGES[@]}")
+            if [ "$SMOKE_PARENT_CHAIN_VDI" -eq 1 ]; then
+                python3 "${SCRIPT_DIR}/create-smoke-vdi.py" \
+                    --uuid-seed "nextboot-vdi-base-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}" \
+                    "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_PARENT_FILE"
+                warn "Wrapping smoke disk image as middle VDI parent..."
+                python3 "${SCRIPT_DIR}/create-smoke-vdi.py" \
+                    --format differencing \
+                    --sparse-mode unallocated \
+                    --link-to-parent \
+                    --uuid-seed "nextboot-vdi-middle-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}" \
+                    --parent-uuid-seed "nextboot-vdi-base-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}" \
+                    "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_MIDDLE_FILE"
+                SUPPORT_IMAGES=("$SMOKE_VDI_PARENT_FILE" "$SMOKE_VDI_MIDDLE_FILE" "${SUPPORT_IMAGES[@]}")
+            else
+                python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_PARENT_FILE"
+                SUPPORT_IMAGES=("$SMOKE_VDI_PARENT_FILE" "${SUPPORT_IMAGES[@]}")
+            fi
         fi
         python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "${VDI_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_FILE"
         IMAGES=("$SMOKE_VDI_FILE" "${IMAGES[@]}")

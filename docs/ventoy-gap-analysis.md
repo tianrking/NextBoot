@@ -41,7 +41,8 @@ workflows and which gaps are still worth pursuing.
   missing blocks and mixed `PARTIALLY_PRESENT` child/parent sectors. The QEMU
   matrix now boots parent-backed VHDX children with same-volume parents present.
   VDI differencing images can now resolve a same-directory parent by matching
-  linkage UUIDs and boot through that parent fallback in QEMU.
+  linkage UUIDs and boot through that parent fallback in QEMU. Two-level
+  VHDX/VDI parent chains are also covered by the QEMU smoke matrix.
 - Local Secure Boot signing workflow: `scripts/secure-boot.sh` can generate a
   local test certificate, sign the UEFI binary with sbsigntools, verify the
   signed binary where `sbverify` is available, and document firmware db or shim
@@ -70,8 +71,9 @@ workflows and which gaps are still worth pursuing.
   in host tests, and child/parent/zero spans are planned in reusable code. VHDX
   can now open and boot from a same-volume one-level parent for both missing
   blocks and mixed partial-bitmaps, and VDI can boot through a same-directory
-  one-level parent selected by UUID linkage. Deeper parent chains and refined
-  missing-parent diagnostics still need implementation.
+  one-level parent selected by UUID linkage. Both formats now resolve tested
+  two-level parent chains; arbitrary-depth chains and refined missing-parent
+  diagnostics still need implementation.
 - More filesystems: Ventoy covers a broader set of user storage formats. UDF,
   ext2/3/4, XFS extent/local-directory/dir2-directory reads, and a Btrfs
   superblock plus NextBoot extent/directory smoke map are now covered in QEMU
