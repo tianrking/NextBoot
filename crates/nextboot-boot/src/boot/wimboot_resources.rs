@@ -1,9 +1,9 @@
 use super::candidates::*;
 use super::errors::wim_read_error_to_uefi_status;
 use super::source_volume::{SourceVolumeFile, SourceVolumeReader};
+use super::wimboot_callbacks::WimbootRuntimeRegistration;
 use super::wimboot_runtime::{
-    WimbootInternalFiles, WimbootRuntimeContext, WimbootRuntimeFile, WimbootRuntimeRegistration,
-    WimbootWimImage,
+    WimbootInternalFiles, WimbootRuntimeContext, WimbootRuntimeFile, WimbootWimImage,
 };
 use super::BootManager;
 use crate::{wim, wimboot};

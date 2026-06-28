@@ -4,7 +4,8 @@ use super::errors::{
     ventoy_windows_wimboot_payload_error_to_uefi_status,
 };
 use super::source_volume::{SourceVolumeFile, SourceVolumeReader};
-use super::wimboot_runtime::{WimbootRuntimeFile, WimbootRuntimeInputs};
+use super::wimboot_callbacks::WimbootRuntimeInputs;
+use super::wimboot_runtime::WimbootRuntimeFile;
 use super::{BootManager, VirtualBootDevice};
 use crate::wimboot::{self, WimbootVirtualFile};
 use alloc::vec::Vec;

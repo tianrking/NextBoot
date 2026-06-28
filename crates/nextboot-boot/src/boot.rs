@@ -28,15 +28,14 @@ mod vhd;
 mod vhdx_backing;
 mod virtual_boot;
 mod virtual_device;
+mod wimboot_callbacks;
 mod wimboot_flow;
 mod wimboot_resources;
 mod wimboot_runtime;
 use errors::virtio_error_to_uefi_status;
-#[allow(unused_imports)]
-pub use model::{
-    allocate_boot_memory, free_boot_memory, BootMode, BootOptions, MemoryMapInfo,
-};
 use model::VirtualBootDevice;
+#[allow(unused_imports)]
+pub use model::{allocate_boot_memory, free_boot_memory, BootMode, BootOptions, MemoryMapInfo};
 use source_volume::{SourceVolumeReader, ZeroPhysicalReader};
 use wimboot_runtime::WimbootMappedSegment;
 
