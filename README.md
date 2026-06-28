@@ -247,6 +247,11 @@ NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B�
 覆盖 IA32 virtio/NVMe/USB 等路径，或用 `TARGET=aarch64-unknown-uefi ./scripts/qemu-smoke-matrix.sh`
 覆盖 AArch64 路径，其中 fallback 文件名会自动改为 `BOOTIA32.EFI` 或 `BOOTAA64.EFI`。
 
+`./scripts/check-flash-dry-run.py` 会用 `flash.sh --dry-run --no-ventoy-assets`
+检查真实写盘前的命令规划，覆盖 macOS `rdisk` 归一化、Linux NVMe `p1/p2`
+分区后缀、普通 USB `/dev/sdX1` 后缀、SD/MMC `/dev/mmcblkXp1` 后缀、
+split/single 布局和 `--target all` 多架构 ESP fallback 安装。
+
 真实硬件测试用 `./scripts/hardware-report.sh` 生成统一报告，并可追加
 `docs/hardware/hardware-matrix.csv`。推荐覆盖项见
 `docs/hardware-compatibility-matrix.md`，包括内置 NVMe SSD、USB SSD 盒、传统 U 盘、
