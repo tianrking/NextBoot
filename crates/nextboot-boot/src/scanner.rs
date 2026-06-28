@@ -8,6 +8,7 @@ mod block_paths;
 mod config;
 mod exposed_partitions;
 mod helpers;
+mod image_metadata;
 mod metadata;
 mod model;
 mod partitions;
