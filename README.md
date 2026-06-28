@@ -126,7 +126,7 @@ shim、微软 UEFI CA 签名和 SBAT/吊销策略仍在兼容性 gap 中。详�
 ### 测试
 
 ```bash
-# 轻量项目健康检查：500 行限制、Python 编译、shell 语法、flash dry-run、QEMU 矩阵、硬件报告和 UEFI check
+# 轻量项目健康检查：500 行限制、Python 编译、shell 语法、flash dry-run、QEMU 矩阵、硬件报告/矩阵和 UEFI check
 ./scripts/check-project-health.py
 
 # 使用 QEMU 测试
