@@ -19,18 +19,18 @@ create_generated_smoke_images() {
 
     if [ "$SMOKE_EFI_ISO" -eq 1 ]; then
         SMOKE_ISO_PROFILE="generic"
-        SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}-efi.iso"
+        SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-efi.iso"
         if [ "$SMOKE_WINDOWS_ISO" -eq 1 ]; then
             SMOKE_ISO_PROFILE="windows"
-            SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}-windows.iso"
+            SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-windows.iso"
         fi
         if [ "$SMOKE_WINDOWS_WIMBOOT" -eq 1 ]; then
             SMOKE_ISO_PROFILE="windows-wimboot"
-            SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}-windows-wimboot.iso"
+            SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-windows-wimboot.iso"
         fi
         if [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
             SMOKE_ISO_PROFILE="linux"
-            SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}-linux.iso"
+            SMOKE_ISO_BASENAME="nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-linux.iso"
         fi
         SMOKE_ISO_FILE="${PROJECT_DIR}/target/${SMOKE_ISO_BASENAME}"
         require_command python3 "python3 is required to create the smoke ISO"
@@ -44,7 +44,7 @@ create_generated_smoke_images() {
     fi
 
     if [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ] || [ "$SMOKE_DYNAMIC_VHD" -eq 1 ] || [ "$SMOKE_VHDX" -eq 1 ] || [ "$SMOKE_VDI" -eq 1 ]; then
-        SMOKE_RAW_IMG_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-raw.img"
+        SMOKE_RAW_IMG_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-raw.img"
         warn "Creating raw GPT/FAT32 smoke disk image..."
         create_smoke_raw_disk "$SMOKE_RAW_IMG_FILE"
     fi
@@ -54,7 +54,7 @@ create_generated_smoke_images() {
     fi
 
     if [ "$SMOKE_FIXED_VHD" -eq 1 ]; then
-        SMOKE_VHD_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-fixed.vhd"
+        SMOKE_VHD_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-fixed.vhd"
         require_command python3 "python3 is required to create the smoke fixed VHD"
         warn "Wrapping smoke disk image as fixed VHD..."
         python3 "${SCRIPT_DIR}/create-smoke-vhd.py" --format fixed "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHD_FILE"
@@ -62,7 +62,7 @@ create_generated_smoke_images() {
     fi
 
     if [ "$SMOKE_DYNAMIC_VHD" -eq 1 ]; then
-        SMOKE_VHD_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-dynamic.vhd"
+        SMOKE_VHD_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-dynamic.vhd"
         require_command python3 "python3 is required to create the smoke dynamic VHD"
         warn "Wrapping smoke disk image as dynamic VHD..."
         python3 "${SCRIPT_DIR}/create-smoke-vhd.py" --format dynamic "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHD_FILE"
@@ -70,18 +70,18 @@ create_generated_smoke_images() {
     fi
 
     if [ "$SMOKE_VHDX" -eq 1 ]; then
-        SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}.vhdx"
+        SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}.vhdx"
         VHDX_ARGS=()
         if [ "$SMOKE_SPARSE_VHDX" -eq 1 ]; then
-            SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-sparse.vhdx"
+            SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-sparse.vhdx"
             VHDX_ARGS+=(--sparse)
         fi
         if [ "$SMOKE_PARTIAL_VHDX" -eq 1 ]; then
-            SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-partial.vhdx"
+            SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-partial.vhdx"
             VHDX_ARGS+=(--partial-present)
         fi
         if [ "$SMOKE_PARENT_VHDX" -eq 1 ]; then
-            SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-parent.vhdx"
+            SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent.vhdx"
             VHDX_ARGS+=(--parent-required)
         fi
         require_command python3 "python3 is required to create the smoke VHDX"
@@ -91,22 +91,22 @@ create_generated_smoke_images() {
     fi
 
     if [ "$SMOKE_VDI" -eq 1 ]; then
-        SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-dynamic.vdi"
+        SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-dynamic.vdi"
         VDI_ARGS=()
         if [ "$SMOKE_STATIC_VDI" -eq 1 ]; then
-            SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-static.vdi"
+            SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-static.vdi"
             VDI_ARGS+=(--format static)
         fi
         if [ "$SMOKE_SPARSE_VDI" -eq 1 ]; then
-            SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-sparse.vdi"
+            SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-sparse.vdi"
             VDI_ARGS+=(--sparse-mode unallocated)
         fi
         if [ "$SMOKE_DISCARDED_VDI" -eq 1 ]; then
-            SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-discarded.vdi"
+            SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-discarded.vdi"
             VDI_ARGS+=(--sparse-mode discarded)
         fi
         if [ "$SMOKE_PARENT_VDI" -eq 1 ]; then
-            SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-parent.vdi"
+            SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent.vdi"
             VDI_ARGS+=(--format differencing --sparse-mode unallocated)
         fi
         require_command python3 "python3 is required to create the smoke VDI"

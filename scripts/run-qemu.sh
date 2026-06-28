@@ -65,6 +65,8 @@ SMOKE_WINDOWS_WIMBOOT=0
 SMOKE_LINUX_ISO=0
 SMOKE_LINUX_PLUGINS=0
 SMOKE_HELPER_FILE=""
+SMOKE_ARTIFACT_TAG="${NEXTBOOT_SMOKE_ARTIFACT_TAG:-}"
+SMOKE_ARTIFACT_SUFFIX=""
 SMOKE_TIMEOUT=20
 MEMORY="1024M"
 IMAGES=()
@@ -98,6 +100,14 @@ parse_qemu_args "$@"
 
 validate_qemu_args
 configure_qemu_arch
+if [ -n "$SMOKE_ARTIFACT_TAG" ]; then
+    case "$SMOKE_ARTIFACT_TAG" in
+        *[!A-Za-z0-9_.-]*)
+            die "NEXTBOOT_SMOKE_ARTIFACT_TAG may only contain letters, digits, dot, underscore, or dash"
+            ;;
+    esac
+    SMOKE_ARTIFACT_SUFFIX="-${SMOKE_ARTIFACT_TAG}"
+fi
 
 EFI_FILE="${PROJECT_DIR}/target/${TARGET}/${BUILD_MODE}/nextboot-boot.efi"
 if [ ! -f "$EFI_FILE" ]; then
@@ -107,7 +117,7 @@ fi
 create_generated_smoke_images
 SMOKE_VLNK_FILE=""
 if [ "$SMOKE_VLNK_ISO" -eq 1 ]; then
-    SMOKE_VLNK_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-vlnk.vlnk.iso"
+    SMOKE_VLNK_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-vlnk.vlnk.iso"
 fi
 
 for image in "${IMAGES[@]}"; do

@@ -49,6 +49,60 @@ CASES = (
         ),
     ),
     ImageCase(
+        "virtio 4K split FAT32 smoke ISO",
+        ("--bus", "virtio", "--layout", "split", "--data-fs", "fat32", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32",
+            "virtio-blk-pci",
+            "logical_block_size=4096",
+        ),
+    ),
+    ImageCase(
+        "virtio 4K split NTFS smoke ISO",
+        ("--bus", "virtio", "--layout", "split", "--data-fs", "ntfs", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ntfs",
+            "virtio-blk-pci",
+            "logical_block_size=4096",
+        ),
+    ),
+    ImageCase(
+        "virtio 4K split UDF smoke ISO",
+        ("--bus", "virtio", "--layout", "split", "--data-fs", "udf", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf",
+            "virtio-blk-pci",
+            "logical_block_size=4096",
+        ),
+    ),
+    ImageCase(
+        "virtio 4K split ext2 smoke ISO",
+        ("--bus", "virtio", "--layout", "split", "--data-fs", "ext2", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext2",
+            "virtio-blk-pci",
+            "logical_block_size=4096",
+        ),
+    ),
+    ImageCase(
+        "virtio 4K split ext3 smoke ISO",
+        ("--bus", "virtio", "--layout", "split", "--data-fs", "ext3", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext3",
+            "virtio-blk-pci",
+            "logical_block_size=4096",
+        ),
+    ),
+    ImageCase(
+        "virtio 4K split ext4 smoke ISO",
+        ("--bus", "virtio", "--layout", "split", "--data-fs", "ext4", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext4",
+            "virtio-blk-pci",
+            "logical_block_size=4096",
+        ),
+    ),
+    ImageCase(
         "USB 512 split FAT32 smoke ISO",
         ("--bus", "usb", "--layout", "split", "--data-fs", "fat32", "--sector-size", "512", "--smoke-efi-iso"),
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "usb-storage"),
@@ -81,14 +135,80 @@ CASES = (
         ),
     ),
     ImageCase(
+        "USB 4K split UDF smoke ISO",
+        ("--bus", "usb", "--layout", "split", "--data-fs", "udf", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf",
+            "logical_block_size=4096",
+            "usb-storage",
+        ),
+    ),
+    ImageCase(
+        "USB 4K split ext2 smoke ISO",
+        ("--bus", "usb", "--layout", "split", "--data-fs", "ext2", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext2",
+            "logical_block_size=4096",
+            "usb-storage",
+        ),
+    ),
+    ImageCase(
+        "USB 4K split ext3 smoke ISO",
+        ("--bus", "usb", "--layout", "split", "--data-fs", "ext3", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext3",
+            "logical_block_size=4096",
+            "usb-storage",
+        ),
+    ),
+    ImageCase(
+        "USB 4K split ext4 smoke ISO",
+        ("--bus", "usb", "--layout", "split", "--data-fs", "ext4", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext4",
+            "logical_block_size=4096",
+            "usb-storage",
+        ),
+    ),
+    ImageCase(
         "SD 512 split FAT32 smoke ISO",
         ("--bus", "sd", "--layout", "split", "--data-fs", "fat32", "--sector-size", "512", "--smoke-efi-iso"),
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "sd-card"),
     ),
     ImageCase(
+        "SD 512 split exFAT smoke ISO",
+        ("--bus", "sd", "--layout", "split", "--data-fs", "exfat", "--sector-size", "512", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", "sd-card"),
+    ),
+    ImageCase(
+        "SD 512 split NTFS smoke ISO",
+        ("--bus", "sd", "--layout", "split", "--data-fs", "ntfs", "--sector-size", "512", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ntfs", "sd-card"),
+    ),
+    ImageCase(
+        "SD 512 split UDF smoke ISO",
+        ("--bus", "sd", "--layout", "split", "--data-fs", "udf", "--sector-size", "512", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf", "sd-card"),
+    ),
+    ImageCase(
         "SATA 512 split NTFS smoke ISO",
         ("--bus", "sata", "--layout", "split", "--data-fs", "ntfs", "--sector-size", "512", "--smoke-efi-iso"),
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ntfs", "ide-hd"),
+    ),
+    ImageCase(
+        "SATA 512 split FAT32 smoke ISO",
+        ("--bus", "sata", "--layout", "split", "--data-fs", "fat32", "--sector-size", "512", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "ide-hd"),
+    ),
+    ImageCase(
+        "SATA 512 split exFAT smoke ISO",
+        ("--bus", "sata", "--layout", "split", "--data-fs", "exfat", "--sector-size", "512", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", "ide-hd"),
+    ),
+    ImageCase(
+        "SATA 512 split UDF smoke ISO",
+        ("--bus", "sata", "--layout", "split", "--data-fs", "udf", "--sector-size", "512", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=udf", "ide-hd"),
     ),
     ImageCase(
         "NVMe 4K split UDF Windows smoke ISO",
@@ -104,6 +224,11 @@ CASES = (
         "NVMe 4K split ext3 smoke ISO",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "ext3", "--sector-size", "4096", "--smoke-efi-iso"),
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext3", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
+    ),
+    ImageCase(
+        "NVMe 4K split ext4 smoke ISO",
+        ("--bus", "nvme", "--layout", "split", "--data-fs", "ext4", "--sector-size", "4096", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ext4", f"nextboot-smoke-{ARCH_TAG}-efi.iso"),
     ),
     ImageCase(
         "NVMe 4K split ext4 Linux plugins",
@@ -155,6 +280,9 @@ def build_debug(env: dict[str, str]) -> None:
 
 def run_case(case: ImageCase, env: dict[str, str], index: int) -> None:
     disk_image = PROJECT_DIR / "target" / f"qemu-image-matrix-{index}.img"
+    artifact_tag = f"image-matrix-{index}"
+    case_env = env.copy()
+    case_env["NEXTBOOT_SMOKE_ARTIFACT_TAG"] = artifact_tag
     command = [
         str(PROJECT_DIR / "scripts" / "run-qemu.sh"),
         "--mode",
@@ -164,14 +292,22 @@ def run_case(case: ImageCase, env: dict[str, str], index: int) -> None:
         "--disk-image",
         str(disk_image),
     ]
-    result = run(command, env)
+    result = run(command, case_env)
     require(result.returncode == 0, f"{case.name} failed:\n{result.stdout}")
-    for needle in case.expect:
+    for needle in case_expectations(case, artifact_tag):
         require(needle in result.stdout, f"{case.name} output missing {needle!r}\n{result.stdout}")
     require("--no-run set; image is ready for manual testing." in result.stdout, f"{case.name} did not stop at --no-run")
     if case.artifact:
-        artifact = PROJECT_DIR / "target" / case.artifact
+        artifact = PROJECT_DIR / "target" / tagged_artifact(case.artifact, artifact_tag)
         require(artifact.exists(), f"{case.name} did not create {artifact}")
+
+
+def case_expectations(case: ImageCase, artifact_tag: str) -> tuple[str, ...]:
+    return tuple(tagged_artifact(needle, artifact_tag) for needle in case.expect)
+
+
+def tagged_artifact(text: str, artifact_tag: str) -> str:
+    return text.replace(f"nextboot-smoke-{ARCH_TAG}", f"nextboot-smoke-{ARCH_TAG}-{artifact_tag}")
 
 
 def main() -> int:

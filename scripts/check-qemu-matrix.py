@@ -32,12 +32,48 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
         ("--bus sd", "--layout split", "--data-fs fat32", "--sector-size 512", "--smoke-efi-iso", "--no-run"),
     ),
     MatrixRequirement(
+        "default SD 512 split exFAT image verification",
+        ("--bus sd", "--layout split", "--data-fs exfat", "--sector-size 512", "--smoke-efi-iso", "--no-run"),
+    ),
+    MatrixRequirement(
+        "default SD 512 split NTFS image verification",
+        ("--bus sd", "--layout split", "--data-fs ntfs", "--sector-size 512", "--smoke-efi-iso", "--no-run"),
+    ),
+    MatrixRequirement(
+        "default SD 512 split UDF image verification",
+        ("--bus sd", "--layout split", "--data-fs udf", "--sector-size 512", "--smoke-efi-iso", "--no-run"),
+    ),
+    MatrixRequirement(
         "full virtio 512 single FAT32 ISO boot",
         ("--bus virtio", "--sector-size 512", "--smoke-efi-iso"),
     ),
     MatrixRequirement(
         "full virtio 4K split exFAT ISO boot",
         ("--bus virtio", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full virtio 4K split FAT32 ISO boot",
+        ("--bus virtio", "--layout split", "--data-fs fat32", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full virtio 4K split NTFS ISO boot",
+        ("--bus virtio", "--layout split", "--data-fs ntfs", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full virtio 4K split UDF ISO boot",
+        ("--bus virtio", "--layout split", "--data-fs udf", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full virtio 4K split ext2 ISO boot",
+        ("--bus virtio", "--layout split", "--data-fs ext2", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full virtio 4K split ext3 ISO boot",
+        ("--bus virtio", "--layout split", "--data-fs ext3", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full virtio 4K split ext4 ISO boot",
+        ("--bus virtio", "--layout split", "--data-fs ext4", "--sector-size 4096", "--smoke-efi-iso"),
     ),
     MatrixRequirement(
         "full USB 4K split exFAT ISO boot",
@@ -52,8 +88,36 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
         ("--bus usb", "--layout split", "--data-fs ntfs", "--sector-size 4096", "--smoke-efi-iso"),
     ),
     MatrixRequirement(
+        "full USB 4K split UDF ISO boot",
+        ("--bus usb", "--layout split", "--data-fs udf", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full USB 4K split ext2 ISO boot",
+        ("--bus usb", "--layout split", "--data-fs ext2", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full USB 4K split ext3 ISO boot",
+        ("--bus usb", "--layout split", "--data-fs ext3", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full USB 4K split ext4 ISO boot",
+        ("--bus usb", "--layout split", "--data-fs ext4", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
         "full SATA 512 split NTFS ISO boot",
         ("--bus sata", "--layout split", "--data-fs ntfs", "--sector-size 512", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full SATA 512 split FAT32 ISO boot",
+        ("--bus sata", "--layout split", "--data-fs fat32", "--sector-size 512", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full SATA 512 split exFAT ISO boot",
+        ("--bus sata", "--layout split", "--data-fs exfat", "--sector-size 512", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full SATA 512 split UDF ISO boot",
+        ("--bus sata", "--layout split", "--data-fs udf", "--sector-size 512", "--smoke-efi-iso"),
     ),
     MatrixRequirement(
         "full NVMe 4K split NTFS ISO boot",
@@ -74,6 +138,10 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
     MatrixRequirement(
         "full NVMe 4K split ext3 ISO boot",
         ("--bus nvme", "--layout split", "--data-fs ext3", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
+        "full NVMe 4K split ext4 ISO boot",
+        ("--bus nvme", "--layout split", "--data-fs ext4", "--sector-size 4096", "--smoke-efi-iso"),
     ),
     MatrixRequirement(
         "full NVMe 4K split XFS ISO boot",
