@@ -138,6 +138,9 @@ shim、微软 UEFI CA 签名和 SBAT/吊销策略仍在兼容性 gap 中。详�
 # 用 4K Native NVMe 固定盘路径测试
 ./scripts/run-qemu.sh --bus nvme --sector-size 4096 --no-run
 
+# 用 FAT32 Data 分区覆盖固定 SSD/NVMe 上的旧式兼容布局
+./scripts/run-qemu.sh --bus nvme --layout split --data-fs fat32 --sector-size 4096 --smoke-efi-iso
+
 # 用真实 SSD 风格的 ESP + exFAT Data 双分区 GPT 布局测试
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs exfat --image ~/Downloads/ubuntu.iso
 
@@ -247,7 +250,7 @@ WIMBOOT fallback 入口；
 `qemu-smoke-matrix.sh` 默认执行最关键的固定盘与可移动盘组合：NVMe 4K split/exFAT
 真实启动、USB 512 split/FAT32 真实启动，以及 SD 512 split/FAT32 带小 ISO 的镜像
 生成与校验。`NEXTBOOT_FULL_QEMU_MATRIX=1 ./scripts/qemu-smoke-matrix.sh` 会继续覆盖
-virtio、USB 4K/exFAT、SATA/NTFS、NVMe 4K/NTFS、NVMe/UDF、NVMe/ext2/ext3、NVMe/XFS、NVMe 512B/XFS、NVMe/XFS VLNK、NVMe raw IMG、NVMe fixed/dynamic VHD、NVMe VHDX、NVMe sparse/partially-present VHDX、parent-required VHDX 负向路径、NVMe dynamic/static/sparse/discarded VDI、parent-required VDI 负向路径和 NVMe/ext4 Linux 插件载荷。SD 目前限制为 512B 扇区，因为 QEMU `sd-card` 设备没有提供和
+virtio、USB 4K/exFAT、SATA/NTFS、NVMe 4K/FAT32、NVMe 4K/NTFS、NVMe/UDF、NVMe/ext2/ext3、NVMe/XFS、NVMe 512B/XFS、NVMe/XFS VLNK、NVMe raw IMG、NVMe fixed/dynamic VHD、NVMe VHDX、NVMe sparse/partially-present VHDX、parent-required VHDX 负向路径、NVMe dynamic/static/sparse/discarded VDI、parent-required VDI 负向路径和 NVMe/ext4 Linux 插件载荷。SD 目前限制为 512B 扇区，因为 QEMU `sd-card` 设备没有提供和
 NVMe/virtio/USB 相同的 logical block size override；SATA 也限制为 512B，因为 QEMU
 `ide-hd` 要求 512B discard granularity。当前 macOS Homebrew OVMF 也不会直接从
 `sdhci-pci` 启动，所以 SD 启动 smoke 需要显式设置 `NEXTBOOT_QEMU_SD_BOOT_SMOKE=1`
