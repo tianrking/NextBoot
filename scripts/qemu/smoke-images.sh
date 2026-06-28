@@ -84,6 +84,10 @@ create_generated_smoke_images() {
             SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent.vhdx"
             SMOKE_VHDX_PARENT_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-base.vhdbase"
             VHDX_ARGS+=(--parent-required --parent-path "$(basename "$SMOKE_VHDX_PARENT_FILE")")
+            if [ "$SMOKE_PARENT_PARTIAL_VHDX" -eq 1 ]; then
+                SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-partial.vhdx"
+                VHDX_ARGS+=(--partial-parent-mix)
+            fi
         fi
         require_command python3 "python3 is required to create the smoke VHDX"
         warn "Wrapping smoke disk image as VHDX..."

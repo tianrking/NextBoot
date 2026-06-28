@@ -188,6 +188,10 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
         ("--bus nvme", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-parent-vhdx"),
     ),
     MatrixRequirement(
+        "full NVMe 4K parent-backed partial VHDX boot",
+        ("--bus nvme", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-parent-partial-vhdx"),
+    ),
+    MatrixRequirement(
         "full NVMe 4K dynamic VDI boot",
         ("--bus nvme", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-vdi"),
     ),

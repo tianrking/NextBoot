@@ -35,6 +35,8 @@ Options:
                      Generate a partially-present VHDX with a full sector bitmap
   --smoke-parent-vhdx
                      Generate a sparse VHDX plus same-volume parent and verify it starts
+  --smoke-parent-partial-vhdx
+                     Generate a partially-present VHDX plus parent and verify it starts
   --smoke-vdi        Generate a bootable dynamic VDI and verify it starts
   --smoke-static-vdi Generate a bootable static VDI and verify it starts
   --smoke-sparse-vdi Generate a sparse bootable dynamic VDI and verify it starts
@@ -73,6 +75,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-sparse-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-partial-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-vhdx
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-partial-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-static-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-sparse-vdi

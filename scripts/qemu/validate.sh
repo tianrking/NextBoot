@@ -65,8 +65,11 @@ validate_qemu_smoke_args() {
     if [ "$VHDX_VARIANT_COUNT" -gt 1 ] && [ "$SMOKE_PARENT_VHDX" -eq 0 ]; then
         die "--smoke-sparse-vhdx and --smoke-partial-vhdx cannot be combined"
     fi
-    if [ "$SMOKE_PARENT_VHDX" -eq 1 ] && [ "$SMOKE_PARTIAL_VHDX" -eq 1 ]; then
-        die "--smoke-parent-vhdx and --smoke-partial-vhdx cannot be combined"
+    if [ "$SMOKE_PARENT_PARTIAL_VHDX" -eq 1 ] && [ "$SMOKE_SPARSE_VHDX" -eq 1 ]; then
+        die "--smoke-parent-partial-vhdx and --smoke-sparse-vhdx cannot be combined"
+    fi
+    if [ "$SMOKE_PARENT_VHDX" -eq 1 ] && [ "$SMOKE_SPARSE_VHDX" -eq 1 ] && [ "$SMOKE_PARTIAL_VHDX" -eq 1 ]; then
+        die "--smoke-parent-vhdx and --smoke-parent-partial-vhdx cannot be combined"
     fi
 
     VDI_VARIANT_COUNT=$((SMOKE_STATIC_VDI + SMOKE_SPARSE_VDI + SMOKE_DISCARDED_VDI + SMOKE_PARENT_VDI))

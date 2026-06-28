@@ -188,24 +188,41 @@ def bat_region(
     return bytes(bat)
 
 
+def sector_bitmap(block_count: int, parent_mixed: bool) -> bytes:
+    bitmap = bytearray([0xFF]) * MIB
+    if not parent_mixed:
+        return bytes(bitmap)
+
+    sectors_per_block = BLOCK_SIZE // LOGICAL_SECTOR_SIZE
+    parent_sectors_per_block = min(16, sectors_per_block)
+    for block_index in range(block_count):
+        first_sector = block_index * sectors_per_block
+        for sector_index in range(first_sector, first_sector + parent_sectors_per_block):
+            bitmap[sector_index // 8] &= ~(1 << (sector_index % 8)) & 0xFF
+    return bytes(bitmap)
+
+
 def vhdx(
     raw: bytes,
     sparse: bool,
     partial_present: bool,
     parent_required: bool,
     parent_path: str,
+    partial_parent_mix: bool,
 ) -> bytes:
     if not raw or len(raw) % LOGICAL_SECTOR_SIZE:
         raise ValueError("VHDX payload size must be a non-zero multiple of 512 bytes")
     if sparse and partial_present:
         raise ValueError("--sparse and --partial-present cannot be combined")
-    if parent_required and not sparse:
-        raise ValueError("--parent-required requires --sparse so at least one BAT entry references the parent")
+    if parent_required and not (sparse or partial_present):
+        raise ValueError("--parent-required requires --sparse or --partial-present")
+    if partial_parent_mix and not (parent_required and partial_present):
+        raise ValueError("--partial-parent-mix requires --parent-required --partial-present")
 
     block_count = ceil_div(len(raw), BLOCK_SIZE)
     chunks = [raw[index * BLOCK_SIZE : (index + 1) * BLOCK_SIZE] for index in range(block_count)]
     allocated = [not sparse or not is_zero_block(chunk) for chunk in chunks]
-    if parent_required and all(allocated):
+    if parent_required and sparse and all(allocated):
         raise ValueError("--parent-required needs at least one sparse zero block")
     block_offsets: list[int | None] = []
     next_payload_offset = PAYLOAD_OFFSET
@@ -227,7 +244,7 @@ def vhdx(
     assert len(image) == PAYLOAD_OFFSET
 
     if bitmap_offset is not None:
-        image.extend(bytes([0xFF]) * MIB)
+        image.extend(sector_bitmap(block_count, partial_parent_mix))
 
     for chunk, is_allocated in zip(chunks, allocated):
         if not is_allocated:
@@ -255,6 +272,11 @@ def main() -> None:
         default="nextboot-smoke-parent-base.vhdx",
         help="relative parent path stored in the VHDX Parent Locator",
     )
+    parser.add_argument(
+        "--partial-parent-mix",
+        action="store_true",
+        help="clear a few partial-block bitmap sectors so data must fall back to the parent",
+    )
     parser.add_argument("raw_image", type=Path)
     parser.add_argument("vhdx_image", type=Path)
     args = parser.parse_args()
@@ -262,7 +284,14 @@ def main() -> None:
     raw = args.raw_image.read_bytes()
     args.vhdx_image.parent.mkdir(parents=True, exist_ok=True)
     args.vhdx_image.write_bytes(
-        vhdx(raw, args.sparse, args.partial_present, args.parent_required, args.parent_path)
+        vhdx(
+            raw,
+            args.sparse,
+            args.partial_present,
+            args.parent_required,
+            args.parent_path,
+            args.partial_parent_mix,
+        )
     )
     print(f"created {args.vhdx_image} ({args.vhdx_image.stat().st_size} bytes)")
 

@@ -1,3 +1,4 @@
+use super::vhdx_parent::VhdxParentBacking;
 use super::{vhd, BootManager};
 use crate::vhdx;
 use alloc::vec::Vec;
@@ -50,27 +51,22 @@ impl BootManager<'_> {
                     allocated_blocks += 1;
                 }
                 vhdx::VHDX_BAT_STATE_PARTIALLY_PRESENT => {
-                    if !self.vhdx_partial_block_is_self_contained(
+                    let used_parent = self.map_vhdx_partial_payload_block(
+                        &mut byte_mapping,
                         &file_vbio,
                         &bat,
                         &metadata,
+                        parent.as_ref(),
                         payload_index,
                         chunk_ratio,
-                        byte_count,
-                    )? {
-                        warn!(
-                            "VHDX partial block {} in {} still references parent data",
-                            payload_index, self.iso.path
-                        );
-                        return Err(uefi::Status::UNSUPPORTED.into());
-                    }
-                    self.map_vhdx_payload_block(
-                        &mut byte_mapping,
                         virtual_start,
                         entry.file_offset,
                         byte_count,
                     )?;
                     allocated_blocks += 1;
+                    if used_parent {
+                        parent_blocks += 1;
+                    }
                     partial_blocks += 1;
                 }
                 vhdx::VHDX_BAT_STATE_ZERO => {
@@ -195,18 +191,26 @@ impl BootManager<'_> {
         self.map_image_file_range_to_physical(byte_mapping, virtual_start, file_offset, byte_count)
     }
 
-    fn vhdx_partial_block_is_self_contained(
+    fn map_vhdx_partial_payload_block(
         &self,
+        byte_mapping: &mut ByteMappingTable,
         file_vbio: &VirtualBlockIo,
         bat: &[u8],
         metadata: &vhdx::VhdxMetadata,
+        parent: Option<&VhdxParentBacking>,
         payload_index: u64,
         chunk_ratio: u64,
+        virtual_start: u64,
+        file_offset: u64,
         byte_count: u64,
     ) -> uefi::Result<bool> {
         let bitmap_entry = read_sector_bitmap_bat_entry(bat, payload_index, chunk_ratio)?;
         if bitmap_entry.state != vhdx::VHDX_BAT_STATE_FULLY_PRESENT {
-            return Ok(false);
+            warn!(
+                "VHDX partial block {} in {} has no present sector bitmap",
+                payload_index, self.iso.path
+            );
+            return Err(uefi::Status::UNSUPPORTED.into());
         }
         if bitmap_entry
             .file_offset
@@ -232,11 +236,62 @@ impl BootManager<'_> {
             super::util::div_round_up(byte_count, u64::from(metadata.logical_sector_size))
                 .ok_or(uefi::Status::LOAD_ERROR)?;
 
-        Ok(bitmap_range_all_present(
-            &bitmap,
-            first_sector,
-            sector_count,
-        ))
+        let mut used_parent = false;
+        let mut sector_index = 0u64;
+        while sector_index < sector_count {
+            let present = bitmap_bit_present(&bitmap, first_sector + sector_index);
+            let run_start = sector_index;
+            sector_index += 1;
+            while sector_index < sector_count
+                && bitmap_bit_present(&bitmap, first_sector + sector_index) == present
+            {
+                sector_index += 1;
+            }
+
+            let logical_sector = u64::from(metadata.logical_sector_size);
+            let run_byte_start = run_start
+                .checked_mul(logical_sector)
+                .ok_or(uefi::Status::LOAD_ERROR)?;
+            let run_byte_end = sector_index
+                .checked_mul(logical_sector)
+                .ok_or(uefi::Status::LOAD_ERROR)?
+                .min(byte_count);
+            if run_byte_start >= run_byte_end {
+                continue;
+            }
+            let run_byte_count = run_byte_end - run_byte_start;
+            let run_virtual_start = virtual_start
+                .checked_add(run_byte_start)
+                .ok_or(uefi::Status::LOAD_ERROR)?;
+
+            if present {
+                let run_file_offset = file_offset
+                    .checked_add(run_byte_start)
+                    .ok_or(uefi::Status::LOAD_ERROR)?;
+                self.map_vhdx_payload_block(
+                    byte_mapping,
+                    run_virtual_start,
+                    run_file_offset,
+                    run_byte_count,
+                )?;
+            } else if let Some(parent) = parent {
+                self.map_parent_vhdx_range(
+                    byte_mapping,
+                    parent,
+                    run_virtual_start,
+                    run_byte_count,
+                )?;
+                used_parent = true;
+            } else {
+                warn!(
+                    "VHDX partial block {} in {} still references parent data",
+                    payload_index, self.iso.path
+                );
+                return Err(uefi::Status::UNSUPPORTED.into());
+            }
+        }
+
+        Ok(used_parent)
     }
 }
 
@@ -267,13 +322,10 @@ fn read_bat_entry_at(bat: &[u8], bat_index: u64) -> uefi::Result<vhdx::VhdxBatEn
     Ok(vhdx::parse_bat_entry(raw_entry))
 }
 
-fn bitmap_range_all_present(bitmap: &[u8], first_sector: u64, sector_count: u64) -> bool {
-    (0..sector_count).all(|index| {
-        let bit = first_sector + index;
-        let byte_index = usize::try_from(bit / 8).ok();
-        let mask = 1u8 << (bit % 8);
-        byte_index
-            .and_then(|offset| bitmap.get(offset))
-            .is_some_and(|byte| byte & mask != 0)
-    })
+fn bitmap_bit_present(bitmap: &[u8], bit: u64) -> bool {
+    let byte_index = usize::try_from(bit / 8).ok();
+    let mask = 1u8 << (bit % 8);
+    byte_index
+        .and_then(|offset| bitmap.get(offset))
+        .is_some_and(|byte| byte & mask != 0)
 }
