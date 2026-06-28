@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Generate and verify representative QEMU images without booting a VM."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+TARGET = os.environ.get("TARGET", "x86_64-unknown-uefi")
+ARCH_TAGS = {
+    "x86_64-unknown-uefi": "x64",
+    "i686-unknown-uefi": "ia32",
+    "aarch64-unknown-uefi": "aa64",
+}
+ARCH_TAG = ARCH_TAGS.get(TARGET, "unknown")
+
+
+@dataclass(frozen=True)
+class ImageCase:
+    name: str
+    args: tuple[str, ...]
+    expect: tuple[str, ...]
+
+
+CASES = (
+    ImageCase(
+        "NVMe 4K split exFAT smoke ISO",
+        ("--bus", "nvme", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", "logical_block_size=4096"),
+    ),
+    ImageCase(
+        "USB 512 split FAT32 smoke ISO",
+        ("--bus", "usb", "--layout", "split", "--data-fs", "fat32", "--sector-size", "512", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "usb-storage"),
+    ),
+    ImageCase(
+        "SD 512 split FAT32 smoke ISO",
+        ("--bus", "sd", "--layout", "split", "--data-fs", "fat32", "--sector-size", "512", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "sd-card"),
+    ),
+    ImageCase(
+        "SATA 512 split NTFS smoke ISO",
+        ("--bus", "sata", "--layout", "split", "--data-fs", "ntfs", "--sector-size", "512", "--smoke-efi-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=ntfs", "ide-hd"),
+    ),
+    ImageCase(
+        "NVMe 4K split XFS VLNK smoke ISO",
+        ("--bus", "nvme", "--layout", "split", "--data-fs", "xfs", "--sector-size", "4096", "--smoke-vlnk-iso"),
+        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=xfs", "verified 1 /ISO image file(s)"),
+    ),
+)
+
+
+def run(command: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=PROJECT_DIR,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def build_debug(env: dict[str, str]) -> None:
+    result = run([str(PROJECT_DIR / "scripts" / "build.sh"), "debug"], env)
+    require(result.returncode == 0, result.stdout)
+
+
+def run_case(case: ImageCase, env: dict[str, str], index: int) -> None:
+    disk_image = PROJECT_DIR / "target" / f"qemu-image-matrix-{index}.img"
+    command = [
+        str(PROJECT_DIR / "scripts" / "run-qemu.sh"),
+        "--mode",
+        "debug",
+        *case.args,
+        "--no-run",
+        "--disk-image",
+        str(disk_image),
+    ]
+    result = run(command, env)
+    require(result.returncode == 0, f"{case.name} failed:\n{result.stdout}")
+    for needle in case.expect:
+        require(needle in result.stdout, f"{case.name} output missing {needle!r}\n{result.stdout}")
+    require("--no-run set; image is ready for manual testing." in result.stdout, f"{case.name} did not stop at --no-run")
+    if "--smoke-vlnk-iso" in case.args:
+        vlnk_file = PROJECT_DIR / "target" / f"nextboot-smoke-{ARCH_TAG}-vlnk.vlnk.iso"
+        require(vlnk_file.exists(), f"{case.name} did not create {vlnk_file}")
+
+
+def main() -> int:
+    env = os.environ.copy()
+    env["TARGET"] = TARGET
+    try:
+        require(ARCH_TAG != "unknown", f"unsupported TARGET for QEMU image matrix: {TARGET}")
+        build_debug(env)
+        for index, case in enumerate(CASES, start=1):
+            run_case(case, env, index)
+            print(f"ok - {case.name}")
+    except AssertionError as error:
+        print(f"QEMU image matrix check failed: {error}", file=sys.stderr)
+        return 1
+
+    print(f"checked {len(CASES)} QEMU image generation case(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

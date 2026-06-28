@@ -110,6 +110,19 @@ def check_qemu_matrix() -> CheckResult:
     return CheckResult("QEMU smoke matrix declaration", result.returncode == 0, result.stdout)
 
 
+def check_qemu_image_matrix() -> CheckResult:
+    script = PROJECT_DIR / "scripts" / "check-qemu-image-matrix.py"
+    result = subprocess.run(
+        [str(script)],
+        cwd=PROJECT_DIR,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    return CheckResult("QEMU image generation matrix", result.returncode == 0, result.stdout)
+
+
 def check_hardware_report() -> CheckResult:
     script = PROJECT_DIR / "scripts" / "check-hardware-report.py"
     result = subprocess.run(
@@ -260,6 +273,7 @@ def run_checks(
     line_limit: int,
     skip_flash: bool,
     skip_qemu_matrix: bool,
+    skip_qemu_image_matrix: bool,
     skip_hardware_report: bool,
     skip_hardware_matrix_fixture: bool,
     skip_host_tests: bool,
@@ -275,6 +289,8 @@ def run_checks(
         checks.append(check_flash_dry_run())
     if not skip_qemu_matrix:
         checks.append(check_qemu_matrix())
+    if not skip_qemu_image_matrix:
+        checks.append(check_qemu_image_matrix())
     if not skip_hardware_report:
         checks.append(check_hardware_report())
     if not skip_hardware_matrix_fixture:
@@ -310,6 +326,11 @@ def parse_args() -> argparse.Namespace:
         "--skip-qemu-matrix",
         action="store_true",
         help="skip qemu-smoke-matrix.sh coverage declaration checks",
+    )
+    parser.add_argument(
+        "--skip-qemu-image-matrix",
+        action="store_true",
+        help="skip no-run QEMU image generation matrix checks",
     )
     parser.add_argument(
         "--skip-build-check",
@@ -350,6 +371,7 @@ def main() -> int:
         args.line_limit,
         args.skip_flash_dry_run,
         args.skip_qemu_matrix,
+        args.skip_qemu_image_matrix,
         args.skip_hardware_report,
         args.skip_hardware_matrix_fixture,
         args.skip_host_tests,
