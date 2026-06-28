@@ -75,12 +75,15 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: NextBoot ${{ steps.version.outputs.version }}
+          overwrite_files: true
           body: |
-            Burn the `.img.xz` release media to a USB stick, USB SSD, SD card, or external SSD.
+            Download the `.img.xz` file and flash it as a whole-disk image to a USB stick, USB SSD, SD card, or external SSD.
 
-            After burning, open the visible `NEXTDATA` partition and drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`.
+            You can flash it from Windows, macOS, or Linux with tools such as Rufus, balenaEtcher, Raspberry Pi Imager, GNOME Disks, or another raw image writer. If your writer does not accept `.img.xz` directly, decompress it to `.img` first.
 
-            Current automated confidence covers USB, NVMe, SATA, SD-style image paths, 512B/4K-style media, and FAT32/exFAT/NTFS/UDF/ext/Btrfs smoke cases. Real hardware compatibility rows are still being collected.
+            Flashing erases the selected target device. Do not copy the `.img.xz` file into an existing USB drive; write the image to the device.
+
+            After flashing, open the visible `NEXTDATA` partition and drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`. Then boot the device on an x86_64 UEFI machine.
           files: |
             target/release-media/nextboot-${{ steps.version.outputs.version }}-x86_64-unknown-uefi-512b-exfat.img.xz
             target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt

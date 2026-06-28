@@ -9,7 +9,7 @@
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x86__64-blue)](#architecture)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#compatibility-coverage)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#feature-coverage)
-[![Release Media](https://img.shields.io/badge/release-burnable%20.img.xz-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.1)
+[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.1)
 
 NextBoot is a Rust UEFI boot medium for USB sticks, USB SSDs, SD cards, and
 fixed-disk style SSD/NVMe deployments. The release artifact is a compressed raw
@@ -23,12 +23,17 @@ No end-user command line or flasher UI is required after the image is burned.
 
 1. Download `nextboot-v0.0.1-x86_64-unknown-uefi-512b-exfat.img.xz` from the
    latest GitHub release.
-2. Burn it to a USB stick, USB SSD, SD card, or external SSD with Rufus,
-   balenaEtcher, Raspberry Pi Imager, or another raw image writer.
+2. Flash the image from Windows, macOS, or Linux to a USB stick, USB SSD, SD
+   card, or external SSD with Rufus, balenaEtcher, Raspberry Pi Imager, GNOME
+   Disks, or another raw image writer.
 3. Open the visible `NEXTDATA` partition.
 4. Drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`.
-5. Reboot, choose the device in the firmware UEFI boot menu, and pick an image
-   from the NextBoot menu.
+5. Boot the device on an x86_64 UEFI machine, then pick an image from the
+   NextBoot menu.
+
+Flashing writes a whole-disk image and erases the selected target device. Do
+not copy the `.img.xz` file into an existing USB drive; use an image writer.
+If a writer does not accept `.img.xz` directly, decompress it to `.img` first.
 
 ## Release Shape
 
@@ -47,6 +52,8 @@ It contains:
 | GPT | Standard partition table suitable for removable and fixed media |
 | ESP | FAT32 partition with `EFI/BOOT/BOOTX64.EFI` |
 | Data | exFAT `NEXTDATA` partition with `/ISO` already created |
+| Flashing hosts | Windows, macOS, and Linux image writers |
+| Boot target | x86_64 UEFI machines |
 | Workflow | Users drag boot images into `/ISO` and boot from UEFI |
 
 The maintainer build command is:
