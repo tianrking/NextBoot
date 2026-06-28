@@ -49,6 +49,10 @@ validate_qemu_smoke_args() {
         die "--smoke without a generated smoke image cannot be combined with --no-run"
     fi
 
+    if [ "$BUS" = "sd" ] && [ "$SMOKE" -eq 1 ] && [ "$NO_RUN" -eq 0 ] && [ "${NEXTBOOT_QEMU_SD_BOOT_SMOKE:-0}" != "1" ]; then
+        die "--bus sd boot smoke is experimental with current QEMU/EDK2 firmware; use --no-run for SD image/filesystem verification, or set NEXTBOOT_QEMU_SD_BOOT_SMOKE=1 to force the experimental boot attempt"
+    fi
+
     if [ "$SMOKE_WINDOWS_ISO" -eq 1 ] && [ "$SMOKE_LINUX_ISO" -eq 1 ]; then
         die "--smoke-windows-iso and --smoke-linux-iso cannot be combined"
     fi

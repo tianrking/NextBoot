@@ -80,6 +80,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs xfs --sector-size 4096 --smoke-efi-iso
   $0 --bus nvme --layout split --data-fs ntfs --sector-size 4096 --smoke-windows-wimboot
   $0 --bus usb --no-run
-  $0 --bus sd --layout split --data-fs fat32 --smoke-efi-iso
+  $0 --bus sd --layout split --data-fs fat32 --smoke-efi-iso --no-run
+  NEXTBOOT_QEMU_SD_BOOT_SMOKE=1 $0 --bus sd --layout split --data-fs fat32 --smoke-efi-iso
 USAGE
 }
