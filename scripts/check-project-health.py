@@ -16,6 +16,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_LINE_LIMIT = 500
 DEFAULT_BUILD_TARGET = "x86_64-unknown-uefi"
 CHECK_EXTENSIONS = {".py", ".rs", ".sh"}
+HOST_TEST_PACKAGE = "nextboot-fs"
 
 
 @dataclass
@@ -135,6 +136,111 @@ def check_hardware_matrix_fixture() -> CheckResult:
     return CheckResult("hardware matrix fixture coverage", result.returncode == 0, result.stdout)
 
 
+def rust_toolchain_channel() -> str | None:
+    toolchain = PROJECT_DIR / "rust-toolchain.toml"
+    if not toolchain.exists():
+        return None
+    for line in toolchain.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("channel") and '"' in stripped:
+            return stripped.split('"', 2)[1]
+    return None
+
+
+def fallback_toolchain_bin(binary: str) -> Path | None:
+    channel = rust_toolchain_channel()
+    if not channel:
+        return None
+    toolchains = Path.home() / ".rustup" / "toolchains"
+    for directory in sorted(toolchains.glob(f"{channel}*")):
+        candidate = directory / "bin" / binary
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def usable_binary(path: str | Path, args: list[str]) -> bool:
+    try:
+        result = subprocess.run(
+            [str(path), *args],
+            cwd=PROJECT_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def resolve_rustc() -> Path | None:
+    env_rustc = os.environ.get("RUSTC")
+    if env_rustc and usable_binary(env_rustc, ["--print", "sysroot"]):
+        return Path(env_rustc)
+    return fallback_toolchain_bin("rustc")
+
+
+def resolve_cargo(rustc: Path) -> Path | None:
+    env_cargo = os.environ.get("CARGO")
+    if env_cargo and usable_binary(env_cargo, ["--version"]):
+        return Path(env_cargo)
+    sibling = rustc.parent / "cargo"
+    if sibling.exists() and os.access(sibling, os.X_OK):
+        return sibling
+    return fallback_toolchain_bin("cargo")
+
+
+def rustc_host_target(rustc: Path) -> str | None:
+    result = subprocess.run(
+        [str(rustc), "-vV"],
+        cwd=PROJECT_DIR,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        if line.startswith("host: "):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def check_host_tests() -> CheckResult:
+    rustc = resolve_rustc()
+    if rustc is None:
+        return CheckResult("Rust host unit tests", False, "could not resolve rustc")
+    cargo = resolve_cargo(rustc)
+    if cargo is None:
+        return CheckResult("Rust host unit tests", False, "could not resolve cargo")
+    host_target = rustc_host_target(rustc)
+    if not host_target:
+        return CheckResult("Rust host unit tests", False, "could not resolve rustc host target")
+
+    env = os.environ.copy()
+    env["RUSTC"] = str(rustc)
+    result = subprocess.run(
+        [
+            str(cargo),
+            "test",
+            "-p",
+            HOST_TEST_PACKAGE,
+            "--lib",
+            "--target",
+            host_target,
+        ],
+        cwd=PROJECT_DIR,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    name = f"Rust host unit tests ({HOST_TEST_PACKAGE}, {host_target})"
+    return CheckResult(name, result.returncode == 0, result.stdout)
+
+
 def check_build(build_target: str) -> CheckResult:
     env = os.environ.copy()
     env["TARGET"] = build_target
@@ -156,6 +262,7 @@ def run_checks(
     skip_qemu_matrix: bool,
     skip_hardware_report: bool,
     skip_hardware_matrix_fixture: bool,
+    skip_host_tests: bool,
     skip_build: bool,
     build_target: str,
 ) -> list[CheckResult]:
@@ -172,6 +279,8 @@ def run_checks(
         checks.append(check_hardware_report())
     if not skip_hardware_matrix_fixture:
         checks.append(check_hardware_matrix_fixture())
+    if not skip_host_tests:
+        checks.append(check_host_tests())
     if not skip_build:
         checks.append(check_build(build_target))
     return checks
@@ -218,6 +327,11 @@ def parse_args() -> argparse.Namespace:
         help="skip temporary CSV fixture checks for check-hardware-matrix.py",
     )
     parser.add_argument(
+        "--skip-host-tests",
+        action="store_true",
+        help=f"skip host cargo test for {HOST_TEST_PACKAGE}",
+    )
+    parser.add_argument(
         "--build-target",
         default=os.environ.get("TARGET", DEFAULT_BUILD_TARGET),
         help=f"UEFI target for scripts/build.sh check (default: TARGET or {DEFAULT_BUILD_TARGET})",
@@ -238,6 +352,7 @@ def main() -> int:
         args.skip_qemu_matrix,
         args.skip_hardware_report,
         args.skip_hardware_matrix_fixture,
+        args.skip_host_tests,
         args.skip_build_check,
         args.build_target,
     )
