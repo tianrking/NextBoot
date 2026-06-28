@@ -33,6 +33,9 @@ if [ "${NEXTBOOT_FULL_QEMU_MATRIX:-0}" = "1" ]; then
     run_case "usb 4K split exFAT smoke ISO" \
         --bus usb --layout split --data-fs exfat --sector-size 4096 --smoke-efi-iso
 
+    run_case "usb 4K split NTFS smoke ISO" \
+        --bus usb --layout split --data-fs ntfs --sector-size 4096 --smoke-efi-iso
+
     run_case "sata 512 split NTFS smoke ISO" \
         --bus sata --layout split --data-fs ntfs --sector-size 512 --smoke-efi-iso
 

@@ -44,6 +44,10 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
         ("--bus usb", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-efi-iso"),
     ),
     MatrixRequirement(
+        "full USB 4K split NTFS ISO boot",
+        ("--bus usb", "--layout split", "--data-fs ntfs", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
         "full SATA 512 split NTFS ISO boot",
         ("--bus sata", "--layout split", "--data-fs ntfs", "--sector-size 512", "--smoke-efi-iso"),
     ),
