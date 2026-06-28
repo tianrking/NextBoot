@@ -40,6 +40,15 @@ CASES = (
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "usb-storage"),
     ),
     ImageCase(
+        "USB 4K split exFAT smoke ISO",
+        ("--bus", "usb", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-efi-iso"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            "logical_block_size=4096",
+            "usb-storage",
+        ),
+    ),
+    ImageCase(
         "SD 512 split FAT32 smoke ISO",
         ("--bus", "sd", "--layout", "split", "--data-fs", "fat32", "--sector-size", "512", "--smoke-efi-iso"),
         ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=fat32", "sd-card"),
