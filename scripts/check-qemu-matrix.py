@@ -199,6 +199,16 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
         ),
     ),
     MatrixRequirement(
+        "full NVMe 4K missing-parent VHDX diagnostics",
+        (
+            "--bus nvme",
+            "--layout split",
+            "--data-fs exfat",
+            "--sector-size 4096",
+            "--smoke-missing-parent-vhdx",
+        ),
+    ),
+    MatrixRequirement(
         "full NVMe 4K parent-backed partial VHDX boot",
         ("--bus nvme", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-parent-partial-vhdx"),
     ),
@@ -231,6 +241,16 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
             "--sector-size 4096",
             "--smoke-parent-chain-vdi",
             "--smoke-parent-chain-depth 4",
+        ),
+    ),
+    MatrixRequirement(
+        "full NVMe 4K missing-parent VDI diagnostics",
+        (
+            "--bus nvme",
+            "--layout split",
+            "--data-fs exfat",
+            "--sector-size 4096",
+            "--smoke-missing-parent-vdi",
         ),
     ),
     MatrixRequirement(

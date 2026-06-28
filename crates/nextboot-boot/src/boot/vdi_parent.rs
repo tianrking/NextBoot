@@ -49,10 +49,12 @@ impl BootManager<'_> {
         let fs = SourceVolumeFileSystem::open(source_block_io, self.iso.source_disk)?;
         let parent_dir = parent_dir(child_path);
         let entries = fs.read_dir(&parent_dir)?;
+        let mut candidate_files = 0u32;
         for entry in entries {
             if entry.is_dir || !is_vdi_parent_candidate_name(&entry.name) {
                 continue;
             }
+            candidate_files += 1;
 
             let candidate_path = join_path(&parent_dir, &entry.name);
             if candidate_path.eq_ignore_ascii_case(child_path) {
@@ -92,8 +94,10 @@ impl BootManager<'_> {
         }
 
         warn!(
-            "VDI parent for {} was not found from same-directory UUID linkage",
-            child_path
+            "VDI parent for {} was not found in {} from {} .vdi/.vdibase candidate(s); copy the parent VDI into the same directory with matching linkage UUIDs",
+            child_path,
+            parent_dir,
+            candidate_files
         );
         Ok(None)
     }

@@ -68,6 +68,9 @@ validate_qemu_smoke_args() {
     if [ "$VHDX_VARIANT_COUNT" -gt 1 ] && [ "$SMOKE_PARENT_VHDX" -eq 0 ]; then
         die "--smoke-sparse-vhdx and --smoke-partial-vhdx cannot be combined"
     fi
+    if [ "$SMOKE_MISSING_PARENT_VHDX" -eq 1 ] && { [ "$SMOKE_PARENT_CHAIN_VHDX" -eq 1 ] || [ "$SMOKE_PARENT_PARTIAL_VHDX" -eq 1 ]; }; then
+        die "--smoke-missing-parent-vhdx cannot be combined with parent-chain or parent-partial VHDX smoke"
+    fi
     if [ "$SMOKE_PARENT_PARTIAL_VHDX" -eq 1 ] && [ "$SMOKE_SPARSE_VHDX" -eq 1 ]; then
         die "--smoke-parent-partial-vhdx and --smoke-sparse-vhdx cannot be combined"
     fi
@@ -81,6 +84,9 @@ validate_qemu_smoke_args() {
     VDI_VARIANT_COUNT=$((SMOKE_STATIC_VDI + SMOKE_SPARSE_VDI + SMOKE_DISCARDED_VDI + SMOKE_PARENT_VDI))
     if [ "$VDI_VARIANT_COUNT" -gt 1 ]; then
         die "--smoke-static-vdi, --smoke-sparse-vdi, --smoke-discarded-vdi, and --smoke-parent-vdi are mutually exclusive"
+    fi
+    if [ "$SMOKE_MISSING_PARENT_VDI" -eq 1 ] && [ "$SMOKE_PARENT_CHAIN_VDI" -eq 1 ]; then
+        die "--smoke-missing-parent-vdi cannot be combined with parent-chain VDI smoke"
     fi
 
     SMOKE_DISK_IMAGE_COUNT=$((SMOKE_RAW_IMG + SMOKE_FIXED_VHD + SMOKE_DYNAMIC_VHD + SMOKE_VHDX + SMOKE_VDI))

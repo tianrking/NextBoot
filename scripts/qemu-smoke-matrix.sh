@@ -136,6 +136,9 @@ if [ "${NEXTBOOT_FULL_QEMU_MATRIX:-0}" = "1" ]; then
         --bus nvme --layout split --data-fs exfat --sector-size 4096 \
         --smoke-parent-chain-vhdx --smoke-parent-chain-depth 4
 
+    run_case "nvme 4K split exFAT missing-parent VHDX diagnostics" \
+        --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-missing-parent-vhdx
+
     run_case "nvme 4K split exFAT parent-backed partial VHDX smoke" \
         --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-partial-vhdx
 
@@ -157,6 +160,9 @@ if [ "${NEXTBOOT_FULL_QEMU_MATRIX:-0}" = "1" ]; then
     run_case "nvme 4K split exFAT parent-chain VDI smoke" \
         --bus nvme --layout split --data-fs exfat --sector-size 4096 \
         --smoke-parent-chain-vdi --smoke-parent-chain-depth 4
+
+    run_case "nvme 4K split exFAT missing-parent VDI diagnostics" \
+        --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-missing-parent-vdi
 
     run_case "nvme 4K split ext4 Linux plugins" \
         --bus nvme --layout split --data-fs ext4 --sector-size 4096 --smoke-linux-plugins

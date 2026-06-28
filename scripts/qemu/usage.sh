@@ -39,6 +39,8 @@ Options:
                      Generate a sparse VHDX plus multi-level parent chain
   --smoke-parent-chain-depth N
                      Parent count for chain smoke tests, from 2 to 8
+  --smoke-missing-parent-vhdx
+                     Generate a parent-backed VHDX without its parent and verify diagnostics
   --smoke-parent-partial-vhdx
                      Generate a partially-present VHDX plus parent and verify it starts
   --smoke-vdi        Generate a bootable dynamic VDI and verify it starts
@@ -50,6 +52,8 @@ Options:
                      Generate a differencing VDI plus same-directory parent and verify it starts
   --smoke-parent-chain-vdi
                      Generate a differencing VDI plus multi-level parent chain
+  --smoke-missing-parent-vdi
+                     Generate a differencing VDI without its parent and verify diagnostics
   --smoke-auto-memdisk
                      Generate a minimal UEFI ISO and force Ventoy auto_memdisk
   --smoke-menu-memdisk
@@ -82,6 +86,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-partial-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-chain-vhdx --smoke-parent-chain-depth 4
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-missing-parent-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-partial-vhdx
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-static-vdi
@@ -89,6 +94,7 @@ Examples:
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-discarded-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-chain-vdi --smoke-parent-chain-depth 4
+  $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-missing-parent-vdi
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-iso
   $0 --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-linux-plugins
   $0 --bus nvme --layout split --data-fs ext3 --sector-size 4096 --smoke-efi-iso

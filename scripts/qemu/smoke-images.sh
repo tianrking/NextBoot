@@ -99,6 +99,11 @@ create_generated_smoke_images() {
             SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent.vhdx"
             SMOKE_VHDX_PARENT_FILE="$(parent_chain_file 1 vhdbase)"
             VHDX_ARGS+=(--parent-required --parent-path "$(basename "$SMOKE_VHDX_PARENT_FILE")")
+            if [ "$SMOKE_MISSING_PARENT_VHDX" -eq 1 ]; then
+                SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-missing-parent.vhdx"
+                SMOKE_VHDX_PARENT_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-missing-parent-base.vhdbase"
+                VHDX_ARGS=(--sparse --parent-required --parent-path "$(basename "$SMOKE_VHDX_PARENT_FILE")")
+            fi
             if [ "$SMOKE_PARENT_CHAIN_VHDX" -eq 1 ]; then
                 SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-chain.vhdx"
                 SMOKE_VHDX_PARENT_FILE="$(parent_chain_file "$SMOKE_PARENT_CHAIN_DEPTH" vhdbase)"
@@ -113,7 +118,9 @@ create_generated_smoke_images() {
         warn "Wrapping smoke disk image as VHDX..."
         if [ "$SMOKE_PARENT_VHDX" -eq 1 ]; then
             warn "Wrapping smoke disk image as same-volume VHDX parent..."
-            if [ "$SMOKE_PARENT_CHAIN_VHDX" -eq 1 ]; then
+            if [ "$SMOKE_MISSING_PARENT_VHDX" -eq 1 ]; then
+                warn "Leaving VHDX parent absent to verify recovery diagnostics..."
+            elif [ "$SMOKE_PARENT_CHAIN_VHDX" -eq 1 ]; then
                 previous_parent=""
                 for level in $(seq 1 "$SMOKE_PARENT_CHAIN_DEPTH"); do
                     chain_file="$(parent_chain_file "$level" vhdbase)"
@@ -156,6 +163,16 @@ create_generated_smoke_images() {
             SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent.vdi"
             SMOKE_VDI_PARENT_FILE="$(parent_chain_file 1 vdibase)"
             VDI_ARGS+=(--format differencing --sparse-mode unallocated --link-to-parent)
+            if [ "$SMOKE_MISSING_PARENT_VDI" -eq 1 ]; then
+                SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-missing-parent.vdi"
+                VDI_ARGS=(
+                    --format differencing
+                    --sparse-mode unallocated
+                    --link-to-parent
+                    --uuid-seed "nextboot-vdi-missing-child-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}"
+                    --parent-uuid-seed "nextboot-vdi-missing-parent-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}"
+                )
+            fi
             if [ "$SMOKE_PARENT_CHAIN_VDI" -eq 1 ]; then
                 SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-chain.vdi"
                 SMOKE_VDI_PARENT_FILE="$(parent_chain_file "$SMOKE_PARENT_CHAIN_DEPTH" vdibase)"
@@ -172,7 +189,9 @@ create_generated_smoke_images() {
         warn "Wrapping smoke disk image as VDI..."
         if [ "$SMOKE_PARENT_VDI" -eq 1 ]; then
             warn "Wrapping smoke disk image as same-directory VDI parent..."
-            if [ "$SMOKE_PARENT_CHAIN_VDI" -eq 1 ]; then
+            if [ "$SMOKE_MISSING_PARENT_VDI" -eq 1 ]; then
+                warn "Leaving VDI parent absent to verify recovery diagnostics..."
+            elif [ "$SMOKE_PARENT_CHAIN_VDI" -eq 1 ]; then
                 for level in $(seq 1 "$SMOKE_PARENT_CHAIN_DEPTH"); do
                     chain_file="$(parent_chain_file "$level" vdibase)"
                     if [ "$level" -eq 1 ]; then

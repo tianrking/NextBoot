@@ -57,16 +57,22 @@ impl BootManager<'_> {
         }
 
         let fs = SourceVolumeFileSystem::open(source_block_io, self.iso.source_disk)?;
+        let mut resolved_candidates = 0u32;
         for locator_path in candidates {
             let Some(parent_path) = vhdx::resolve_same_volume_parent_path(child_path, locator_path)
             else {
                 continue;
             };
+            resolved_candidates += 1;
             if parent_path.eq_ignore_ascii_case(child_path) {
                 continue;
             }
 
             let Ok(parent_file) = fs.file_metadata(&parent_path) else {
+                warn!(
+                    "Missing VHDX parent candidate for {} at {}",
+                    child_path, parent_path
+                );
                 continue;
             };
             let parent_vbio =
@@ -110,8 +116,9 @@ impl BootManager<'_> {
         }
 
         warn!(
-            "VHDX parent for {} was not found from locator paths",
-            child_path
+            "VHDX parent for {} was not found from {} same-volume locator candidate(s); copy the parent VHDX onto this volume at the logged path or repair the Parent Locator",
+            child_path,
+            resolved_candidates
         );
         Ok(None)
     }
