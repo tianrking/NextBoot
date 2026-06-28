@@ -84,3 +84,8 @@ Keep raw serial logs, photos, or firmware screenshots next to the generated
 Markdown report when possible. The CSV should stay small and reviewable; large
 evidence belongs in per-run Markdown files under `target/hardware-reports/` or
 an issue attachment.
+
+Run `./scripts/check-hardware-matrix.py` before claiming broad hardware
+readiness. It exits non-zero and lists missing required rows until the CSV has
+passing evidence for the SSD, USB, SD, filesystem, and image-type combinations
+above.
