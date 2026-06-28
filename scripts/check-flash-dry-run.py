@@ -26,6 +26,7 @@ class FlashDryRunCase:
     args: tuple[str, ...]
     expect: tuple[str, ...]
     reject: tuple[str, ...] = ()
+    image_fixture: bool = False
 
 
 CASES: tuple[FlashDryRunCase, ...] = (
@@ -83,6 +84,19 @@ CASES: tuple[FlashDryRunCase, ...] = (
             "BOOTAA64.EFI",
         ),
     ),
+    FlashDryRunCase(
+        "Linux split exFAT copies requested image into Data ISO directory",
+        "linux",
+        ("--layout", "split", "--data-fs", "exfat", "--image", "{image}", "/dev/sdz"),
+        (
+            "Install image:",
+            "core-smoke.iso -> /ISO/core-smoke.iso",
+            "+ sudo mkdir -p /tmp/nextboot_flash_data/ISO",
+            "+ sudo cp",
+            "/tmp/nextboot_flash_data/ISO/core-smoke.iso",
+        ),
+        image_fixture=True,
+    ),
 )
 
 
@@ -94,6 +108,15 @@ def ensure_placeholder_efi(target: str) -> None:
     path.write_bytes(b"NEXTBOOT-DRY-RUN-PLACEHOLDER\n")
 
 
+def expand_args(case: FlashDryRunCase) -> tuple[str, ...]:
+    if not case.image_fixture:
+        return case.args
+    fixture = PROJECT_DIR / "target" / "flash-dry-run" / "core-smoke.iso"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_bytes(b"NEXTBOOT-IMAGE-COPY-FIXTURE\n")
+    return tuple(str(fixture) if arg == "{image}" else arg for arg in case.args)
+
+
 def run_case(case: FlashDryRunCase) -> tuple[bool, str]:
     env = os.environ.copy()
     env["NEXTBOOT_OSTYPE"] = case.ostype
@@ -101,7 +124,7 @@ def run_case(case: FlashDryRunCase) -> tuple[bool, str]:
         str(FLASH_SCRIPT),
         "--dry-run",
         "--no-ventoy-assets",
-        *case.args,
+        *expand_args(case),
     )
     result = subprocess.run(
         command,

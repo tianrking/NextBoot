@@ -195,6 +195,38 @@ copy_ventoy_assets_sudo() {
     fi
 }
 
+validate_image_files() {
+    local image_file
+
+    [ "${#IMAGE_INSTALL_FILES[@]}" -gt 0 ] || return 0
+    for image_file in "${IMAGE_INSTALL_FILES[@]}"; do
+        [ -n "$image_file" ] || die "--image path cannot be empty"
+        if [ "$DRY_RUN" -eq 0 ] && [ ! -f "$image_file" ]; then
+            die "Image file not found: ${image_file}"
+        fi
+    done
+}
+
+copy_boot_images() {
+    local mount_point="$1"
+    local image_file
+
+    [ "${#IMAGE_INSTALL_FILES[@]}" -gt 0 ] || return 0
+    for image_file in "${IMAGE_INSTALL_FILES[@]}"; do
+        run_cmd cp "$image_file" "${mount_point}/ISO/$(basename "$image_file")"
+    done
+}
+
+copy_boot_images_sudo() {
+    local mount_point="$1"
+    local image_file
+
+    [ "${#IMAGE_INSTALL_FILES[@]}" -gt 0 ] || return 0
+    for image_file in "${IMAGE_INSTALL_FILES[@]}"; do
+        run_sudo cp "$image_file" "${mount_point}/ISO/$(basename "$image_file")"
+    done
+}
+
 require_linux_tools() {
     command_exists parted || die "parted is required"
     command_exists mkfs.vfat || die "mkfs.vfat is required"
@@ -243,6 +275,15 @@ mount_point_for_macos_partition() {
 ensure_macos_mounted() {
     local partition="$1"
     local mount_point
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        run_cmd diskutil mount "$partition"
+        case "$partition" in
+            *s1) printf '/Volumes/NEXBOOT\n' ;;
+            *) printf '/Volumes/NEXTDATA\n' ;;
+        esac
+        return
+    fi
 
     mount_point="$(mount_point_for_macos_partition "$partition")"
     if [ -z "$mount_point" ] || [ "$mount_point" = "Not mounted" ]; then

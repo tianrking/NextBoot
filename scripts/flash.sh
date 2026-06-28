@@ -20,6 +20,7 @@ HOST_OS="${NEXTBOOT_OSTYPE:-$OSTYPE}"
 TARGET="${TARGET:-x86_64-unknown-uefi}"
 EFI_INSTALL_FILES=()
 EFI_INSTALL_NAMES=()
+IMAGE_INSTALL_FILES=()
 
 LAYOUT="split"
 DATA_FS="exfat"
@@ -49,6 +50,7 @@ Options:
                     Install WIMBOOT assets from DIR into /ventoy
   --no-ventoy-assets
                     Do not auto-install Ventoy WIMBOOT assets
+  --image PATH      Copy a boot image into /ISO during flashing; repeatable
   --dry-run         Print the commands without writing to the device
   -y, --yes         Skip the confirmation prompt
   -h, --help        Show this help
@@ -65,6 +67,8 @@ Examples:
   $0 --target aarch64-unknown-uefi --layout split --data-fs exfat /dev/diskX
   $0 --target all --layout split --data-fs exfat /dev/diskX
   $0 --layout split --ventoy-assets ../Ventoy/INSTALL/ventoy /dev/diskX
+  $0 --layout split --data-fs exfat --image ~/Downloads/linux.iso /dev/diskX
+  $0 --target all --image win11.iso --image rescue.vhdx /dev/diskX
   $0 --layout split --data-fs fat32 /dev/sdX
   $0 --layout single /dev/sdX
 USAGE
@@ -174,6 +178,11 @@ parse_args() {
                 INSTALL_VENTOY_ASSETS=0
                 shift
                 ;;
+            --image)
+                [ $# -ge 2 ] || die "--image requires a file path"
+                IMAGE_INSTALL_FILES+=("$2")
+                shift 2
+                ;;
             --dry-run)
                 DRY_RUN=1
                 shift
@@ -244,6 +253,8 @@ if [ "$DRY_RUN" -eq 0 ] && [ ! -e "$DEVICE" ]; then
     die "Device not found: ${DEVICE}"
 fi
 
+validate_image_files
+
 echo -e "${GREEN}NextBoot Flash Tool${NC}"
 echo "===================="
 warn "UEFI target: ${TARGET}"
@@ -261,6 +272,11 @@ if [ -n "$VENTOY_ASSETS_RESOLVED" ]; then
 elif [ "$INSTALL_VENTOY_ASSETS" -eq 0 ]; then
     warn "Ventoy assets: disabled"
 fi
+if [ "${#IMAGE_INSTALL_FILES[@]}" -gt 0 ]; then
+    for image_file in "${IMAGE_INSTALL_FILES[@]}"; do
+        warn "Install image: ${image_file} -> /ISO/$(basename "${image_file}")"
+    done
+fi
 if [ "$DRY_RUN" -eq 1 ]; then
     note "Dry run: no commands will be executed"
 fi
@@ -276,19 +292,25 @@ fi
 unmount_target_device
 create_target_partitions
 
-if [ "$DRY_RUN" -eq 1 ]; then
-    echo ""
-    info "Dry run complete. No data was written."
-    exit 0
-fi
-
 populate_target_media
 
 echo ""
-info "Flash complete!"
+if [ "$DRY_RUN" -eq 1 ]; then
+    info "Dry run complete. No data was written."
+else
+    info "Flash complete!"
+fi
 echo ""
 if [ "$LAYOUT" = "split" ]; then
-    echo "Copy ISO/WIM/VHD files to the Data partition's /ISO directory and boot from the device."
+    if [ "${#IMAGE_INSTALL_FILES[@]}" -gt 0 ]; then
+        echo "Boot from the device and select an image from the Data partition's /ISO directory."
+    else
+        echo "Copy ISO/WIM/VHD files to the Data partition's /ISO directory and boot from the device."
+    fi
 else
-    echo "Copy ISO/WIM/VHD files to /ISO and boot from the device."
+    if [ "${#IMAGE_INSTALL_FILES[@]}" -gt 0 ]; then
+        echo "Boot from the device and select an image from /ISO."
+    else
+        echo "Copy ISO/WIM/VHD files to /ISO and boot from the device."
+    fi
 fi

@@ -20,6 +20,7 @@ populate_macos_media() {
         populate_macos_data_partition
     else
         run_cmd mkdir -p "${esp_mount}/ISO"
+        copy_boot_images "$esp_mount"
         copy_ventoy_assets "$esp_mount"
         sync
     fi
@@ -33,6 +34,9 @@ populate_macos_data_partition() {
 
     if [[ "$DATA_FS" == ext* ]] || [ "$DATA_FS" = "xfs" ]; then
         warn "Skipping Data partition population on macOS ${DATA_FS}; copy ISO files into the Data partition from Linux."
+        if [ "${#IMAGE_INSTALL_FILES[@]}" -gt 0 ]; then
+            warn "--image files were not copied because macOS cannot write-mount ${DATA_FS} here."
+        fi
         return
     fi
 
@@ -41,6 +45,7 @@ populate_macos_data_partition() {
         run_sudo mkdir -p "$data_mount"
         run_sudo ntfs-3g "$data_part" "$data_mount"
         run_sudo mkdir -p "${data_mount}/ISO"
+        copy_boot_images_sudo "$data_mount"
         copy_ventoy_assets_sudo "$data_mount"
         sync
         run_sudo umount "$data_mount"
@@ -49,6 +54,7 @@ populate_macos_data_partition() {
 
     data_mount="$(ensure_macos_mounted "$data_part")"
     run_cmd mkdir -p "${data_mount}/ISO"
+    copy_boot_images "$data_mount"
     copy_ventoy_assets "$data_mount"
     sync
     run_cmd diskutil unmount "$data_part"
@@ -68,6 +74,7 @@ populate_linux_media() {
         populate_linux_data_partition "$data_mount"
     else
         run_sudo mkdir -p "${esp_mount}/ISO"
+        copy_boot_images_sudo "$esp_mount"
         copy_ventoy_assets_sudo "$esp_mount"
         sync
     fi
@@ -83,6 +90,7 @@ populate_linux_data_partition() {
     run_sudo mkdir -p "$data_mount"
     run_sudo mount "$data_part" "$data_mount"
     run_sudo mkdir -p "${data_mount}/ISO"
+    copy_boot_images_sudo "$data_mount"
     copy_ventoy_assets_sudo "$data_mount"
     sync
     run_sudo umount "$data_mount"
