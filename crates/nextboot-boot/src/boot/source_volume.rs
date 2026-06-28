@@ -276,6 +276,19 @@ impl SourceVolumeFileSystem {
         .map_err(fs_error_to_uefi_status)?)
     }
 
+    pub(super) fn read_dir(&self, path: &str) -> uefi::Result<Vec<nextboot_fs::FileInfo>> {
+        Ok(match self {
+            Self::Fat32(fs) => fs.read_dir(path),
+            Self::ExFat(fs) => fs.read_dir(path),
+            Self::Ext4(fs) => fs.read_dir(path),
+            Self::Ntfs(fs) => fs.read_dir(path),
+            Self::Udf(fs) => fs.read_dir(path),
+            Self::Xfs(fs) => fs.read_dir(path),
+            Self::Iso9660(fs) => fs.read_dir(path),
+        }
+        .map_err(fs_error_to_uefi_status)?)
+    }
+
     pub(super) fn read_file(&self, path: &str, offset: u64, buf: &mut [u8]) -> uefi::Result<usize> {
         Ok(match self {
             Self::Fat32(fs) => fs.read_file(path, offset, buf),

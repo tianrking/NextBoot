@@ -98,22 +98,18 @@ run_qemu_smoke() {
                 fi
                 EXPECT_ARGS+=(--expect "NEXTBOOT_SMOKE_EFI_STARTED")
             elif [ "$SMOKE_RAW_IMG" -eq 1 ] || [ "$SMOKE_FIXED_VHD" -eq 1 ] || [ "$SMOKE_DYNAMIC_VHD" -eq 1 ] || [ "$SMOKE_VHDX" -eq 1 ] || [ "$SMOKE_VDI" -eq 1 ]; then
-                if [ "$SMOKE_PARENT_VDI" -eq 1 ]; then
-                    EXPECT_ARGS+=(
-                        --expect "requires an unsupported parent chain"
-                        --expect "Boot failed: Error { status: UNSUPPORTED"
-                    )
-                else
-                    if [ "$SMOKE_PARENT_VHDX" -eq 1 ]; then
-                        EXPECT_ARGS+=(--expect "Resolved VHDX parent")
-                    fi
-                    EXPECT_ARGS+=(
-                        --expect "Found virtual disk filesystem partition"
-                        --expect "Trying virtual disk partition EFI loader path"
-                        --expect "Loaded EFI image"
-                        --expect "NEXTBOOT_SMOKE_EFI_STARTED"
-                    )
+                if [ "$SMOKE_PARENT_VHDX" -eq 1 ]; then
+                    EXPECT_ARGS+=(--expect "Resolved VHDX parent")
                 fi
+                if [ "$SMOKE_PARENT_VDI" -eq 1 ]; then
+                    EXPECT_ARGS+=(--expect "Resolved VDI parent")
+                fi
+                EXPECT_ARGS+=(
+                    --expect "Found virtual disk filesystem partition"
+                    --expect "Trying virtual disk partition EFI loader path"
+                    --expect "Loaded EFI image"
+                    --expect "NEXTBOOT_SMOKE_EFI_STARTED"
+                )
             fi
         fi
     else

@@ -147,7 +147,7 @@ if [ "${NEXTBOOT_FULL_QEMU_MATRIX:-0}" = "1" ]; then
     run_case "nvme 4K split exFAT discarded VDI smoke" \
         --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-discarded-vdi
 
-    run_case "nvme 4K split exFAT parent-required VDI rejection" \
+    run_case "nvme 4K split exFAT parent-backed VDI smoke" \
         --bus nvme --layout split --data-fs exfat --sector-size 4096 --smoke-parent-vdi
 
     run_case "nvme 4K split ext4 Linux plugins" \

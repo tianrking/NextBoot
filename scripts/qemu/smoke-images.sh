@@ -117,10 +117,16 @@ create_generated_smoke_images() {
         fi
         if [ "$SMOKE_PARENT_VDI" -eq 1 ]; then
             SMOKE_VDI_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent.vdi"
-            VDI_ARGS+=(--format differencing --sparse-mode unallocated)
+            SMOKE_VDI_PARENT_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-parent-base.vdibase"
+            VDI_ARGS+=(--format differencing --sparse-mode unallocated --link-to-parent)
         fi
         require_command python3 "python3 is required to create the smoke VDI"
         warn "Wrapping smoke disk image as VDI..."
+        if [ "$SMOKE_PARENT_VDI" -eq 1 ]; then
+            warn "Wrapping smoke disk image as same-directory VDI parent..."
+            python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_PARENT_FILE"
+            SUPPORT_IMAGES=("$SMOKE_VDI_PARENT_FILE" "${SUPPORT_IMAGES[@]}")
+        fi
         python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "${VDI_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_FILE"
         IMAGES=("$SMOKE_VDI_FILE" "${IMAGES[@]}")
     fi

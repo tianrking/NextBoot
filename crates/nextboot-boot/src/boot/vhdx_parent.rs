@@ -90,7 +90,7 @@ impl BootManager<'_> {
         Ok(None)
     }
 
-    fn build_source_volume_file_block_io(
+    pub(super) fn build_source_volume_file_block_io(
         &self,
         source_block_io: &BlockIO,
         file: &SourceVolumeFileMetadata,
@@ -178,7 +178,7 @@ impl BootManager<'_> {
         Ok(())
     }
 
-    fn map_source_file_range_to_physical(
+    pub(super) fn map_source_file_range_to_physical(
         &self,
         table: &mut ByteMappingTable,
         file: &SourceVolumeFileMetadata,

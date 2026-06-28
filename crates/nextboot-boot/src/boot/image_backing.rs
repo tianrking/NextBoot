@@ -129,31 +129,17 @@ impl BootManager<'_> {
     ) -> uefi::Result<VirtualBlockIo> {
         let file_vbio = self.build_image_file_block_io(source_block_io)?;
         let metadata = self.read_vdi_metadata(&file_vbio)?;
+        let parent = self.open_vdi_parent_backing(source_block_io, &metadata)?;
 
         config.iso_size = metadata.virtual_disk_size;
         config.block_size = metadata.sector_size;
 
-        let map_bytes =
-            vdi::block_map_bytes(metadata.block_count).ok_or(uefi::Status::LOAD_ERROR)?;
-        if metadata
-            .offset_blocks
-            .checked_add(map_bytes)
-            .is_none_or(|end| end > self.iso.size || end > metadata.offset_data)
-        {
-            return Err(uefi::Status::LOAD_ERROR.into());
-        }
-
-        let map_len = usize::try_from(map_bytes).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        let mut block_map = Vec::new();
-        block_map
-            .try_reserve_exact(map_len)
-            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
-        block_map.resize(map_len, 0);
-        vhd::read_file_bytes(&file_vbio, metadata.offset_blocks, &mut block_map)?;
+        let block_map = self.read_vdi_block_map(&file_vbio, &metadata, self.iso.size)?;
 
         let block_size = u64::from(metadata.block_size);
         let mut byte_mapping = ByteMappingTable::empty();
         let mut allocated_blocks = 0u64;
+        let mut parent_blocks = 0u64;
         let mut zero_blocks = 0u64;
 
         for block_index in 0..metadata.block_count {
@@ -169,11 +155,21 @@ impl BootManager<'_> {
                 .ok_or(uefi::Status::LOAD_ERROR)?;
             if !vdi::is_allocated_block(map_entry) {
                 if metadata.is_differencing() {
-                    warn!(
-                        "VDI block {} in {} requires an unsupported parent chain",
-                        block_index, self.iso.path
-                    );
-                    return Err(uefi::Status::UNSUPPORTED.into());
+                    let Some(parent) = parent.as_ref() else {
+                        warn!(
+                            "VDI block {} in {} requires an unsupported parent chain",
+                            block_index, self.iso.path
+                        );
+                        return Err(uefi::Status::UNSUPPORTED.into());
+                    };
+                    self.map_parent_vdi_range(
+                        &mut byte_mapping,
+                        parent,
+                        virtual_start,
+                        byte_count,
+                    )?;
+                    parent_blocks += 1;
+                    continue;
                 }
                 zero_blocks += 1;
                 continue;
@@ -214,12 +210,13 @@ impl BootManager<'_> {
         byte_mapping.truncate(metadata.virtual_disk_size);
         byte_mapping.optimize();
         info!(
-            "Mapped VDI {}: virtual={} bytes, block={} bytes, sector={} bytes, allocated_blocks={}, zero_blocks={}, physical_segments={}",
+            "Mapped VDI {}: virtual={} bytes, block={} bytes, sector={} bytes, allocated_blocks={}, parent_blocks={}, zero_blocks={}, physical_segments={}",
             self.iso.path,
             metadata.virtual_disk_size,
             block_size,
             metadata.sector_size,
             allocated_blocks,
+            parent_blocks,
             zero_blocks,
             byte_mapping.segment_count()
         );
@@ -227,10 +224,39 @@ impl BootManager<'_> {
         Ok(VirtualBlockIo::with_byte_mapping(config, byte_mapping))
     }
 
-    fn read_vdi_metadata(&self, file_vbio: &VirtualBlockIo) -> uefi::Result<vdi::VdiMetadata> {
+    pub(super) fn read_vdi_metadata(
+        &self,
+        file_vbio: &VirtualBlockIo,
+    ) -> uefi::Result<vdi::VdiMetadata> {
         let mut header = [0u8; vdi::VDI_HEADER_SIZE];
         vhd::read_file_bytes(file_vbio, 0, &mut header)?;
         vdi::parse_vdi_metadata(&header).ok_or(uefi::Status::LOAD_ERROR.into())
+    }
+
+    pub(super) fn read_vdi_block_map(
+        &self,
+        file_vbio: &VirtualBlockIo,
+        metadata: &vdi::VdiMetadata,
+        file_size: u64,
+    ) -> uefi::Result<Vec<u8>> {
+        let map_bytes =
+            vdi::block_map_bytes(metadata.block_count).ok_or(uefi::Status::LOAD_ERROR)?;
+        if metadata
+            .offset_blocks
+            .checked_add(map_bytes)
+            .is_none_or(|end| end > file_size || end > metadata.offset_data)
+        {
+            return Err(uefi::Status::LOAD_ERROR.into());
+        }
+
+        let map_len = usize::try_from(map_bytes).map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        let mut block_map = Vec::new();
+        block_map
+            .try_reserve_exact(map_len)
+            .map_err(|_| uefi::Status::OUT_OF_RESOURCES)?;
+        block_map.resize(map_len, 0);
+        vhd::read_file_bytes(file_vbio, metadata.offset_blocks, &mut block_map)?;
+        Ok(block_map)
     }
 
     pub(super) fn build_image_file_block_io(

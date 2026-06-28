@@ -46,7 +46,13 @@ def is_zero_block(chunk: bytes) -> bool:
     return not any(chunk)
 
 
-def vdi_image(raw: bytes, source: Path, image_format: str, sparse_mode: str) -> bytes:
+def vdi_image(
+    raw: bytes,
+    source: Path,
+    image_format: str,
+    sparse_mode: str,
+    link_to_parent: bool,
+) -> bytes:
     if not raw or len(raw) % SECTOR_SIZE:
         raise ValueError("VDI payload size must be a non-zero multiple of 512 bytes")
     if image_format == "static" and sparse_mode != "allocated":
@@ -85,8 +91,12 @@ def vdi_image(raw: bytes, source: Path, image_format: str, sparse_mode: str) -> 
     base_uuid = f"nextboot-vdi:{source.resolve()}"
     put_uuid(header, 0x188, f"{base_uuid}:create")
     put_uuid(header, 0x198, f"{base_uuid}:modify")
-    put_uuid(header, 0x1A8, f"{base_uuid}:linkage")
-    put_uuid(header, 0x1B8, f"{base_uuid}:parent")
+    if link_to_parent:
+        put_uuid(header, 0x1A8, f"{base_uuid}:create")
+        put_uuid(header, 0x1B8, f"{base_uuid}:modify")
+    else:
+        put_uuid(header, 0x1A8, f"{base_uuid}:linkage")
+        put_uuid(header, 0x1B8, f"{base_uuid}:parent")
     assert len(header) == HEADER_SIZE
 
     block_map = bytearray(map_size)
@@ -128,13 +138,20 @@ def main() -> None:
         dest="sparse_mode",
         help="alias for --sparse-mode unallocated",
     )
+    parser.add_argument(
+        "--link-to-parent",
+        action="store_true",
+        help="for differencing images, point linkage UUIDs at a parent generated from the same raw image",
+    )
     parser.add_argument("raw_image", type=Path)
     parser.add_argument("vdi_image", type=Path)
     args = parser.parse_args()
 
     raw = args.raw_image.read_bytes()
     args.vdi_image.parent.mkdir(parents=True, exist_ok=True)
-    args.vdi_image.write_bytes(vdi_image(raw, args.raw_image, args.format, args.sparse_mode))
+    args.vdi_image.write_bytes(
+        vdi_image(raw, args.raw_image, args.format, args.sparse_mode, args.link_to_parent)
+    )
     print(f"created {args.vdi_image} ({args.vdi_image.stat().st_size} bytes)")
 
 

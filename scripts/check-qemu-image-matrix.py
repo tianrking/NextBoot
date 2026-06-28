@@ -288,9 +288,14 @@ CASES = (
         f"nextboot-smoke-{ARCH_TAG}-parent-partial.vhdx",
     ),
     ImageCase(
-        "NVMe 4K split differencing VDI",
+        "NVMe 4K split parent-backed VDI",
         ("--bus", "nvme", "--layout", "split", "--data-fs", "exfat", "--sector-size", "4096", "--smoke-parent-vdi"),
-        ("verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat", f"nextboot-smoke-{ARCH_TAG}-parent.vdi"),
+        (
+            "verified split GPT layout: NEXBOOT_EFI=FAT32 NEXBOOT_DATA=exfat",
+            f"nextboot-smoke-{ARCH_TAG}-parent.vdi",
+            f"nextboot-smoke-{ARCH_TAG}-parent-base.vdibase",
+            "verified 2 /ISO image file(s)",
+        ),
         f"nextboot-smoke-{ARCH_TAG}-parent.vdi",
     ),
 )

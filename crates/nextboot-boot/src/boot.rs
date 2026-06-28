@@ -24,6 +24,7 @@ mod model;
 mod os_param;
 mod source_volume;
 mod util;
+mod vdi_parent;
 mod vhd;
 mod vhdx_backing;
 mod vhdx_parent;

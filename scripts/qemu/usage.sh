@@ -43,7 +43,7 @@ Options:
   --smoke-discarded-vdi
                      Generate a dynamic VDI with discarded zero blocks
   --smoke-parent-vdi
-                     Generate a differencing VDI that requires an unsupported parent chain
+                     Generate a differencing VDI plus same-directory parent and verify it starts
   --smoke-auto-memdisk
                      Generate a minimal UEFI ISO and force Ventoy auto_memdisk
   --smoke-menu-memdisk
