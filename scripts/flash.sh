@@ -125,6 +125,8 @@ list_devices() {
 }
 
 source "${SCRIPT_DIR}/lib/flash_helpers.sh"
+source "${SCRIPT_DIR}/lib/flash_partitioning.sh"
+source "${SCRIPT_DIR}/lib/flash_population.sh"
 source "${SCRIPT_DIR}/lib/flash_targets.sh"
 
 parse_args() {
@@ -271,107 +273,8 @@ if [ "$ASSUME_YES" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     [ "$CONFIRM" = "yes" ] || { echo "Aborted"; exit 0; }
 fi
 
-warn "Unmounting device..."
-if [[ "$HOST_OS" == "darwin"* ]]; then
-    if [ "$DRY_RUN" -eq 0 ]; then
-        require_macos_tools
-    fi
-    DEVICE="$(normalize_macos_device "$DEVICE")"
-    run_cmd diskutil unmountDisk "$DEVICE" || true
-else
-    if [ "$DRY_RUN" -eq 0 ]; then
-        require_linux_tools
-    fi
-    run_sudo umount "${DEVICE}"* || true
-fi
-
-warn "Creating GPT partition table..."
-if [[ "$HOST_OS" == "darwin"* ]]; then
-    if [ "$LAYOUT" = "split" ]; then
-        if [ "$DATA_FS" = "fat32" ]; then
-            MAC_DATA_FS="FAT32"
-        elif [ "$DATA_FS" = "ntfs" ]; then
-            # diskutil on stock macOS cannot format NTFS.  Create a Microsoft
-            # Basic Data placeholder, then reformat it with mkfs.ntfs/mkntfs.
-            MAC_DATA_FS="ExFAT"
-        elif [[ "$DATA_FS" == ext* ]] || [ "$DATA_FS" = "udf" ] || [ "$DATA_FS" = "xfs" ]; then
-            # Create a mountable placeholder, then reformat it with the selected
-            # external formatter so GPT geometry stays under diskutil control.
-            MAC_DATA_FS="ExFAT"
-        else
-            MAC_DATA_FS="ExFAT"
-        fi
-        run_sudo diskutil partitionDisk "$DEVICE" GPT FAT32 NEXBOOT "${ESP_SIZE_MB}MiB" "$MAC_DATA_FS" NEXTDATA R
-        DATA_PART="${DEVICE}s2"
-        if [ "$DATA_FS" = "ntfs" ]; then
-            run_cmd diskutil unmount "$DATA_PART" || true
-            NTFS_MKFS="$(ntfs_mkfs_command)"
-            run_sudo "$NTFS_MKFS" -Q -F -L NEXTDATA "$DATA_PART"
-        elif [[ "$DATA_FS" == ext* ]]; then
-            run_cmd diskutil unmount "$DATA_PART" || true
-            run_ext_mkfs "$DATA_FS" "$DATA_PART"
-        elif [ "$DATA_FS" = "udf" ]; then
-            run_cmd diskutil unmount "$DATA_PART" || true
-            run_udf_mkfs "$DATA_PART"
-        elif [ "$DATA_FS" = "xfs" ]; then
-            run_cmd diskutil unmount "$DATA_PART" || true
-            XFS_MKFS="$(xfs_mkfs_command)"
-            run_sudo "$XFS_MKFS" -f -L NEXTDATA "$DATA_PART"
-        fi
-    else
-        run_sudo diskutil partitionDisk "$DEVICE" GPT FAT32 NEXBOOT 100%
-    fi
-else
-    run_sudo parted -s "$DEVICE" mklabel gpt
-    if [ "$LAYOUT" = "split" ]; then
-        esp_end="${ESP_SIZE_MB}MiB"
-        if [ "$DATA_FS" = "ntfs" ]; then
-            parted_data_type="ntfs"
-        elif [[ "$DATA_FS" == ext* ]]; then
-            parted_data_type="$DATA_FS"
-        elif [ "$DATA_FS" = "xfs" ]; then
-            parted_data_type="xfs"
-        else
-            parted_data_type="fat32"
-        fi
-        run_sudo parted -s "$DEVICE" mkpart NEXBOOT fat32 1MiB "$esp_end"
-        run_sudo parted -s "$DEVICE" set 1 esp on
-        run_sudo parted -s "$DEVICE" mkpart NEXTDATA "$parted_data_type" "$esp_end" 100%
-    else
-        run_sudo parted -s "$DEVICE" mkpart NEXBOOT fat32 1MiB 100%
-        run_sudo parted -s "$DEVICE" set 1 esp on
-    fi
-    run_sudo partprobe "$DEVICE" || true
-    if [ "$DRY_RUN" -eq 0 ]; then
-        sleep 2
-    fi
-
-    ESP_PART="$(linux_partition_path "$DEVICE" 1)"
-    run_sudo mkfs.vfat -F 32 -n NEXBOOT "$ESP_PART"
-    if [ "$LAYOUT" = "split" ]; then
-        DATA_PART="$(linux_partition_path "$DEVICE" 2)"
-        if [ "$DATA_FS" = "exfat" ]; then
-            if [ "$DRY_RUN" -eq 1 ]; then
-                EXFAT_MKFS="mkfs.exfat"
-            else
-                EXFAT_MKFS="$(find_linux_exfat_mkfs)"
-            fi
-            run_sudo "$EXFAT_MKFS" -n NEXTDATA "$DATA_PART"
-        elif [[ "$DATA_FS" == ext* ]]; then
-            run_ext_mkfs "$DATA_FS" "$DATA_PART"
-        elif [ "$DATA_FS" = "ntfs" ]; then
-            NTFS_MKFS="$(ntfs_mkfs_command)"
-            run_sudo "$NTFS_MKFS" -Q -F -L NEXTDATA "$DATA_PART"
-        elif [ "$DATA_FS" = "udf" ]; then
-            run_udf_mkfs "$DATA_PART"
-        elif [ "$DATA_FS" = "xfs" ]; then
-            XFS_MKFS="$(xfs_mkfs_command)"
-            run_sudo "$XFS_MKFS" -f -L NEXTDATA "$DATA_PART"
-        else
-            run_sudo mkfs.vfat -F 32 -n NEXTDATA "$DATA_PART"
-        fi
-    fi
-fi
+unmount_target_device
+create_target_partitions
 
 if [ "$DRY_RUN" -eq 1 ]; then
     echo ""
@@ -379,63 +282,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     exit 0
 fi
 
-warn "Copying files..."
-if [[ "$HOST_OS" == "darwin"* ]]; then
-    ESP_PART="${DEVICE}s1"
-    ESP_MOUNT="$(ensure_macos_mounted "$ESP_PART")"
-    copy_efi_tree "$ESP_MOUNT"
-
-    if [ "$LAYOUT" = "split" ]; then
-        DATA_PART="${DEVICE}s2"
-        if [[ "$DATA_FS" == ext* ]] || [ "$DATA_FS" = "xfs" ]; then
-            warn "Skipping Data partition population on macOS ${DATA_FS}; copy ISO files into the Data partition from Linux."
-        elif [ "$DATA_FS" = "ntfs" ] && command_exists ntfs-3g; then
-            DATA_MOUNT="/tmp/nextboot_flash_data"
-            run_sudo mkdir -p "$DATA_MOUNT"
-            run_sudo ntfs-3g "$DATA_PART" "$DATA_MOUNT"
-            run_sudo mkdir -p "${DATA_MOUNT}/ISO"
-            copy_ventoy_assets_sudo "$DATA_MOUNT"
-        else
-            DATA_MOUNT="$(ensure_macos_mounted "$DATA_PART")"
-            run_cmd mkdir -p "${DATA_MOUNT}/ISO"
-            copy_ventoy_assets "$DATA_MOUNT"
-        fi
-        sync
-        if [ "$DATA_FS" = "ntfs" ] && command_exists ntfs-3g; then
-            run_sudo umount "$DATA_MOUNT"
-        else
-            run_cmd diskutil unmount "$DATA_PART"
-        fi
-    else
-        run_cmd mkdir -p "${ESP_MOUNT}/ISO"
-        copy_ventoy_assets "$ESP_MOUNT"
-        sync
-    fi
-    run_cmd diskutil unmount "$ESP_PART"
-else
-    ESP_PART="$(linux_partition_path "$DEVICE" 1)"
-    ESP_MOUNT="/tmp/nextboot_flash_esp"
-    DATA_MOUNT="/tmp/nextboot_flash_data"
-
-    run_sudo mkdir -p "$ESP_MOUNT"
-    run_sudo mount "$ESP_PART" "$ESP_MOUNT"
-    copy_efi_tree_sudo "$ESP_MOUNT"
-
-    if [ "$LAYOUT" = "split" ]; then
-        DATA_PART="$(linux_partition_path "$DEVICE" 2)"
-        run_sudo mkdir -p "$DATA_MOUNT"
-        run_sudo mount "$DATA_PART" "$DATA_MOUNT"
-        run_sudo mkdir -p "${DATA_MOUNT}/ISO"
-        copy_ventoy_assets_sudo "$DATA_MOUNT"
-        sync
-        run_sudo umount "$DATA_MOUNT"
-    else
-        run_sudo mkdir -p "${ESP_MOUNT}/ISO"
-        copy_ventoy_assets_sudo "$ESP_MOUNT"
-        sync
-    fi
-    run_sudo umount "$ESP_MOUNT"
-fi
+populate_target_media
 
 echo ""
 info "Flash complete!"
