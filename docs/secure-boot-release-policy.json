@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "distribution_mode": "owner-controlled-key",
+  "production_ready": false,
+  "supported_architectures": [
+    "x86_64-unknown-uefi",
+    "i686-unknown-uefi",
+    "aarch64-unknown-uefi"
+  ],
+  "local_owner_key": {
+    "certificate_common_name": "NextBoot Test Secure Boot",
+    "enrollment_methods": [
+      "firmware-db",
+      "shim-mok"
+    ],
+    "generated_artifacts": [
+      "target/secure-boot/nextboot-db.key",
+      "target/secure-boot/nextboot-db.crt",
+      "target/secure-boot/nextboot-db.cer",
+      "target/secure-boot/nextboot-boot-signed.efi"
+    ],
+    "private_key_storage": "operator-controlled local file; never committed"
+  },
+  "public_distribution_requirements": {
+    "shim_strategy": "not-submitted",
+    "microsoft_uefi_ca_status": "not-submitted",
+    "sbat": {
+      "generation": 0,
+      "vendor": "NextBoot",
+      "product": "NextBoot",
+      "component": "nextboot-boot",
+      "policy_url": ""
+    },
+    "revocation": {
+      "owner": "",
+      "contact": "",
+      "policy_url": ""
+    },
+    "release_key_management": {
+      "custody": "",
+      "rotation": "",
+      "access_control": ""
+    },
+    "authenticated_variable_updates": false,
+    "artifact_verification": [
+      "sbverify"
+    ]
+  },
+  "blockers": [
+    "public shim or Microsoft UEFI CA signing path is not established",
+    "SBAT generation and revocation policy are not published",
+    "release key custody, rotation, and access control are not defined",
+    "authenticated db update generation is not automated"
+  ]
+}

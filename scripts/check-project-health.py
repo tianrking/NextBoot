@@ -13,6 +13,7 @@ from health.integration_checks import (
     check_hardware_report,
     check_qemu_image_matrix,
     check_qemu_matrix,
+    check_secure_boot_policy,
 )
 from health.rust_checks import check_build, check_host_tests
 from health.static_checks import (
@@ -29,6 +30,7 @@ def run_checks(
     skip_qemu_image_matrix: bool,
     skip_hardware_report: bool,
     skip_hardware_matrix_fixture: bool,
+    skip_secure_boot_policy: bool,
     skip_host_tests: bool,
     skip_build: bool,
     build_target: str,
@@ -48,6 +50,8 @@ def run_checks(
         checks.append(check_hardware_report())
     if not skip_hardware_matrix_fixture:
         checks.append(check_hardware_matrix_fixture())
+    if not skip_secure_boot_policy:
+        checks.append(check_secure_boot_policy())
     if not skip_host_tests:
         checks.append(check_host_tests())
     if not skip_build:
@@ -101,6 +105,11 @@ def parse_args() -> argparse.Namespace:
         help="skip temporary CSV fixture checks for check-hardware-matrix.py",
     )
     parser.add_argument(
+        "--skip-secure-boot-policy",
+        action="store_true",
+        help="skip Secure Boot release policy validation",
+    )
+    parser.add_argument(
         "--skip-host-tests",
         action="store_true",
         help=f"skip host cargo test for {', '.join(HOST_TEST_PACKAGES)}",
@@ -127,6 +136,7 @@ def main() -> int:
         args.skip_qemu_image_matrix,
         args.skip_hardware_report,
         args.skip_hardware_matrix_fixture,
+        args.skip_secure_boot_policy,
         args.skip_host_tests,
         args.skip_build_check,
         args.build_target,

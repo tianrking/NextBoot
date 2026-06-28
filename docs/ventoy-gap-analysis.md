@@ -49,7 +49,11 @@ workflows and which gaps are still worth pursuing.
 - Local Secure Boot signing workflow: `scripts/secure-boot.sh` can generate a
   local test certificate, sign the UEFI binary with sbsigntools, verify the
   signed binary where `sbverify` is available, and document firmware db or shim
-  MOK enrollment via `docs/secure-boot.md`.
+  MOK enrollment via `docs/secure-boot.md`. The checked-in
+  `docs/secure-boot-release-policy.json` is also validated by CI, so public
+  Secure Boot readiness cannot be claimed until shim or Microsoft UEFI CA
+  status, SBAT/revocation policy, release-key custody, and authenticated update
+  generation are filled in.
 - IA32 and AArch64 UEFI test paths: `TARGET=i686-unknown-uefi` and
   `TARGET=aarch64-unknown-uefi` now build the bootloader and smoke EFI, write
   `EFI/BOOT/BOOTIA32.EFI` or `EFI/BOOT/BOOTAA64.EFI` into generated QEMU disks
@@ -65,8 +69,10 @@ workflows and which gaps are still worth pursuing.
 
 - Secure Boot distribution: local owner-key signing is documented now, but
   NextBoot still needs a production-grade shim or Microsoft UEFI CA story,
-  SBAT/revocation policy, and release key management before public Secure Boot
-  distribution is user-friendly.
+  SBAT/revocation policy, release key management, and authenticated variable
+  update generation before public Secure Boot distribution is user-friendly.
+  Those blockers are now represented in a CI-validated release policy instead
+  of only prose.
 - Broader image types: raw IMG, fixed/dynamic VHD, VHDX, sparse VHDX,
   self-contained partially-present VHDX, dynamic/static VDI, and sparse VDI
   unallocated/discarded blocks have virtual hard-disk boot smoke coverage now;

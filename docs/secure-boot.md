@@ -8,6 +8,12 @@ This is not a production distribution workflow. The project does not yet ship a
 Microsoft UEFI CA signed shim, a public revocation/SBAT policy, or a release key
 management process.
 
+`docs/secure-boot-release-policy.json` is the machine-readable release policy.
+CI validates it with `scripts/check-secure-boot-policy.py` so the repository
+cannot silently claim production Secure Boot readiness without the required
+shim or CA status, SBAT generation, revocation contacts, key custody, and
+authenticated variable update plan.
+
 ## Tooling
 
 `scripts/secure-boot.sh` provides the supported local workflow:
@@ -66,3 +72,6 @@ EFI binary before installing all fallback filenames on the same ESP.
 - QEMU smoke tests in this repository validate boot behavior, not firmware
   Secure Boot enforcement. Signature verification is delegated to `sbverify`
   where available.
+- `scripts/check-secure-boot-policy.py` intentionally keeps the checked-in
+  policy in `production_ready=false` until the public signing, revocation, and
+  release-key controls are real.
