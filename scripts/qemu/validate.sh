@@ -61,8 +61,12 @@ validate_qemu_smoke_args() {
         die "--smoke-raw-img/--smoke-vhd/--smoke-dynamic-vhd/--smoke-vhdx/--smoke-vdi cannot be combined with ISO smoke generators"
     fi
 
-    if [ "$SMOKE_SPARSE_VHDX" -eq 1 ] && [ "$SMOKE_PARTIAL_VHDX" -eq 1 ]; then
+    VHDX_VARIANT_COUNT=$((SMOKE_SPARSE_VHDX + SMOKE_PARTIAL_VHDX + SMOKE_PARENT_VHDX))
+    if [ "$VHDX_VARIANT_COUNT" -gt 1 ] && [ "$SMOKE_PARENT_VHDX" -eq 0 ]; then
         die "--smoke-sparse-vhdx and --smoke-partial-vhdx cannot be combined"
+    fi
+    if [ "$SMOKE_PARENT_VHDX" -eq 1 ] && [ "$SMOKE_PARTIAL_VHDX" -eq 1 ]; then
+        die "--smoke-parent-vhdx and --smoke-partial-vhdx cannot be combined"
     fi
 
     VDI_VARIANT_COUNT=$((SMOKE_STATIC_VDI + SMOKE_SPARSE_VDI + SMOKE_DISCARDED_VDI))

@@ -20,6 +20,7 @@ LOGICAL_SECTOR_SIZE = 512
 PHYSICAL_SECTOR_SIZE = 4096
 BAT_STATE_FULLY_PRESENT = 6
 BAT_STATE_PARTIALLY_PRESENT = 7
+BAT_STATE_NOT_PRESENT = 0
 BAT_STATE_ZERO = 2
 FILE_PARAMETERS_HAS_PARENT = 1 << 1
 
@@ -131,13 +132,14 @@ def bat_region(
     block_offsets: list[int | None],
     bitmap_offset: int | None,
     partial_present: bool,
+    parent_required: bool,
 ) -> bytes:
     bat = bytearray(MIB)
     chunk_ratio = (1 << 23) * LOGICAL_SECTOR_SIZE // BLOCK_SIZE
     for index, file_offset in enumerate(block_offsets):
         bat_index = payload_bat_index(index, chunk_ratio)
         if file_offset is None:
-            raw_entry = BAT_STATE_ZERO
+            raw_entry = BAT_STATE_NOT_PRESENT if parent_required else BAT_STATE_ZERO
         elif partial_present:
             raw_entry = ((file_offset // MIB) << 20) | BAT_STATE_PARTIALLY_PRESENT
         else:
@@ -150,15 +152,19 @@ def bat_region(
     return bytes(bat)
 
 
-def vhdx(raw: bytes, sparse: bool, partial_present: bool) -> bytes:
+def vhdx(raw: bytes, sparse: bool, partial_present: bool, parent_required: bool) -> bytes:
     if not raw or len(raw) % LOGICAL_SECTOR_SIZE:
         raise ValueError("VHDX payload size must be a non-zero multiple of 512 bytes")
     if sparse and partial_present:
         raise ValueError("--sparse and --partial-present cannot be combined")
+    if parent_required and not sparse:
+        raise ValueError("--parent-required requires --sparse so at least one BAT entry references the parent")
 
     block_count = ceil_div(len(raw), BLOCK_SIZE)
     chunks = [raw[index * BLOCK_SIZE : (index + 1) * BLOCK_SIZE] for index in range(block_count)]
     allocated = [not sparse or not is_zero_block(chunk) for chunk in chunks]
+    if parent_required and all(allocated):
+        raise ValueError("--parent-required needs at least one sparse zero block")
     block_offsets: list[int | None] = []
     next_payload_offset = PAYLOAD_OFFSET
     bitmap_offset = None
@@ -174,8 +180,8 @@ def vhdx(raw: bytes, sparse: bool, partial_present: bool) -> bytes:
 
     image = bytearray()
     image.extend(header_section())
-    image.extend(metadata_region(len(raw), partial_present))
-    image.extend(bat_region(block_offsets, bitmap_offset, partial_present))
+    image.extend(metadata_region(len(raw), partial_present or parent_required))
+    image.extend(bat_region(block_offsets, bitmap_offset, partial_present, parent_required))
     assert len(image) == PAYLOAD_OFFSET
 
     if bitmap_offset is not None:
@@ -197,13 +203,20 @@ def main() -> None:
         action="store_true",
         help="encode allocated blocks as partially-present with a full sector bitmap",
     )
+    parser.add_argument(
+        "--parent-required",
+        action="store_true",
+        help="mark sparse blocks as requiring a differencing parent chain",
+    )
     parser.add_argument("raw_image", type=Path)
     parser.add_argument("vhdx_image", type=Path)
     args = parser.parse_args()
 
     raw = args.raw_image.read_bytes()
     args.vhdx_image.parent.mkdir(parents=True, exist_ok=True)
-    args.vhdx_image.write_bytes(vhdx(raw, args.sparse, args.partial_present))
+    args.vhdx_image.write_bytes(
+        vhdx(raw, args.sparse, args.partial_present, args.parent_required)
+    )
     print(f"created {args.vhdx_image} ({args.vhdx_image.stat().st_size} bytes)")
 
 

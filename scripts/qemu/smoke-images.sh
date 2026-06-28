@@ -80,6 +80,10 @@ create_generated_smoke_images() {
             SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-partial.vhdx"
             VHDX_ARGS+=(--partial-present)
         fi
+        if [ "$SMOKE_PARENT_VHDX" -eq 1 ]; then
+            SMOKE_VHDX_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}-parent.vhdx"
+            VHDX_ARGS+=(--parent-required)
+        fi
         require_command python3 "python3 is required to create the smoke VHDX"
         warn "Wrapping smoke disk image as VHDX..."
         python3 "${SCRIPT_DIR}/create-smoke-vhdx.py" "${VHDX_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHDX_FILE"

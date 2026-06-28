@@ -52,6 +52,7 @@ SMOKE_DYNAMIC_VHD=0
 SMOKE_VHDX=0
 SMOKE_SPARSE_VHDX=0
 SMOKE_PARTIAL_VHDX=0
+SMOKE_PARENT_VHDX=0
 SMOKE_VDI=0
 SMOKE_STATIC_VDI=0
 SMOKE_SPARSE_VDI=0
@@ -205,6 +206,14 @@ while [ $# -gt 0 ]; do
             SMOKE_BOOT=1
             SMOKE_VHDX=1
             SMOKE_PARTIAL_VHDX=1
+            shift
+            ;;
+        --smoke-parent-vhdx)
+            SMOKE=1
+            SMOKE_BOOT=1
+            SMOKE_VHDX=1
+            SMOKE_SPARSE_VHDX=1
+            SMOKE_PARENT_VHDX=1
             shift
             ;;
         --smoke-vdi)
