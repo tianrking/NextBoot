@@ -238,6 +238,21 @@ device and can copy boot images during media creation:
 This is not the preferred end-user flow; public users should receive a release
 `.img.xz` and burn it with their normal imaging tool.
 
+## Non-Destructive Update
+
+Existing NextBoot media can be updated without deleting user images. The update
+path replaces only the UEFI fallback loaders in the ESP and preserves
+`NEXTDATA`, `/ISO`, and user configuration:
+
+```bash
+TARGET=all ./scripts/build.sh release
+./scripts/update-media.sh /dev/diskX
+```
+
+This is the backend for a future user-facing updater. It is intentionally
+separate from first-install flashing because flashing a raw image erases the
+target device, while updating must not.
+
 ## Secure Boot
 
 NextBoot can be signed with a local owner-controlled key:
@@ -273,10 +288,13 @@ scripts/
   flash.sh                  Developer direct-to-device writer
   run-qemu.sh               Single QEMU scenario runner
   qemu-smoke-matrix.sh      Compatibility smoke matrix
+  update-media.sh           Non-destructive ESP bootloader updater
   check-project-health.py   CI health gate
 
 docs/
   release-media.md          Release artifact and user flow
+  uefi-product-scope.md     UEFI-only scope, plugins, and update policy
+  iso-compatibility-matrix.md
   secure-boot.md            Local Secure Boot signing
   hardware-compatibility-matrix.md
   ventoy-gap-analysis.md
@@ -285,11 +303,15 @@ docs/
 ## Roadmap
 
 The core release-media flow now exists and is tested through QEMU USB boot.
+The product scope is UEFI-only; Legacy BIOS is intentionally out of scope.
 The remaining high-value work is:
 
+- build the mainstream ISO compatibility matrix and fix failing real images
+- validate non-destructive update on real macOS, Windows, and Linux host flows
 - collect real hardware pass rows for USB stick, USB SSD, SD, SATA SSD, NVMe,
   and 4K-sector combinations
-- finish production-grade Secure Boot distribution
+- finish production-grade Secure Boot distribution after ISO compatibility is
+  proven
 - broaden real `mkfs.xfs` and real `mkfs.btrfs` compatibility beyond the
   current limited smoke subsets
 - continue expanding virtual-disk recovery and parent-locator repair tooling

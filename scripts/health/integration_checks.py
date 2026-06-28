@@ -12,6 +12,13 @@ def check_flash_dry_run() -> CheckResult:
     )
 
 
+def check_update_media_dry_run() -> CheckResult:
+    return run_script_check(
+        "check-update-media-dry-run.py",
+        "update-media dry-run preservation",
+    )
+
+
 def check_qemu_matrix() -> CheckResult:
     return run_script_check(
         "check-qemu-matrix.py",

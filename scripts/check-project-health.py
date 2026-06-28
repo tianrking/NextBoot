@@ -16,6 +16,7 @@ from health.integration_checks import (
     check_qemu_matrix,
     check_release_media,
     check_secure_boot_policy,
+    check_update_media_dry_run,
 )
 from health.rust_checks import check_build, check_host_tests
 from health.static_checks import (
@@ -28,6 +29,7 @@ from health.static_checks import (
 def run_checks(
     line_limit: int,
     skip_flash: bool,
+    skip_update_media: bool,
     skip_qemu_matrix: bool,
     skip_qemu_image_matrix: bool,
     skip_release_media: bool,
@@ -46,6 +48,8 @@ def run_checks(
     ]
     if not skip_flash:
         checks.append(check_flash_dry_run())
+    if not skip_update_media:
+        checks.append(check_update_media_dry_run())
     if not skip_qemu_matrix:
         checks.append(check_qemu_matrix())
     if not skip_qemu_image_matrix:
@@ -86,6 +90,11 @@ def parse_args() -> argparse.Namespace:
         "--skip-flash-dry-run",
         action="store_true",
         help="skip flash.sh dry-run media planning checks",
+    )
+    parser.add_argument(
+        "--skip-update-media-dry-run",
+        action="store_true",
+        help="skip update-media.sh dry-run preservation checks",
     )
     parser.add_argument(
         "--skip-qemu-matrix",
@@ -150,6 +159,7 @@ def main() -> int:
     results = run_checks(
         args.line_limit,
         args.skip_flash_dry_run,
+        args.skip_update_media_dry_run,
         args.skip_qemu_matrix,
         args.skip_qemu_image_matrix,
         args.skip_release_media,
