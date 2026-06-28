@@ -12,7 +12,7 @@
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#architecture)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#compatibility-coverage)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#feature-coverage)
-[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.1)
+[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.2)
 
 NextBoot is a Rust UEFI boot medium for USB sticks, USB SSDs, SD cards, and
 fixed-disk style SSD/NVMe deployments. The release artifact is a compressed raw
@@ -26,9 +26,9 @@ users.
 ## Quick Start
 
 1. Download the universal image from the latest GitHub release:
-   `nextboot-v0.0.1-universal-uefi.img.xz`.
+   `nextboot-v0.0.2-universal-uefi.img.xz`.
    If your flashing tool only accepts raw `.img` files, download
-   `nextboot-v0.0.1-universal-uefi.img.zip` and extract it.
+   `nextboot-v0.0.2-universal-uefi.img.zip` and extract it.
 2. Use a raw-image flasher such as balenaEtcher, Raspberry Pi Imager, Rufus,
    Win32 Disk Imager, or GNOME Disks.
 3. Select the NextBoot image, select an 8GB-or-larger USB stick, USB SSD, SD
@@ -49,11 +49,11 @@ expand `NEXTDATA` on first boot.
 The customer-facing release is a single universal image:
 
 ```text
-nextboot-v0.0.1-universal-uefi.img.xz
-nextboot-v0.0.1-universal-uefi.img.zip
+nextboot-v0.0.2-universal-uefi.img.xz
+nextboot-v0.0.2-universal-uefi.img.zip
 ```
 
-Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.0.1>
+Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.0.2>
 
 It contains:
 

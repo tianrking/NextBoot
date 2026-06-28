@@ -12,7 +12,7 @@
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#架构)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#兼容性覆盖)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#功能覆盖)
-[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.1)
+[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.2)
 
 NextBoot 是一个用 Rust 编写的 UEFI 启动介质项目，面向 U 盘、USB SSD、SD 卡，以及固定磁盘风格的 SSD/NVMe 部署。发布物是一个压缩后的 raw 磁盘镜像：用户用常见烧录工具写入整块设备，打开可见的 `NEXTDATA` 分区，把 ISO/WIM/VHD/VHDX/IMG/EFI 文件拖到 `/ISO`，然后从主板或电脑固件的 UEFI 启动菜单选择这块设备。
 
@@ -21,9 +21,9 @@ NextBoot 是一个用 Rust 编写的 UEFI 启动介质项目，面向 U 盘、US
 ## 快速开始
 
 1. 从最新 GitHub Release 下载通用镜像：
-   `nextboot-v0.0.1-universal-uefi.img.xz`。
+   `nextboot-v0.0.2-universal-uefi.img.xz`。
    如果你的烧录工具只接受 raw `.img` 文件，下载
-   `nextboot-v0.0.1-universal-uefi.img.zip` 并解压。
+   `nextboot-v0.0.2-universal-uefi.img.zip` 并解压。
 2. 使用 balenaEtcher、Raspberry Pi Imager、Rufus、Win32 Disk Imager、GNOME Disks 或其他 raw 镜像写入工具。
 3. 选择 NextBoot 镜像，选择 8GB 或更大的 U 盘、USB SSD、SD 卡或外置 SSD，然后执行烧录/写入。
 4. 烧录完成后打开可见的 `NEXTDATA` 分区。
@@ -37,11 +37,11 @@ NextBoot 是一个用 Rust 编写的 UEFI 启动介质项目，面向 U 盘、US
 面向用户的发布物是一份通用镜像：
 
 ```text
-nextboot-v0.0.1-universal-uefi.img.xz
-nextboot-v0.0.1-universal-uefi.img.zip
+nextboot-v0.0.2-universal-uefi.img.xz
+nextboot-v0.0.2-universal-uefi.img.zip
 ```
 
-最新发布：<https://github.com/tianrking/NextBoot/releases/tag/v0.0.1>
+最新发布：<https://github.com/tianrking/NextBoot/releases/tag/v0.0.2>
 
 它包含：
 
