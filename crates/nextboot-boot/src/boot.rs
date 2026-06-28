@@ -32,6 +32,7 @@ mod wimboot_callbacks;
 mod wimboot_flow;
 mod wimboot_resources;
 mod wimboot_runtime;
+mod wimboot_windows;
 use errors::virtio_error_to_uefi_status;
 use model::VirtualBootDevice;
 #[allow(unused_imports)]
