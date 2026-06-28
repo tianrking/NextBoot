@@ -3,10 +3,10 @@
 //! 用于检测设备上的分区布局
 
 use crate::FsError;
-use alloc::vec::Vec;
-use alloc::string::String;
-use byteorder::{LittleEndian, ByteOrder};
 use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use byteorder::{ByteOrder, LittleEndian};
 
 /// GPT 头
 #[repr(C, packed)]
@@ -33,9 +33,7 @@ impl GptHeader {
 
     /// 验证 GPT 头
     pub fn is_valid(&self) -> bool {
-        self.signature == Self::SIGNATURE
-            && self.revision >= 0x00010000
-            && self.header_size >= 92
+        self.signature == Self::SIGNATURE && self.revision >= 0x00010000 && self.header_size >= 92
     }
 
     /// 获取磁盘 GUID 字符串
@@ -128,56 +126,56 @@ impl GptPartition {
 pub mod partition_types {
     /// EFI 系统分区
     pub const ESP: [u8; 16] = [
-        0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
-        0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b
+        0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9,
+        0x3b,
     ];
 
     /// Microsoft 基本数据分区
     pub const MICROSOFT_BASIC: [u8; 16] = [
-        0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44,
-        0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7
+        0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44, 0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99,
+        0xc7,
     ];
 
     /// Microsoft 保留分区
     pub const MICROSOFT_RESERVED: [u8; 16] = [
-        0x16, 0xe3, 0xc9, 0xe3, 0x5c, 0x0b, 0xb9, 0x45,
-        0x9c, 0xfc, 0xa1, 0x02, 0x14, 0x94, 0x96, 0x13
+        0x16, 0xe3, 0xc9, 0xe3, 0x5c, 0x0b, 0xb9, 0x45, 0x9c, 0xfc, 0xa1, 0x02, 0x14, 0x94, 0x96,
+        0x13,
     ];
 
     /// Linux 文件系统
     pub const LINUX_FILESYSTEM: [u8; 16] = [
-        0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47,
-        0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d, 0xe4
+        0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47, 0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d,
+        0xe4,
     ];
 
     /// Linux Swap
     pub const LINUX_SWAP: [u8; 16] = [
-        0x06, 0x57, 0xfd, 0x6d, 0xa4, 0xab, 0x43, 0xc4,
-        0x84, 0xe5, 0x09, 0x33, 0xc8, 0x4b, 0x4f, 0x4f
+        0x06, 0x57, 0xfd, 0x6d, 0xa4, 0xab, 0x43, 0xc4, 0x84, 0xe5, 0x09, 0x33, 0xc8, 0x4b, 0x4f,
+        0x4f,
     ];
 
     /// Linux LVM
     pub const LINUX_LVM: [u8; 16] = [
-        0xe6, 0xd6, 0xd3, 0x79, 0xf5, 0x87, 0x6b, 0x44,
-        0xa7, 0x23, 0x95, 0x2c, 0x71, 0x8a, 0x5d, 0x9b
+        0xe6, 0xd6, 0xd3, 0x79, 0xf5, 0x87, 0x6b, 0x44, 0xa7, 0x23, 0x95, 0x2c, 0x71, 0x8a, 0x5d,
+        0x9b,
     ];
 
     /// Linux RAID
     pub const LINUX_RAID: [u8; 16] = [
-        0xa1, 0x9d, 0x8b, 0x27, 0x8b, 0xd9, 0x47, 0x46,
-        0xa9, 0x8f, 0x4e, 0x09, 0x09, 0xf9, 0xc4, 0x6d
+        0xa1, 0x9d, 0x8b, 0x27, 0x8b, 0xd9, 0x47, 0x46, 0xa9, 0x8f, 0x4e, 0x09, 0x09, 0xf9, 0xc4,
+        0x6d,
     ];
 
     /// Apple HFS+
     pub const APPLE_HFS: [u8; 16] = [
-        0x00, 0x53, 0x46, 0x48, 0x00, 0x00, 0xaa, 0x11,
-        0xaa, 0x11, 0x00, 0x30, 0x65, 0x43, 0xec, 0xac
+        0x00, 0x53, 0x46, 0x48, 0x00, 0x00, 0xaa, 0x11, 0xaa, 0x11, 0x00, 0x30, 0x65, 0x43, 0xec,
+        0xac,
     ];
 
     /// BIOS 引导分区
     pub const BIOS_BOOT: [u8; 16] = [
-        0x21, 0x68, 0x61, 0x48, 0x64, 0x49, 0x6e, 0x6f,
-        0x74, 0x4e, 0x61, 0x6d, 0x65, 0x53, 0x70, 0x65
+        0x21, 0x68, 0x61, 0x48, 0x64, 0x49, 0x6e, 0x6f, 0x74, 0x4e, 0x61, 0x6d, 0x65, 0x53, 0x70,
+        0x65,
     ];
 }
 
@@ -195,22 +193,24 @@ pub struct GptDisk {
 impl GptDisk {
     /// 从原始数据解析 GPT
     pub fn parse(data: &[u8], block_size: u32) -> Result<Self, FsError> {
+        if block_size == 0 || block_size % 512 != 0 {
+            return Err(FsError::InvalidArgument);
+        }
+
         // 检查保护性 MBR
         if !check_protective_mbr(data) {
             return Err(FsError::InvalidSignature);
         }
 
         // 解析 GPT 头 (LBA 1)
-        let header_offset = block_size as usize;
-        if data.len() < header_offset + core::mem::size_of::<GptHeader>() {
-            return Err(FsError::ReadError);
-        }
+        let header_offset = lba_offset(1, block_size)?;
+        let header_size = core::mem::size_of::<GptHeader>();
+        let header_data = checked_slice(data, header_offset, header_size)?;
 
-        let header: GptHeader = unsafe {
-            core::ptr::read_unaligned(data[header_offset..].as_ptr() as *const GptHeader)
-        };
+        let header: GptHeader =
+            unsafe { core::ptr::read_unaligned(header_data.as_ptr() as *const GptHeader) };
 
-        if !header.is_valid() {
+        if !header_layout_is_supported(&header, block_size) {
             return Err(FsError::InvalidSignature);
         }
 
@@ -231,7 +231,8 @@ impl GptDisk {
 
     /// 获取数据分区 (第一个非 ESP 的可读分区)
     pub fn get_data_partition(&self) -> Option<&GptPartition> {
-        self.partitions.iter()
+        self.partitions
+            .iter()
             .filter(|p| !p.is_esp())
             .filter(|p| p.is_microsoft_basic() || p.is_linux())
             .next()
@@ -239,7 +240,8 @@ impl GptDisk {
 
     /// 查找分区
     pub fn find_partition(&self, name: &str) -> Option<&GptPartition> {
-        self.partitions.iter()
+        self.partitions
+            .iter()
             .find(|p| p.name.eq_ignore_ascii_case(name))
     }
 }
@@ -269,24 +271,34 @@ fn parse_partition_entries(
     let mut partitions = Vec::new();
 
     let entry_lba = header.partition_entry_lba;
-    let entry_offset = entry_lba as usize * block_size as usize;
-    let entry_size = header.partition_entry_size as usize;
-    let num_entries = header.num_partition_entries as usize;
+    let entry_offset = lba_offset(entry_lba, block_size)?;
+    let entry_size =
+        usize::try_from(header.partition_entry_size).map_err(|_| FsError::ReadError)?;
+    let num_entries =
+        usize::try_from(header.num_partition_entries).map_err(|_| FsError::ReadError)?;
+    let entry_bytes = entry_size
+        .checked_mul(num_entries)
+        .ok_or(FsError::ReadError)?;
+    checked_slice(data, entry_offset, entry_bytes)?;
 
     for i in 0..num_entries {
-        let offset = entry_offset + i * entry_size;
-        if offset + entry_size > data.len() {
-            break;
-        }
-
-        let entry_data = &data[offset..offset + entry_size];
+        let offset = entry_offset
+            .checked_add(i.checked_mul(entry_size).ok_or(FsError::ReadError)?)
+            .ok_or(FsError::ReadError)?;
+        let entry_data = checked_slice(data, offset, entry_size)?;
 
         // 检查是否为空条目 (类型 GUID 全零)
         if entry_data[..16].iter().all(|&b| b == 0) {
             continue;
         }
 
-        let partition = parse_single_partition(entry_data);
+        let partition = parse_single_partition(entry_data)?;
+        if partition.start_lba > partition.end_lba
+            || partition.start_lba < header.first_usable_lba
+            || partition.end_lba > header.last_usable_lba
+        {
+            return Err(FsError::Corrupted);
+        }
         partitions.push(partition);
     }
 
@@ -294,7 +306,11 @@ fn parse_partition_entries(
 }
 
 /// 解析单个分区条目
-fn parse_single_partition(data: &[u8]) -> GptPartition {
+fn parse_single_partition(data: &[u8]) -> Result<GptPartition, FsError> {
+    if data.len() < 128 {
+        return Err(FsError::ReadError);
+    }
+
     let mut type_guid = [0u8; 16];
     type_guid.copy_from_slice(&data[0..16]);
 
@@ -308,14 +324,14 @@ fn parse_single_partition(data: &[u8]) -> GptPartition {
     // 名称是 UTF-16LE
     let name = decode_utf16(&data[56..128]);
 
-    GptPartition {
+    Ok(GptPartition {
         type_guid,
         partition_guid,
         start_lba,
         end_lba,
         attributes,
         name,
-    }
+    })
 }
 
 /// 解码 UTF-16LE 字符串
@@ -343,28 +359,49 @@ pub fn is_esp_partition(partition: &GptPartition) -> bool {
 
 /// 检测块大小 (512B 或 4K)
 pub fn detect_block_size(data: &[u8]) -> u32 {
+    if !check_protective_mbr(data) {
+        return 512;
+    }
+
     // 尝试 512 字节
-    if data.len() >= 1024 {
-        let gpt_offset_512 = 512;
-        if data.len() > gpt_offset_512 + 8 {
-            if &data[gpt_offset_512..gpt_offset_512 + 8] == b"EFI PART" {
-                return 512;
-            }
-        }
+    if has_gpt_signature_at(data, 512) {
+        return 512;
     }
 
     // 尝试 4096 字节
-    if data.len() >= 8192 {
-        let gpt_offset_4k = 4096;
-        if data.len() > gpt_offset_4k + 8 {
-            if &data[gpt_offset_4k..gpt_offset_4k + 8] == b"EFI PART" {
-                return 4096;
-            }
-        }
+    if has_gpt_signature_at(data, 4096) {
+        return 4096;
     }
 
     // 默认 512
     512
+}
+
+fn header_layout_is_supported(header: &GptHeader, block_size: u32) -> bool {
+    header.is_valid()
+        && header.my_lba == 1
+        && header.header_size <= block_size
+        && header.first_usable_lba <= header.last_usable_lba
+        && header.partition_entry_lba > 1
+        && header.num_partition_entries > 0
+        && header.partition_entry_size >= 128
+        && header.partition_entry_size % 8 == 0
+}
+
+fn lba_offset(lba: u64, block_size: u32) -> Result<usize, FsError> {
+    let offset = lba
+        .checked_mul(u64::from(block_size))
+        .ok_or(FsError::ReadError)?;
+    usize::try_from(offset).map_err(|_| FsError::ReadError)
+}
+
+fn checked_slice(data: &[u8], offset: usize, len: usize) -> Result<&[u8], FsError> {
+    let end = offset.checked_add(len).ok_or(FsError::ReadError)?;
+    data.get(offset..end).ok_or(FsError::ReadError)
+}
+
+fn has_gpt_signature_at(data: &[u8], offset: usize) -> bool {
+    data.get(offset..offset.saturating_add(8)) == Some(b"EFI PART")
 }
 
 /// MBR 分区表 (用于兼容性检测)
@@ -424,3 +461,6 @@ pub fn parse_mbr(data: &[u8]) -> Option<Vec<MbrPartition>> {
         Some(partitions)
     }
 }
+
+#[cfg(test)]
+mod tests;

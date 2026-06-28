@@ -2,14 +2,14 @@
 //!
 //! 负责 UEFI 服务初始化和设备检测
 
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use log::debug;
 use uefi::prelude::*;
 use uefi::proto::media::block::BlockIO;
 use uefi::table::boot::{BootServices, SearchType};
 use uefi::Identify;
-use alloc::vec::Vec;
-use alloc::string::String;
-use alloc::format;
-use log::debug;
 
 /// 初始化 UEFI 服务
 pub fn uefi_services(st: &mut SystemTable<Boot>) -> uefi::Result<()> {
@@ -45,7 +45,11 @@ impl StorageDevice {
     /// 获取设备描述
     pub fn description(&self) -> String {
         let device_type = if self.removable { "Removable" } else { "Fixed" };
-        let sector_type = if self.block_size == 4096 { "4K" } else { "512B" };
+        let sector_type = if self.block_size == 4096 {
+            "4K"
+        } else {
+            "512B"
+        };
 
         format!(
             "{} {} ({}, {} sectors)",
@@ -105,7 +109,8 @@ pub fn detect_storage_devices(bt: &BootServices) -> uefi::Result<Vec<StorageDevi
 
     // 排序: 可移动设备优先
     devices.sort_by(|a, b| {
-        b.removable.cmp(&a.removable)
+        b.removable
+            .cmp(&a.removable)
             .then_with(|| a.index.cmp(&b.index))
     });
 
@@ -282,8 +287,10 @@ pub fn delay_ms(bt: &BootServices, milliseconds: u64) {
             None,
             None,
         )
-    }.unwrap();
-    bt.set_timer(&event, TimerTrigger::Relative(10_000_000 * milliseconds)).ok();
+    }
+    .unwrap();
+    bt.set_timer(&event, TimerTrigger::Relative(10_000_000 * milliseconds))
+        .ok();
     let mut events = [event];
     bt.wait_for_event(&mut events).ok();
 }
