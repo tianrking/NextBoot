@@ -44,9 +44,9 @@ Options:
 
 The generated image contains a FAT32 ESP and a user-visible Data partition with
 /ISO already present. exFAT release media reserves growth metadata so NextBoot
-can expand NEXTDATA after the image is written to larger storage. Use
-burn-release-media.sh for the one-command write-and-grow flow, then drag ISO,
-WIM, VHD, VHDX, IMG, or EFI files into /ISO and boot from the device in UEFI.
+can expand NEXTDATA after the image is written to larger storage. Users flash
+the .img with a normal raw-image writer, then drag ISO, WIM, VHD, VHDX, IMG,
+or EFI files into /ISO and boot from the device in UEFI.
 USAGE
 }
 
@@ -287,4 +287,4 @@ echo "Embedded ${#EFI_FILES[@]} UEFI fallback loader(s): ${EFI_BOOT_NAMES[*]}"
 if [ "$DATA_FS" = "exfat" ]; then
     echo "Growable NEXTDATA target ceiling: ${GROWABLE_MAX_SIZE_MB} MiB."
 fi
-echo "Use burn-release-media.sh to write and grow this image, then drag boot images into /ISO."
+echo "Flash this .img with a normal raw-image writer, then drag boot images into /ISO."

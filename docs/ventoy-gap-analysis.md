@@ -75,9 +75,10 @@ workflows and which gaps are still worth pursuing.
   publish one universal image instead of 8GB/32GB capacity tiers. The release
   image reserves growable exFAT metadata, and NextBoot can expand GPT plus
   `NEXTDATA` after the image is written to larger USB, SSD, or SD media.
-  The release burn tool performs that write-and-grow flow in one command so
-  users can drag boot images into `/ISO` immediately after flashing. Firmware
-  first-boot growth remains a fallback for generic raw image writers.
+  Users flash the image with normal raw-image writers such as balenaEtcher,
+  Raspberry Pi Imager, Rufus, Win32 Disk Imager, or GNOME Disks, then drag boot
+  images into `/ISO`. Firmware first-boot growth handles larger target media
+  because generic flashers do not rewrite GPT/exFAT for the destination size.
 
 ## Useful Ventoy Ideas Still Open
 

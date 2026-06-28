@@ -73,24 +73,28 @@ jobs:
           cd target/release-media
           for image in nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img; do
             xz -T0 -0 -f -k "$image"
+            python3 - "$image" <<'PY'
+import sys
+import zipfile
+
+image = sys.argv[1]
+with zipfile.ZipFile(f"{image}.zip", "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
+    archive.write(image, arcname=image)
+PY
           done
-          tar -czf "nextboot-${{ steps.version.outputs.version }}-tools.tar.gz" \
-            -C ../.. \
-            scripts/burn-release-media.sh \
-            scripts/grow-release-media.py
           sha256sum \
             nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img \
             nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.xz \
-            nextboot-${{ steps.version.outputs.version }}-tools.tar.gz \
+            nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.zip \
             > "SHA256SUMS-${{ steps.version.outputs.version }}.txt"
 
       - name: Verify compressed release assets
         shell: bash
         run: |
           test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.xz"
-          test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-tools.tar.gz"
+          test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.zip"
           test -s "target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt"
-          ls -lh target/release-media/*.img.xz target/release-media/*.tar.gz target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt
+          ls -lh target/release-media/*.img.xz target/release-media/*.img.zip target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt
 
       - name: Remove superseded single-arch release assets
         uses: actions/github-script@v7
@@ -117,7 +121,8 @@ jobs:
                 asset.name.includes("x86_64-unknown-uefi") ||
                 asset.name.includes("all-uefi-512b-exfat") ||
                 asset.name.includes("all-uefi-8gb-512b-exfat") ||
-                asset.name.includes("all-uefi-32gb-512b-exfat")
+                asset.name.includes("all-uefi-32gb-512b-exfat") ||
+                asset.name.includes("tools.tar.gz")
               ) {
                 core.info(`Deleting superseded asset ${asset.name}`);
                 await github.rest.repos.deleteReleaseAsset({
@@ -135,18 +140,18 @@ jobs:
           name: NextBoot ${{ steps.version.outputs.version }}
           overwrite_files: true
           body: |
-            Download the universal `.img.xz` file and flash it as a whole-disk image to a USB stick, USB SSD, SD card, or external SSD.
+            Download the universal release image and flash it as a whole-disk image to an 8GB-or-larger USB stick, USB SSD, SD card, or external SSD.
 
-            Recommended macOS/Linux flow: download `nextboot-${{ steps.version.outputs.version }}-tools.tar.gz`, extract it, and run `./scripts/burn-release-media.sh --image nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.xz /dev/diskX`. The burn tool writes the image and expands `NEXTDATA` to the target device in one step.
+            Recommended GUI flow: use balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk Imager, GNOME Disks, or another raw-image flasher. Select the NextBoot image, select the target device, and flash/write it.
 
-            You can also flash it from Windows, macOS, or Linux with tools such as Rufus, balenaEtcher, Raspberry Pi Imager, GNOME Disks, or another raw image writer. If your writer does not accept `.img.xz` directly, decompress it to `.img` first.
+            balenaEtcher and Raspberry Pi Imager can commonly flash compressed images directly. Rufus and Win32 Disk Imager expect a raw `.img`; if your flasher does not accept `.img.xz`, download the `.img.zip`, extract it, then select the extracted `.img`. If Rufus asks for a mode, choose DD/raw image mode.
 
-            Flashing erases the selected target device. Do not copy the `.img.xz` file into an existing USB drive; write the image to the device.
+            Flashing erases the selected target device. Do not copy the `.img.xz` or `.img.zip` file into an existing USB drive; write the image to the whole device.
 
             The image contains `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and `EFI/BOOT/BOOTAA64.EFI` fallback loaders for x86_64, IA32, and AArch64 UEFI firmware. Legacy BIOS is not included, and Secure Boot still requires disabled Secure Boot or an enrolled local key.
 
-            If you use a generic image writer on large media, boot NextBoot once so it can expand the `NEXTDATA` partition to the target device. With the burn tool, open `NEXTDATA` after the command finishes, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and boot from the firmware UEFI boot menu.
+            After flashing, open `NEXTDATA`, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and boot from the firmware UEFI boot menu. On media larger than the release image, NextBoot can expand `NEXTDATA` on first boot.
           files: |
             target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.xz
-            target/release-media/nextboot-${{ steps.version.outputs.version }}-tools.tar.gz
+            target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.zip
             target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt

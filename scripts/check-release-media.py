@@ -3,17 +3,18 @@
 
 from __future__ import annotations
 
+import filecmp
 import lzma
 import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 RELEASE_SCRIPT = PROJECT_DIR / "scripts" / "create-release-media.sh"
-BURN_SCRIPT = PROJECT_DIR / "scripts" / "burn-release-media.sh"
 GROW_SCRIPT = PROJECT_DIR / "scripts" / "grow-release-media.py"
 VERIFY_SCRIPT = PROJECT_DIR / "scripts" / "verify-qemu-image.py"
 
@@ -82,6 +83,24 @@ def compress_xz(source: Path, target: Path) -> None:
         shutil.copyfileobj(src, dst, length=1024 * 1024)
 
 
+def make_zip(source: Path, target: Path) -> None:
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
+        archive.write(source, arcname=source.name)
+
+
+def decompress_xz(source: Path, target: Path) -> None:
+    with lzma.open(source, "rb") as src, target.open("wb") as dst:
+        shutil.copyfileobj(src, dst, length=1024 * 1024)
+
+
+def extract_single_zip(source: Path, target_dir: Path) -> Path:
+    with zipfile.ZipFile(source) as archive:
+        names = archive.namelist()
+        require(len(names) == 1 and names[0].endswith(".img"), f"unexpected zip contents: {names}")
+        archive.extract(names[0], target_dir)
+        return target_dir / names[0]
+
+
 def main() -> int:
     try:
         target_dir = PROJECT_DIR / "target"
@@ -108,33 +127,23 @@ def main() -> int:
             compressed_multi = workdir / "release-multi-efi.img.xz"
             compress_xz(workdir / "release-multi-efi.img", compressed_multi)
 
-            burn_target = workdir / "burned-target.img"
-            with burn_target.open("wb") as target:
-                target.truncate(256 * 1024 * 1024)
-            burn = subprocess.run(
-                [
-                    str(BURN_SCRIPT),
-                    "--allow-file",
-                    "--no-mount",
-                    "-y",
-                    "--image",
-                    str(compressed_multi),
-                    str(burn_target),
-                ],
-                cwd=PROJECT_DIR,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                check=False,
-            )
-            require(burn.returncode == 0, burn.stdout)
-            require("Done. Open NEXTDATA" in burn.stdout, burn.stdout)
+            zipped_multi = workdir / "release-multi-efi.img.zip"
+            make_zip(workdir / "release-multi-efi.img", zipped_multi)
 
-            verify_burn = subprocess.run(
+            raw_copy = workdir / "raw-flasher-copy.img"
+            decompress_xz(compressed_multi, raw_copy)
+            require(filecmp.cmp(raw_copy, workdir / "release-multi-efi.img", shallow=False), "xz raw copy mismatch")
+
+            zip_extract_dir = workdir / "zip-extract"
+            zip_extract_dir.mkdir()
+            zip_copy = extract_single_zip(zipped_multi, zip_extract_dir)
+            require(filecmp.cmp(zip_copy, workdir / "release-multi-efi.img", shallow=False), "zip raw copy mismatch")
+
+            verify_raw_copy = subprocess.run(
                 [
                     str(VERIFY_SCRIPT),
                     "--disk-image",
-                    str(burn_target),
+                    str(raw_copy),
                     "--sector-size",
                     "512",
                     "--layout",
@@ -156,7 +165,7 @@ def main() -> int:
                 stderr=subprocess.STDOUT,
                 check=False,
             )
-            require(verify_burn.returncode == 0, verify_burn.stdout)
+            require(verify_raw_copy.returncode == 0, verify_raw_copy.stdout)
 
             default_capacity = run_case(
                 workdir,
