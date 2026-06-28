@@ -102,6 +102,9 @@ if [ "${NEXTBOOT_FULL_QEMU_MATRIX:-0}" = "1" ]; then
     run_case "nvme 4K split XFS smoke ISO" \
         --bus nvme --layout split --data-fs xfs --sector-size 4096 --smoke-efi-iso
 
+    run_case "nvme 4K split Btrfs smoke ISO" \
+        --bus nvme --layout split --data-fs btrfs --sector-size 4096 --smoke-efi-iso
+
     run_case "nvme 512 split XFS smoke ISO" \
         --bus nvme --layout split --data-fs xfs --sector-size 512 --smoke-efi-iso
 

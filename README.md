@@ -8,7 +8,7 @@ NextBoot 是一个基于 Rust 的 UEFI 启动加载器，核心功能是无需�
 
 ## 功能特性
 
-- ✅ 支持 FAT32/exFAT/ext2/ext3/ext4/NTFS/UDF/XFS/ISO9660 文件系统
+- ✅ 支持 FAT32/exFAT/ext2/ext3/ext4/NTFS/UDF/XFS/ISO9660 文件系统，Btrfs 受限 QEMU/boot smoke 路径
 - ✅ GPT 分区表解析
 - ✅ 虚拟 Block IO 设备模拟
 - ✅ 图形化菜单界面 (GOP)
@@ -189,6 +189,9 @@ TARGET=aarch64-unknown-uefi ./scripts/run-qemu.sh --bus virtio --smoke-efi-iso
 # 用受限 XFS Data 分区覆盖 XFS extent 读取框架
 ./scripts/run-qemu.sh --bus nvme --layout split --data-fs xfs --sector-size 4096 --smoke-efi-iso
 
+# 用受限 Btrfs Data 分区覆盖 Btrfs superblock + extent/目录读取框架
+./scripts/run-qemu.sh --bus nvme --layout split --data-fs btrfs --sector-size 4096 --smoke-efi-iso
+
 # 启动 QEMU 并自动断言 NextBoot 扫描到镜像、进入菜单
 ./scripts/run-qemu.sh --bus nvme --layout split --sector-size 4096 --image ~/Downloads/ubuntu.iso --smoke
 
@@ -223,18 +226,19 @@ TARGET=aarch64-unknown-uefi ./scripts/run-qemu.sh --bus virtio --smoke-efi-iso
 ./scripts/qemu-smoke-matrix.sh
 ```
 
-`run-qemu.sh` 会直接创建 GPT/FAT32/exFAT/ext2/ext3/ext4/NTFS/UDF/XFS 磁盘镜像，并支持 `virtio`、`nvme`、`sata`、
+`run-qemu.sh` 会直接创建 GPT/FAT32/exFAT/ext2/ext3/ext4/NTFS/UDF/XFS/Btrfs 磁盘镜像，并支持 `virtio`、`nvme`、`sata`、
 `usb`、`sd` 五种 QEMU 存储路径，用来覆盖固定盘、可移动盘和 SD 控制器路径的启动差异。`--sector-size
 4096` 会生成 4K Native 测试盘，并让 QEMU 设备暴露 4096B logical/physical block
 size，用来复现新 SSD 和高性能移动硬盘常见的扇区尺寸差异。`--layout split` 会
 生成独立 ESP 和 Data 分区：ESP 只放当前目标架构的 fallback EFI（x86_64 为
 `BOOTX64.EFI`，IA32 为 `BOOTIA32.EFI`，AArch64 为 `BOOTAA64.EFI`），Data 分区放 `/ISO`，用于验证
-固定盘上“引导分区与镜像分区分离”的真实部署路径；`--data-fs exfat|ext2|ext3|ext4|fat32|ntfs|udf|xfs` 可覆盖
-默认写盘布局、Linux ext 系列数据盘、FAT32 兼容布局、NTFS 大文件布局和 UDF 数据盘布局。生成后脚本会调用
-`verify-qemu-image.py` 校验 GPT CRC、分区布局、FAT32/exFAT/ext2/3/4/NTFS/UDF/XFS 目录、fallback EFI、
+固定盘上“引导分区与镜像分区分离”的真实部署路径；`--data-fs btrfs|exfat|ext2|ext3|ext4|fat32|ntfs|udf|xfs` 可覆盖
+默认写盘布局、Linux ext 系列数据盘、FAT32 兼容布局、NTFS 大文件布局、UDF 数据盘布局和 Btrfs 受限 smoke 布局。生成后脚本会调用
+`verify-qemu-image.py` 校验 GPT CRC、分区布局、FAT32/exFAT/ext2/3/4/NTFS/UDF/XFS/Btrfs 目录、fallback EFI、
 `/ISO` 文件和物理 extent。XFS QEMU 路径覆盖 512B/4K 设备扇区上的 4K XFS 文件系统块、
-真实 inode 编号映射、shortform 目录、dir2/dir3 block/data 目录和 NextBoot 小目录子集；真实
-`mkfs.xfs` 更复杂的大目录/btree 形态仍在 gap 列表中；`--smoke`
+真实 inode 编号映射、shortform 目录、dir2/dir3 block/data 目录和 NextBoot 小目录子集；Btrfs QEMU 路径覆盖真实 Btrfs
+superblock 签名和 NextBoot 受限 extent/目录映射；真实 `mkfs.xfs` 更复杂的大目录/btree 形态和真实 `mkfs.btrfs`
+校验和 B-tree 形态仍在 gap 列表中；`--smoke`
 会继续启动 QEMU 并检查 NextBoot 日志里是否进入扫描/菜单阶段；`--smoke-boot` 会
 自动按 Enter 并检查是否安装虚拟 Block IO；`--smoke-efi-iso` 会生成一个带 EFI
 El Torito boot catalog、内含当前架构 `/EFI/BOOT/BOOT*.EFI` fallback 的最小 ISO，并继续验证该 EFI
@@ -283,7 +287,7 @@ split/single 布局和 `--target all` 多架构 ESP fallback 安装。
 真实硬件测试用 `./scripts/hardware-report.sh` 生成统一报告，并可追加
 `docs/hardware/hardware-matrix.csv`。推荐覆盖项见
 `docs/hardware-compatibility-matrix.md`，包括内置 NVMe SSD、USB SSD 盒、传统 U 盘、
-SATA SSD、SD 读卡器、512B/4K 扇区和 exFAT/NTFS/ext/UDF/XFS Data 分区组合。
+SATA SSD、SD 读卡器、512B/4K 扇区和 exFAT/NTFS/ext/UDF/XFS/Btrfs Data 分区组合。
 
 ### 写入 U 盘
 

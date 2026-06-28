@@ -9,6 +9,7 @@ import uuid
 import zlib
 
 from disk_image.exfat import write_exfat_volume
+from disk_image.btrfs import write_btrfs_volume
 from disk_image.fat_names import Directory, fat_label, split_virtual_path
 from disk_image.ext4 import write_ext4_volume
 from disk_image.fat32 import write_fat32_volume
@@ -39,8 +40,8 @@ if sector_size not in (512, 4096):
     raise SystemExit("sector size must be 512 or 4096")
 if layout not in ("single", "split"):
     raise SystemExit("layout must be single or split")
-if data_fs not in ("exfat", "ext2", "ext3", "ext4", "fat32", "ntfs", "udf", "xfs"):
-    raise SystemExit("data filesystem must be exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs")
+if data_fs not in ("btrfs", "exfat", "ext2", "ext3", "ext4", "fat32", "ntfs", "udf", "xfs"):
+    raise SystemExit("data filesystem must be btrfs, exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs")
 if efi_boot_name not in ("BOOTX64.EFI", "BOOTIA32.EFI", "BOOTAA64.EFI"):
     raise SystemExit("EFI boot name must be BOOTX64.EFI, BOOTIA32.EFI, or BOOTAA64.EFI")
 total_bytes = size_mb * 1024 * 1024
@@ -151,9 +152,9 @@ def make_partition(name, label, fs_type, type_guid, start_lba, end_lba, include_
     elif fs_type == "udf":
         if part_sectors <= 512:
             raise SystemExit("partition is too small for UDF")
-    elif fs_type == "xfs":
+    elif fs_type in ("btrfs", "xfs"):
         if part_sectors * sector_size <= 256 * 4096:
-            raise SystemExit("partition is too small for XFS")
+            raise SystemExit(f"partition is too small for {fs_type}")
     else:
         raise SystemExit(f"unsupported test partition filesystem: {fs_type}")
     return {
@@ -352,5 +353,7 @@ with open(path, "wb") as f:
             write_udf_volume(f, part, volume_deps)
         elif part["fs_type"] == "xfs":
             write_xfs_volume(f, part, volume_deps)
+        elif part["fs_type"] == "btrfs":
+            write_btrfs_volume(f, part, volume_deps)
         else:
             write_fat32_volume(f, part, volume_deps)

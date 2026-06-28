@@ -19,6 +19,7 @@ mod filesystem;
 mod paths;
 mod types;
 
+pub mod btrfs;
 pub mod exfat;
 pub mod ext4;
 pub mod fat32;

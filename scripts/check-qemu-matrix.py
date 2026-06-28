@@ -148,6 +148,10 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
         ("--bus nvme", "--layout split", "--data-fs xfs", "--sector-size 4096", "--smoke-efi-iso"),
     ),
     MatrixRequirement(
+        "full NVMe 4K split Btrfs ISO boot",
+        ("--bus nvme", "--layout split", "--data-fs btrfs", "--sector-size 4096", "--smoke-efi-iso"),
+    ),
+    MatrixRequirement(
         "full NVMe 512 split XFS ISO boot",
         ("--bus nvme", "--layout split", "--data-fs xfs", "--sector-size 512", "--smoke-efi-iso"),
     ),

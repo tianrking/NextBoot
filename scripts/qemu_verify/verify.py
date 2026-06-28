@@ -16,6 +16,7 @@ from .common import (
     parse_gpt,
     require,
 )
+from .btrfs import BtrfsVolume
 from .exfat import ExFatVolume
 from .ext4 import Ext4Volume
 from .fat32 import Fat32Volume
@@ -36,6 +37,8 @@ def make_volume(image: DiskImage, partition: Partition, expected_fs: str):
         return UdfVolume(image, partition)
     if expected_fs == "xfs":
         return XfsVolume(image, partition)
+    if expected_fs == "btrfs":
+        return BtrfsVolume(image, partition)
     raise VerifyError(f"unsupported expected filesystem {expected_fs}")
 
 

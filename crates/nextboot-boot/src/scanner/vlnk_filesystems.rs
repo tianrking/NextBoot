@@ -2,6 +2,7 @@ use super::model::IsoFile;
 use super::IsoScanner;
 use crate::source_disk::SourceDiskIdentity;
 use crate::ventoy_config::VentoyConfig;
+use nextboot_fs::btrfs::Btrfs;
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::ext4::Ext4;
 use nextboot_fs::fat32::Fat32;
@@ -75,6 +76,10 @@ impl<'a> IsoScanner<'a> {
                 .ok()
                 .and_then(|fs| self.build_vlnk_from_target_fs(&target, &fs))
                 .or_else(|| self.probe_vlnk_fallback_filesystems(shared, &target)),
+            FileSystemType::Btrfs => Btrfs::open(shared.clone())
+                .ok()
+                .and_then(|fs| self.build_vlnk_from_target_fs(&target, &fs))
+                .or_else(|| self.probe_vlnk_fallback_filesystems(shared, &target)),
             _ => self.probe_vlnk_fallback_filesystems(shared, &target),
         }
     }
@@ -94,6 +99,11 @@ impl<'a> IsoScanner<'a> {
             })
             .or_else(|| {
                 Xfs::open(shared.clone())
+                    .ok()
+                    .and_then(|fs| self.build_vlnk_from_target_fs(target, &fs))
+            })
+            .or_else(|| {
+                Btrfs::open(shared.clone())
                     .ok()
                     .and_then(|fs| self.build_vlnk_from_target_fs(target, &fs))
             })

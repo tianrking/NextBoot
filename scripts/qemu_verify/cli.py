@@ -1,6 +1,6 @@
 """Verify NextBoot raw QEMU disk images.
 
-This checker validates the GPT layout and the small FAT32/exFAT/ext2/3/4/NTFS/UDF/XFS volumes
+This checker validates the GPT layout and the small FAT32/exFAT/ext2/3/4/NTFS/UDF/XFS/Btrfs volumes
 created by scripts/run-qemu.sh. It intentionally focuses on the structures the
 bootloader depends on: partition discovery, filesystem detection, directory
 enumeration, file sizes, and physical file extents.
@@ -19,7 +19,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--disk-image", required=True, help="raw disk image to verify")
     parser.add_argument("--sector-size", required=True, type=int, choices=(512, 4096))
     parser.add_argument("--layout", required=True, choices=("single", "split"))
-    parser.add_argument("--data-fs", default="exfat", choices=("exfat", "ext2", "ext3", "ext4", "fat32", "ntfs", "udf", "xfs"))
+    parser.add_argument(
+        "--data-fs",
+        default="exfat",
+        choices=("btrfs", "exfat", "ext2", "ext3", "ext4", "fat32", "ntfs", "udf", "xfs"),
+    )
     parser.add_argument("--efi-file", help="expected fallback EFI source file")
     parser.add_argument(
         "--efi-boot-name",

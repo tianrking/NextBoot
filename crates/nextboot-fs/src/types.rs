@@ -9,6 +9,7 @@ pub enum FileSystemType {
     Udf,
     Ext4,
     Xfs,
+    Btrfs,
     Ntfs,
     Unknown,
 }
@@ -22,6 +23,7 @@ impl core::fmt::Display for FileSystemType {
             FileSystemType::Udf => write!(f, "UDF"),
             FileSystemType::Ext4 => write!(f, "ext4"),
             FileSystemType::Xfs => write!(f, "XFS"),
+            FileSystemType::Btrfs => write!(f, "Btrfs"),
             FileSystemType::Ntfs => write!(f, "NTFS"),
             FileSystemType::Unknown => write!(f, "Unknown"),
         }

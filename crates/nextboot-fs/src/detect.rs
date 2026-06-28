@@ -54,6 +54,13 @@ pub fn detect_fs_type(data: &[u8]) -> FileSystemType {
         return FileSystemType::Xfs;
     }
 
+    // Btrfs primary superblock is at 64 KiB from the partition start. Most
+    // boot-time callers only pass the first hardware block and will probe it
+    // through Btrfs::open instead.
+    if data.len() >= 0x10048 && &data[0x10040..0x10048] == b"_BHRfS_M" {
+        return FileSystemType::Btrfs;
+    }
+
     // ISO9660 检测
     detect_iso_type(data)
 }

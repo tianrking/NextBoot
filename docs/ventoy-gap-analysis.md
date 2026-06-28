@@ -7,10 +7,10 @@ workflows and which gaps are still worth pursuing.
 
 - Standard GPT split layout: a FAT32 ESP plus a data partition, avoiding a
   USB-only assumption and matching fixed SSD/NVMe deployments.
-- Data filesystems: FAT32, exFAT, ext2, ext3, ext4, NTFS, UDF, and a limited
-  XFS QEMU subset in image generation, boot-time scanning paths, and the real
-  flash workflow where host tooling can safely format and populate the
-  partition.
+- Data filesystems: FAT32, exFAT, ext2, ext3, ext4, NTFS, UDF, a limited XFS
+  QEMU subset, and a limited Btrfs QEMU subset in image generation and
+  boot-time scanning paths. Real flash workflows cover formats where host
+  tooling can safely format and populate the partition.
 - Storage buses in QEMU: virtio, NVMe, SATA, USB mass storage, and SDHCI SD.
   SD currently has disk generation and filesystem verification coverage; boot
   smoke is experimental because the tested OVMF firmware drops to the internal
@@ -63,10 +63,10 @@ workflows and which gaps are still worth pursuing.
   covered as negative smoke tests so unsupported media is reported
   deterministically.
 - More filesystems: Ventoy covers a broader set of user storage formats. UDF,
-  ext2/3/4, and XFS extent/local-directory/dir2-directory reads are now covered
-  in the QEMU data partition and flash paths, including 512B and 4K-sector XFS
-  smoke coverage; real `mkfs.xfs` btree-scale directories still need broader
-  compatibility work.
+  ext2/3/4, XFS extent/local-directory/dir2-directory reads, and a Btrfs
+  superblock plus NextBoot extent/directory smoke map are now covered in QEMU
+  data partition paths. Real `mkfs.xfs` btree-scale directories and real
+  `mkfs.btrfs` checksum/B-tree metadata still need broader compatibility work.
 - Cross-architecture boot: x86_64, IA32, and AArch64 build/QEMU smoke paths and
   shared ESP release layout exist now. The QEMU architecture map is isolated in
   `scripts/qemu/arch.sh`; ARM 32-bit remains out of scope until Rust exposes an

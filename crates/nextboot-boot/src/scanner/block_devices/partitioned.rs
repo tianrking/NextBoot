@@ -5,6 +5,7 @@ use super::super::{block_io_info, partition_source_disk_identity, IsoScanner};
 use crate::source_disk::SourceDiskIdentity;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
+use nextboot_fs::btrfs::Btrfs;
 use nextboot_fs::exfat::ExFat;
 use nextboot_fs::ext4::Ext4;
 use nextboot_fs::fat32::Fat32;
@@ -63,6 +64,22 @@ impl<'a> IsoScanner<'a> {
         }
 
         if let Ok(fs) = Xfs::open(shared.clone()) {
+            self.scan_block_filesystem_paths(
+                volume_handle,
+                volume_index,
+                source_disk,
+                source_disk_size,
+                block_io,
+                &fs,
+                default_search_paths,
+                extensions,
+                extent_lba_offset,
+                files,
+            );
+            return true;
+        }
+
+        if let Ok(fs) = Btrfs::open(shared.clone()) {
             self.scan_block_filesystem_paths(
                 volume_handle,
                 volume_index,

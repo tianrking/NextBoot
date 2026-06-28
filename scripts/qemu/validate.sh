@@ -28,8 +28,8 @@ validate_qemu_args() {
     esac
 
     case "$DATA_FS" in
-        exfat|ext2|ext3|ext4|fat32|ntfs|udf|xfs) ;;
-        *) die "--data-fs must be exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs" ;;
+        btrfs|exfat|ext2|ext3|ext4|fat32|ntfs|udf|xfs) ;;
+        *) die "--data-fs must be btrfs, exfat, ext2, ext3, ext4, fat32, ntfs, udf, or xfs" ;;
     esac
 
     if [[ "$DATA_FS" == ext* ]] && [ "$SECTOR_SIZE" -ne 4096 ]; then
