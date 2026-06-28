@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import py_compile
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_LINE_LIMIT = 500
+DEFAULT_BUILD_TARGET = "x86_64-unknown-uefi"
 CHECK_EXTENSIONS = {".py", ".rs", ".sh"}
 
 
@@ -107,7 +109,28 @@ def check_qemu_matrix() -> CheckResult:
     return CheckResult("QEMU smoke matrix declaration", result.returncode == 0, result.stdout)
 
 
-def run_checks(line_limit: int, skip_flash: bool, skip_qemu_matrix: bool) -> list[CheckResult]:
+def check_build(build_target: str) -> CheckResult:
+    env = os.environ.copy()
+    env["TARGET"] = build_target
+    result = subprocess.run(
+        [str(PROJECT_DIR / "scripts" / "build.sh"), "check"],
+        cwd=PROJECT_DIR,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    return CheckResult(f"UEFI build check ({build_target})", result.returncode == 0, result.stdout)
+
+
+def run_checks(
+    line_limit: int,
+    skip_flash: bool,
+    skip_qemu_matrix: bool,
+    skip_build: bool,
+    build_target: str,
+) -> list[CheckResult]:
     checks = [
         check_line_lengths(line_limit),
         check_python_compile(),
@@ -117,13 +140,15 @@ def run_checks(line_limit: int, skip_flash: bool, skip_qemu_matrix: bool) -> lis
         checks.append(check_flash_dry_run())
     if not skip_qemu_matrix:
         checks.append(check_qemu_matrix())
+    if not skip_build:
+        checks.append(check_build(build_target))
     return checks
 
 
-def print_result(result: CheckResult) -> None:
+def print_result(result: CheckResult, verbose: bool) -> None:
     status = "ok" if result.ok else "FAIL"
     print(f"{status} - {result.name}")
-    if result.details and (not result.ok or result.details.strip()):
+    if result.details and (verbose or not result.ok):
         print(result.details.rstrip())
 
 
@@ -145,14 +170,35 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="skip qemu-smoke-matrix.sh coverage declaration checks",
     )
+    parser.add_argument(
+        "--skip-build-check",
+        action="store_true",
+        help="skip scripts/build.sh check",
+    )
+    parser.add_argument(
+        "--build-target",
+        default=os.environ.get("TARGET", DEFAULT_BUILD_TARGET),
+        help=f"UEFI target for scripts/build.sh check (default: TARGET or {DEFAULT_BUILD_TARGET})",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="print successful subcommand output as well as failures",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    results = run_checks(args.line_limit, args.skip_flash_dry_run, args.skip_qemu_matrix)
+    results = run_checks(
+        args.line_limit,
+        args.skip_flash_dry_run,
+        args.skip_qemu_matrix,
+        args.skip_build_check,
+        args.build_target,
+    )
     for result in results:
-        print_result(result)
+        print_result(result, args.verbose)
     return 0 if all(result.ok for result in results) else 1
 
 
