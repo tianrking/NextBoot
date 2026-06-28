@@ -18,10 +18,20 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def run_case(workdir: Path, with_image: bool, multi_efi: bool) -> subprocess.CompletedProcess[str]:
+def run_case(
+    workdir: Path,
+    with_image: bool,
+    multi_efi: bool,
+    default_capacity: bool = False,
+) -> subprocess.CompletedProcess[str]:
     efi = workdir / "nextboot-boot-x64.efi"
     efi.write_bytes(b"NEXTBOOT RELEASE EFI X64 FIXTURE\n")
-    output_name = "release-multi-efi.img" if multi_efi else ("release-with-image.img" if with_image else "release-empty.img")
+    if default_capacity:
+        output_name = "release-default-capacity.img"
+    elif multi_efi:
+        output_name = "release-multi-efi.img"
+    else:
+        output_name = "release-with-image.img" if with_image else "release-empty.img"
     output = workdir / output_name
     command = [
         str(RELEASE_SCRIPT),
@@ -30,8 +40,6 @@ def run_case(workdir: Path, with_image: bool, multi_efi: bool) -> subprocess.Com
         str(efi),
         "--mode",
         "debug",
-        "--size",
-        "128",
         "--sector-size",
         "512",
         "--data-fs",
@@ -39,6 +47,8 @@ def run_case(workdir: Path, with_image: bool, multi_efi: bool) -> subprocess.Com
         "--output",
         str(output),
     ]
+    if not default_capacity:
+        command.extend(["--size", "128"])
     if multi_efi:
         ia32 = workdir / "nextboot-boot-ia32.efi"
         aa64 = workdir / "nextboot-boot-aa64.efi"
@@ -83,6 +93,16 @@ def main() -> int:
             require("verified 3 EFI fallback loader(s)" in multi.stdout, multi.stdout)
             require("BOOTX64.EFI BOOTIA32.EFI BOOTAA64.EFI" in multi.stdout, multi.stdout)
             require("verified 1 /ISO image file(s)" in multi.stdout, multi.stdout)
+
+            default_capacity = run_case(
+                workdir,
+                with_image=False,
+                multi_efi=True,
+                default_capacity=True,
+            )
+            require(default_capacity.returncode == 0, default_capacity.stdout)
+            require("release-default-capacity.img" in default_capacity.stdout, default_capacity.stdout)
+            require("verified 3 EFI fallback loader(s)" in default_capacity.stdout, default_capacity.stdout)
     except AssertionError as error:
         print(f"release media check failed: {error}", file=sys.stderr)
         return 1

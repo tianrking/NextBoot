@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TARGET="${TARGET:-x86_64-unknown-uefi}"
 MODE="release"
-SIZE_MB="1024"
+SIZE_MB="7000"
 SECTOR_SIZE="512"
 DATA_FS="exfat"
 OUTPUT=""
@@ -30,7 +30,7 @@ Usage:
 Options:
   --target TARGET       x86_64-unknown-uefi, i686-unknown-uefi, aarch64-unknown-uefi, or all
   --mode MODE           debug or release build artifact to embed (default: release)
-  --size MB             raw disk image size in MiB (default: 1024)
+  --size MB             raw disk image size in MiB (default: 7000, fits 8GB media)
   --sector-size BYTES   logical sector size: 512 or 4096 (default: 512)
   --data-fs FS          data partition filesystem: exfat or fat32 (default: exfat)
   --image PATH          preseed an image into /ISO; repeatable

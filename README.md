@@ -21,8 +21,10 @@ No end-user command line or flasher UI is required after the image is burned.
 
 ## Quick Start
 
-1. Download `nextboot-v0.0.1-all-uefi-512b-exfat.img.xz` from the
-   latest GitHub release.
+1. Download a capacity-matched image from the latest GitHub release:
+   `nextboot-v0.0.1-all-uefi-8gb-512b-exfat.img.xz` for storage sold as 8GB
+   or larger, or `nextboot-v0.0.1-all-uefi-32gb-512b-exfat.img.xz` for storage
+   sold as 32GB or larger.
 2. Flash the image from Windows, macOS, or Linux to a USB stick, USB SSD, SD
    card, or external SSD with Rufus, balenaEtcher, Raspberry Pi Imager, GNOME
    Disks, or another raw image writer.
@@ -37,10 +39,11 @@ If a writer does not accept `.img.xz` directly, decompress it to `.img` first.
 
 ## Release Shape
 
-The customer-facing release is:
+The customer-facing release is capacity-tiered:
 
 ```text
-nextboot-v0.0.1-all-uefi-512b-exfat.img.xz
+nextboot-v0.0.1-all-uefi-8gb-512b-exfat.img.xz
+nextboot-v0.0.1-all-uefi-32gb-512b-exfat.img.xz
 ```
 
 Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.0.1>
@@ -51,7 +54,7 @@ It contains:
 | --- | --- |
 | GPT | Standard partition table suitable for removable and fixed media |
 | ESP | FAT32 partition with `BOOTX64.EFI`, `BOOTIA32.EFI`, and `BOOTAA64.EFI` |
-| Data | exFAT `NEXTDATA` partition with `/ISO` already created |
+| Data | exFAT `NEXTDATA` partition with `/ISO` already created and sized for the chosen capacity tier |
 | Flashing hosts | Windows, macOS, and Linux image writers |
 | Boot target | x86_64, IA32, and AArch64 UEFI firmware |
 | Workflow | Users drag boot images into `/ISO` and boot from UEFI |

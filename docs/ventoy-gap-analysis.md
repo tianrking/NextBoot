@@ -71,9 +71,11 @@ workflows and which gaps are still worth pursuing.
   `EFI/BOOT/BOOTAA64.EFI` on one ESP for portable SSD, USB, or SD media.
 - Customer-burnable release media: `scripts/create-release-media.sh` creates a
   raw GPT image with a FAT32 ESP, multi-architecture UEFI fallback loaders, an
-  exFAT `NEXTDATA` partition, and an empty `/ISO` directory. Users can burn the
-  image to USB, SSD, or SD media, then drag boot images into `/ISO` without
-  running NextBoot commands.
+  exFAT `NEXTDATA` partition, and an empty `/ISO` directory. GitHub releases
+  publish 8GB-target and 32GB-target capacity tiers so the visible data
+  partition is large enough for practical ISO/WIM/VHD use instead of being a
+  tiny test image. Users can burn the image to USB, SSD, or SD media, then drag
+  boot images into `/ISO` without running NextBoot commands.
 
 ## Useful Ventoy Ideas Still Open
 
