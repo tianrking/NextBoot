@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/tianrking/NextBoot?include_prereleases&label=release)](https://github.com/tianrking/NextBoot/releases/latest)
 [![Rust](https://img.shields.io/badge/Rust-UEFI-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x86__64-blue)](#architecture)
-[![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#current-confidence)
+[![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#compatibility-coverage)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#feature-coverage)
 [![Release Media](https://img.shields.io/badge/release-burnable%20.img.xz-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.1)
 
@@ -19,17 +19,16 @@ firmware UEFI boot menu.
 
 No end-user command line or flasher UI is required after the image is burned.
 
-## Can I Use It Now?
+## Quick Start
 
-Yes, for technical preview and real-device bring-up.
-
-The `v0.0.1` release produces a burnable `.img.xz` image. After burning it to a
-USB stick, USB SSD, SD card, or external SSD, the user should see a `NEXTDATA`
-partition and can drag boot images into `/ISO`. The UEFI boot path and storage
-layout are covered by CI, QEMU smoke tests, and release-media verification.
-
-Do not call it production-universal yet. The two remaining hard gaps are broad
-physical hardware pass rows and production-grade public Secure Boot signing.
+1. Download `nextboot-v0.0.1-x86_64-unknown-uefi-512b-exfat.img.xz` from the
+   latest GitHub release.
+2. Burn it to a USB stick, USB SSD, SD card, or external SSD with Rufus,
+   balenaEtcher, Raspberry Pi Imager, or another raw image writer.
+3. Open the visible `NEXTDATA` partition.
+4. Drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`.
+5. Reboot, choose the device in the firmware UEFI boot menu, and pick an image
+   from the NextBoot menu.
 
 ## Release Shape
 
@@ -62,18 +61,9 @@ Optional QA builds can preseed images:
 ./scripts/create-release-media.sh --image qa-smoke.iso
 ```
 
-## User Flow
+## Supported Images
 
-1. Download the NextBoot `.img.xz` release artifact.
-2. Burn it to a USB stick, USB SSD, SD card, or external SSD with a normal image
-   writer such as Rufus, balenaEtcher, or Raspberry Pi Imager. For `dd`, first
-   decompress the `.img.xz` to `.img`.
-3. Open the visible `NEXTDATA` partition.
-4. Drag boot files into `/ISO`.
-5. Reboot and select the device in the firmware UEFI boot menu.
-6. Pick the image from the NextBoot menu.
-
-Supported boot-image families include:
+Drag any supported boot image into `/ISO` on the `NEXTDATA` partition:
 
 - ISO, including generic UEFI ISO, Windows ISO, Linux ISO, and Ventoy-style
   `.vlnk.iso` pointer files
@@ -84,10 +74,10 @@ Supported boot-image families include:
 - Dynamic, static, sparse, discarded, and parent-backed VDI
 - Standalone EFI executables
 
-## Current Confidence
+## Compatibility Coverage
 
-The core path has automated coverage for both old removable-device layouts and
-new fixed-disk style storage:
+Automated checks cover both old removable-device layouts and new fixed-disk
+style storage:
 
 | Path | Current evidence |
 | --- | --- |
@@ -97,9 +87,10 @@ new fixed-disk style storage:
 | SD-style media | QEMU image/filesystem verification exists; firmware boot behavior still needs real-device evidence |
 | Real hardware | Structured report tooling exists, but the public compatibility matrix still needs real pass rows |
 
-So the project is no longer tied to old USB-stick assumptions. The remaining
-hard proof is broad physical hardware validation, especially across USB SSD
-enclosures, SD readers, motherboard firmware, and Secure Boot policies.
+Hardware report tooling is tracked in
+[`docs/hardware-compatibility-matrix.md`](docs/hardware-compatibility-matrix.md)
+for physical USB sticks, USB SSD enclosures, SD readers, motherboard firmware,
+and Secure Boot policies.
 
 ## Architecture
 
