@@ -14,6 +14,8 @@ GPT_SIGNATURE = b"EFI PART"
 GPT_ENTRY_COUNT_MAX = 128
 NEXBOOT_DATA = "NEXBOOT_DATA"
 NEXBOOT_EFI = "NEXBOOT_EFI"
+EXFAT_BOOT_REGION_SECTORS = 12
+EXFAT_BOOT_CHECKSUM_SECTOR = 11
 
 
 class GrowError(Exception):
@@ -113,9 +115,23 @@ def write_at(handle, offset: int, data: bytes | bytearray) -> None:
     handle.write(data)
 
 
+def update_exfat_boot_checksum(region: bytearray, sector_size: int) -> None:
+    checksum_offset = EXFAT_BOOT_CHECKSUM_SECTOR * sector_size
+    checksum = 0
+    for offset, byte in enumerate(region[:checksum_offset]):
+        if offset in (106, 107, 112):
+            continue
+        checksum = ((checksum >> 1) | ((checksum & 1) << 31)) & 0xFFFFFFFF
+        checksum = (checksum + byte) & 0xFFFFFFFF
+    region[checksum_offset : checksum_offset + sector_size] = (
+        struct.pack("<I", checksum) * (sector_size // 4)
+    )
+
+
 def grow_exfat_boot(handle, sector_size: int, data: GptPartition, new_blocks: int) -> int:
     boot_offset = data.start_lba * sector_size
-    boot = bytearray(read_at(handle, boot_offset, sector_size))
+    boot_region = bytearray(read_at(handle, boot_offset, EXFAT_BOOT_REGION_SECTORS * sector_size))
+    boot = boot_region[:sector_size]
     require(boot[0:3] == b"\xeb\x76\x90" and boot[3:11] == b"EXFAT   ", "NEXTDATA is not exFAT")
     require(u64(boot, 64) == data.start_lba, "exFAT partition offset does not match GPT")
     bytes_per_sector = 1 << boot[108]
@@ -133,8 +149,10 @@ def grow_exfat_boot(handle, sector_size: int, data: GptPartition, new_blocks: in
 
     put_u64(boot, 72, grown_blocks)
     put_u32(boot, 92, new_cluster_count)
-    write_at(handle, boot_offset, boot)
-    write_at(handle, boot_offset + 12 * sector_size, boot)
+    boot_region[:sector_size] = boot
+    update_exfat_boot_checksum(boot_region, sector_size)
+    write_at(handle, boot_offset, boot_region)
+    write_at(handle, boot_offset + 12 * sector_size, boot_region)
     return grown_blocks
 
 

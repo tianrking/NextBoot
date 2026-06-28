@@ -1,6 +1,6 @@
 use crate::media_grow_util::{
-    crc32, device_path_to_vec, div_round_up, read_le_u32, read_le_u64, write_le_u32, write_le_u64,
-    zeroed_vec,
+    crc32, device_path_to_vec, div_round_up, read_le_u32, read_le_u64,
+    update_exfat_boot_checksum, write_le_u32, write_le_u64, zeroed_vec,
 };
 use crate::source_disk::{parent_device_path_bytes, parse_last_hard_drive_device_path};
 use alloc::vec::Vec;
@@ -23,6 +23,7 @@ const GPT_ENTRY_TYPE_GUID_LEN: usize = 16;
 const NEXBOOT_EFI: &str = "NEXBOOT_EFI";
 const NEXBOOT_DATA: &str = "NEXBOOT_DATA";
 const EXFAT_BOOT_BACKUP_LBA: u64 = 12;
+const EXFAT_BOOT_REGION_SECTORS: u64 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GrowOutcome {
@@ -382,15 +383,22 @@ fn update_exfat_boot(
     data: PartitionInfo,
     growth: ExfatGrowth,
 ) -> Result<(), &'static str> {
-    let mut boot = read_blocks(block_io, media_id, data.start_lba, block_size, 1)?;
+    let mut boot = read_blocks(
+        block_io,
+        media_id,
+        data.start_lba,
+        block_size,
+        EXFAT_BOOT_REGION_SECTORS,
+    )?;
     write_le_u64(&mut boot, 72, growth.new_blocks)?;
     write_le_u32(&mut boot, 92, growth.cluster_count)?;
+    update_exfat_boot_checksum(&mut boot, block_size)?;
     block_io
         .write_blocks(media_id, data.start_lba, &boot)
         .map_err(|_| "failed to write exFAT boot sector")?;
     block_io
         .write_blocks(media_id, data.start_lba + EXFAT_BOOT_BACKUP_LBA, &boot)
-        .map_err(|_| "failed to write exFAT backup boot sector")
+        .map_err(|_| "failed to write exFAT backup boot region")
 }
 
 fn update_gpt_entries(

@@ -24,9 +24,28 @@ class ExFatVolume:
         self.image = image
         self.partition = partition
         self.boot = image.read_blocks(partition.start_lba)
+        self.main_boot_region = image.read_blocks(partition.start_lba, 12)
+        self.backup_boot_region = image.read_blocks(partition.start_lba + 12, 12)
         require(self.boot[0:3] == b"\xeb\x76\x90", f"{partition.name}: missing exFAT jump")
         require(self.boot[3:11] == b"EXFAT   ", f"{partition.name}: missing exFAT marker")
         require(self.boot[510:512] == b"\x55\xaa", f"{partition.name}: missing exFAT boot signature")
+        require(
+            self.main_boot_region == self.backup_boot_region,
+            f"{partition.name}: exFAT backup boot region mismatch",
+        )
+        require(
+            self.boot_region_checksum_ok(self.main_boot_region),
+            f"{partition.name}: invalid exFAT boot checksum",
+        )
+        for sector in range(1, 9):
+            marker = self.main_boot_region[
+                sector * image.sector_size + image.sector_size - 4 :
+                (sector + 1) * image.sector_size
+            ]
+            require(
+                marker == b"\x00\x00\x55\xaa",
+                f"{partition.name}: missing exFAT extended boot signature in sector {sector}",
+            )
 
         self.partition_offset = u64(self.boot, 64)
         self.volume_length = u64(self.boot, 72)
@@ -43,6 +62,18 @@ class ExFatVolume:
         require(self.num_fats == 1, f"{partition.name}: expected one exFAT FAT")
         require(self.partition_offset == partition.start_lba, f"{partition.name}: exFAT partition offset mismatch")
         require(self.volume_length <= partition.block_count, f"{partition.name}: exFAT volume exceeds partition")
+        self.require_system_root_entries()
+
+    def boot_region_checksum_ok(self, boot_region: bytes) -> bool:
+        checksum_sector = 11 * self.image.sector_size
+        checksum = 0
+        for offset, byte in enumerate(boot_region[:checksum_sector]):
+            if offset in (106, 107, 112):
+                continue
+            checksum = ((checksum >> 1) | ((checksum & 1) << 31)) & 0xFFFFFFFF
+            checksum = (checksum + byte) & 0xFFFFFFFF
+        expected = checksum.to_bytes(4, "little") * (self.image.sector_size // 4)
+        return boot_region[checksum_sector : checksum_sector + self.image.sector_size] == expected
 
     @property
     def cluster_blocks(self) -> int:
@@ -91,6 +122,35 @@ class ExFatVolume:
             else:
                 offset += 32
         return records
+
+    def raw_directory_entries(self, cluster: int) -> list[bytes]:
+        data = b"".join(self.read_cluster(item) for item in self.cluster_chain(cluster))
+        entries: list[bytes] = []
+        for offset in range(0, len(data), 32):
+            entry = data[offset : offset + 32]
+            if len(entry) < 32 or entry[0] == 0:
+                break
+            entries.append(entry)
+        return entries
+
+    def require_system_root_entries(self) -> None:
+        entries = self.raw_directory_entries(self.root_cluster)
+        entry_types = {entry[0] for entry in entries}
+        require(0x81 in entry_types, f"{self.partition.name}: missing exFAT allocation bitmap entry")
+        require(0x82 in entry_types, f"{self.partition.name}: missing exFAT upcase table entry")
+        require(0x83 in entry_types, f"{self.partition.name}: missing exFAT volume label entry")
+
+        bitmap = next(entry for entry in entries if entry[0] == 0x81)
+        bitmap_cluster = u32(bitmap, 20)
+        bitmap_size = u64(bitmap, 24)
+        require(bitmap_cluster >= 2, f"{self.partition.name}: invalid exFAT bitmap cluster")
+        require(bitmap_size >= ceil_div(self.cluster_count, 8), f"{self.partition.name}: exFAT bitmap is too small")
+
+        upcase = next(entry for entry in entries if entry[0] == 0x82)
+        upcase_cluster = u32(upcase, 20)
+        upcase_size = u64(upcase, 24)
+        require(upcase_cluster >= 2, f"{self.partition.name}: invalid exFAT upcase cluster")
+        require(upcase_size > 0, f"{self.partition.name}: empty exFAT upcase table")
 
     def parse_entry_set(self, group: bytes) -> FileRecord | None:
         attr = u16(group, 4)

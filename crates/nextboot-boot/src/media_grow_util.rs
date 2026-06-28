@@ -88,6 +88,53 @@ pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
+pub(crate) fn update_exfat_boot_checksum(
+    boot_region: &mut [u8],
+    block_size: u32,
+) -> Result<(), &'static str> {
+    const CHECKSUM_SECTOR: usize = 11;
+
+    let block_size = usize::try_from(block_size).map_err(|_| "invalid block size")?;
+    let checksum_sector = CHECKSUM_SECTOR
+        .checked_mul(block_size)
+        .ok_or("exFAT checksum offset overflows")?;
+    let checksum_end = checksum_sector
+        .checked_add(block_size)
+        .ok_or("exFAT checksum end overflows")?;
+    if boot_region.len() < checksum_end {
+        return Err("truncated exFAT boot region");
+    }
+
+    for byte in boot_region
+        .get_mut(checksum_sector..checksum_end)
+        .ok_or("truncated exFAT checksum sector")?
+    {
+        *byte = 0;
+    }
+
+    let mut checksum = 0u32;
+    for (offset, byte) in boot_region
+        .get(..checksum_sector)
+        .ok_or("truncated exFAT boot checksum input")?
+        .iter()
+        .enumerate()
+    {
+        if matches!(offset, 106 | 107 | 112) {
+            continue;
+        }
+        checksum = checksum.rotate_right(1).wrapping_add(u32::from(*byte));
+    }
+
+    for chunk in boot_region
+        .get_mut(checksum_sector..checksum_end)
+        .ok_or("truncated exFAT checksum sector")?
+        .chunks_exact_mut(4)
+    {
+        chunk.copy_from_slice(&checksum.to_le_bytes());
+    }
+    Ok(())
+}
+
 pub(crate) fn zeroed_vec(len: usize) -> Vec<u8> {
     vec![0u8; len]
 }
