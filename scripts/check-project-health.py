@@ -10,6 +10,7 @@ from health.common import DEFAULT_BUILD_TARGET, DEFAULT_LINE_LIMIT, HOST_TEST_PA
 from health.integration_checks import (
     check_flash_dry_run,
     check_hardware_matrix_fixture,
+    check_hardware_matrix_report,
     check_hardware_report,
     check_qemu_image_matrix,
     check_qemu_matrix,
@@ -30,6 +31,7 @@ def run_checks(
     skip_qemu_image_matrix: bool,
     skip_hardware_report: bool,
     skip_hardware_matrix_fixture: bool,
+    skip_hardware_matrix_report: bool,
     skip_secure_boot_policy: bool,
     skip_host_tests: bool,
     skip_build: bool,
@@ -50,6 +52,8 @@ def run_checks(
         checks.append(check_hardware_report())
     if not skip_hardware_matrix_fixture:
         checks.append(check_hardware_matrix_fixture())
+    if not skip_hardware_matrix_report:
+        checks.append(check_hardware_matrix_report())
     if not skip_secure_boot_policy:
         checks.append(check_secure_boot_policy())
     if not skip_host_tests:
@@ -105,6 +109,11 @@ def parse_args() -> argparse.Namespace:
         help="skip temporary CSV fixture checks for check-hardware-matrix.py",
     )
     parser.add_argument(
+        "--skip-hardware-matrix-report",
+        action="store_true",
+        help="skip hardware matrix status report checks",
+    )
+    parser.add_argument(
         "--skip-secure-boot-policy",
         action="store_true",
         help="skip Secure Boot release policy validation",
@@ -136,6 +145,7 @@ def main() -> int:
         args.skip_qemu_image_matrix,
         args.skip_hardware_report,
         args.skip_hardware_matrix_fixture,
+        args.skip_hardware_matrix_report,
         args.skip_secure_boot_policy,
         args.skip_host_tests,
         args.skip_build_check,

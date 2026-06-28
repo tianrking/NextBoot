@@ -40,6 +40,13 @@ def check_hardware_matrix_fixture() -> CheckResult:
     )
 
 
+def check_hardware_matrix_report() -> CheckResult:
+    return run_script_check(
+        "check-hardware-matrix-report.py",
+        "hardware matrix status report",
+    )
+
+
 def check_secure_boot_policy() -> CheckResult:
     return run_script_check(
         "check-secure-boot-policy.py",

@@ -89,3 +89,9 @@ Run `./scripts/check-hardware-matrix.py` before claiming broad hardware
 readiness. It exits non-zero and lists missing required rows until the CSV has
 passing evidence for the SSD, USB, SD, filesystem, and image-type combinations
 above.
+
+Run `./scripts/hardware-matrix-report.py` after appending rows to refresh
+`docs/hardware/hardware-matrix-status.md`. CI runs
+`./scripts/hardware-matrix-report.py --check` through the project health gate,
+so the published status page stays in sync with the CSV and keeps the remaining
+real-hardware gaps visible.
