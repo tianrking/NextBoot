@@ -5,7 +5,7 @@ use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::ffi::c_void;
-use core::{ptr, slice};
+use core::ptr;
 use log::{info, warn};
 use nextboot_fs::iso9660::Iso9660;
 use nextboot_fs::udf::Udf;
