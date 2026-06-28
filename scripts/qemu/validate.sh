@@ -21,6 +21,9 @@ validate_qemu_args() {
     case "$SMOKE_TIMEOUT" in
         ''|*[!0-9]*) die "--smoke-timeout must be an integer second value" ;;
     esac
+    case "$SMOKE_PARENT_CHAIN_DEPTH" in
+        ''|*[!0-9]*) die "--smoke-parent-chain-depth must be an integer parent count" ;;
+    esac
 
     case "$LAYOUT" in
         single|split) ;;
@@ -70,6 +73,9 @@ validate_qemu_smoke_args() {
     fi
     if [ "$SMOKE_PARENT_VHDX" -eq 1 ] && [ "$SMOKE_SPARSE_VHDX" -eq 1 ] && [ "$SMOKE_PARTIAL_VHDX" -eq 1 ]; then
         die "--smoke-parent-vhdx and --smoke-parent-partial-vhdx cannot be combined"
+    fi
+    if { [ "$SMOKE_PARENT_CHAIN_VHDX" -eq 1 ] || [ "$SMOKE_PARENT_CHAIN_VDI" -eq 1 ]; } && { [ "$SMOKE_PARENT_CHAIN_DEPTH" -lt 2 ] || [ "$SMOKE_PARENT_CHAIN_DEPTH" -gt 8 ]; }; then
+        die "--smoke-parent-chain-depth must be between 2 and 8"
     fi
 
     VDI_VARIANT_COUNT=$((SMOKE_STATIC_VDI + SMOKE_SPARSE_VDI + SMOKE_DISCARDED_VDI + SMOKE_PARENT_VDI))

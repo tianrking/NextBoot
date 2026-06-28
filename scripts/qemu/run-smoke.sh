@@ -101,19 +101,17 @@ run_qemu_smoke() {
                 if [ "$SMOKE_PARENT_VHDX" -eq 1 ]; then
                     EXPECT_ARGS+=(--expect "Resolved VHDX parent")
                     if [ "$SMOKE_PARENT_CHAIN_VHDX" -eq 1 ]; then
-                        EXPECT_ARGS+=(
-                            --expect "$(basename "$SMOKE_VHDX_MIDDLE_FILE")"
-                            --expect "$(basename "$SMOKE_VHDX_PARENT_FILE")"
-                        )
+                        for image in "${SUPPORT_IMAGES[@]}"; do
+                            EXPECT_ARGS+=(--expect "$(basename "$image")")
+                        done
                     fi
                 fi
                 if [ "$SMOKE_PARENT_VDI" -eq 1 ]; then
                     EXPECT_ARGS+=(--expect "Resolved VDI parent")
                     if [ "$SMOKE_PARENT_CHAIN_VDI" -eq 1 ]; then
-                        EXPECT_ARGS+=(
-                            --expect "$(basename "$SMOKE_VDI_MIDDLE_FILE")"
-                            --expect "$(basename "$SMOKE_VDI_PARENT_FILE")"
-                        )
+                        for image in "${SUPPORT_IMAGES[@]}"; do
+                            EXPECT_ARGS+=(--expect "$(basename "$image")")
+                        done
                     fi
                 fi
                 EXPECT_ARGS+=(

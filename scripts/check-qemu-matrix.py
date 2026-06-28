@@ -189,7 +189,14 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
     ),
     MatrixRequirement(
         "full NVMe 4K parent-chain VHDX boot",
-        ("--bus nvme", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-parent-chain-vhdx"),
+        (
+            "--bus nvme",
+            "--layout split",
+            "--data-fs exfat",
+            "--sector-size 4096",
+            "--smoke-parent-chain-vhdx",
+            "--smoke-parent-chain-depth 4",
+        ),
     ),
     MatrixRequirement(
         "full NVMe 4K parent-backed partial VHDX boot",
@@ -217,7 +224,14 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
     ),
     MatrixRequirement(
         "full NVMe 4K parent-chain VDI boot",
-        ("--bus nvme", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-parent-chain-vdi"),
+        (
+            "--bus nvme",
+            "--layout split",
+            "--data-fs exfat",
+            "--sector-size 4096",
+            "--smoke-parent-chain-vdi",
+            "--smoke-parent-chain-depth 4",
+        ),
     ),
     MatrixRequirement(
         "full NVMe 4K ext4 Linux plugin boot",

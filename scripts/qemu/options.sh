@@ -185,6 +185,11 @@ parse_qemu_args() {
                 SMOKE_PARENT_CHAIN_VDI=1
                 shift
                 ;;
+            --smoke-parent-chain-depth)
+                [ $# -ge 2 ] || die "--smoke-parent-chain-depth requires a value"
+                SMOKE_PARENT_CHAIN_DEPTH="$2"
+                shift 2
+                ;;
             --smoke-auto-memdisk)
                 SMOKE=1
                 SMOKE_BOOT=1
