@@ -5,12 +5,12 @@ release artifact is a raw media image that normal image writers can flash.
 
 ## User Flow
 
-1. Download `nextboot-all-uefi-universal-512b-exfat.img.xz`.
+1. Download `nextboot-universal-uefi.img.xz`.
 2. Flash it to an 8GB-or-larger USB stick, USB SSD, SD card, or external SSD
    with balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk Imager, GNOME
    Disks, or another raw-image writer.
 3. If the chosen flasher does not accept `.img.xz`, download
-   `nextboot-all-uefi-universal-512b-exfat.img.zip`, extract it, and select
+   `nextboot-universal-uefi.img.zip`, extract it, and select
    the extracted `.img`.
 4. Open the new `NEXTDATA` partition.
 5. Drag ISO, WIM, VHD, VHDX, IMG, or EFI files into `/ISO`.

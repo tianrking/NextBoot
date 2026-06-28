@@ -23,9 +23,9 @@ users.
 ## Quick Start
 
 1. Download the universal image from the latest GitHub release:
-   `nextboot-v0.0.1-all-uefi-universal-512b-exfat.img.xz`.
+   `nextboot-v0.0.1-universal-uefi.img.xz`.
    If your flashing tool only accepts raw `.img` files, download
-   `nextboot-v0.0.1-all-uefi-universal-512b-exfat.img.zip` and extract it.
+   `nextboot-v0.0.1-universal-uefi.img.zip` and extract it.
 2. Use a raw-image flasher such as balenaEtcher, Raspberry Pi Imager, Rufus,
    Win32 Disk Imager, or GNOME Disks.
 3. Select the NextBoot image, select an 8GB-or-larger USB stick, USB SSD, SD
@@ -46,8 +46,8 @@ expand `NEXTDATA` on first boot.
 The customer-facing release is a single universal image:
 
 ```text
-nextboot-v0.0.1-all-uefi-universal-512b-exfat.img.xz
-nextboot-v0.0.1-all-uefi-universal-512b-exfat.img.zip
+nextboot-v0.0.1-universal-uefi.img.xz
+nextboot-v0.0.1-universal-uefi.img.zip
 ```
 
 Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.0.1>

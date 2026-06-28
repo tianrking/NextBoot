@@ -13,6 +13,7 @@ DATA_FS="exfat"
 GROWABLE_MAX_SIZE_MB="16777216"
 OUTPUT=""
 EFI_OVERRIDE=""
+VENTOY_ASSETS_DIR=""
 SKIP_BUILD=0
 EXTRA_EFI_OVERRIDE_COUNT=0
 declare -a IMAGES=()
@@ -39,6 +40,7 @@ Options:
   --output PATH         output .img path
   --efi PATH            use an explicit EFI binary instead of target/TARGET/MODE
   --extra-efi NAME=PATH add an extra fallback EFI loader for QA media; repeatable
+  --ventoy-assets DIR   copy optional Ventoy runtime assets into /ventoy
   --skip-build          do not run scripts/build.sh before creating the image
   -h, --help            Show this help
 
@@ -159,6 +161,11 @@ while [ "$#" -gt 0 ]; do
             EXTRA_EFI_OVERRIDE_COUNT=$((EXTRA_EFI_OVERRIDE_COUNT + 1))
             shift 2
             ;;
+        --ventoy-assets)
+            [ "$#" -ge 2 ] || die "--ventoy-assets requires a directory"
+            VENTOY_ASSETS_DIR="$2"
+            shift 2
+            ;;
         --skip-build)
             SKIP_BUILD=1
             shift
@@ -241,9 +248,12 @@ if [ "$IMAGE_COUNT" -gt 0 ]; then
 fi
 
 if [ -z "$OUTPUT" ]; then
-    OUTPUT_TARGET="$TARGET"
-    [ "$TARGET" = "all" ] && OUTPUT_TARGET="all-uefi"
-    OUTPUT="${PROJECT_DIR}/target/release-media/nextboot-${OUTPUT_TARGET}-universal-${SECTOR_SIZE}b-${DATA_FS}.img"
+    if [ "$TARGET" = "all" ]; then
+        OUTPUT_NAME="nextboot-universal-uefi"
+    else
+        OUTPUT_NAME="nextboot-${TARGET}"
+    fi
+    OUTPUT="${PROJECT_DIR}/target/release-media/${OUTPUT_NAME}.img"
 fi
 mkdir -p "$(dirname "$OUTPUT")"
 
@@ -257,9 +267,11 @@ fi
 if [ "$DATA_FS" = "exfat" ]; then
     NEXTBOOT_GROWABLE_EXFAT=1 \
     NEXTBOOT_GROWABLE_EXFAT_MAX_MIB="$GROWABLE_MAX_SIZE_MB" \
+    NEXTBOOT_VENTOY_ASSETS_DIR="$VENTOY_ASSETS_DIR" \
         python3 "$SCRIPT_DIR/qemu/create-disk-image.py" "${CREATE_ARGS[@]}"
 else
-    python3 "$SCRIPT_DIR/qemu/create-disk-image.py" "${CREATE_ARGS[@]}"
+    NEXTBOOT_VENTOY_ASSETS_DIR="$VENTOY_ASSETS_DIR" \
+        python3 "$SCRIPT_DIR/qemu/create-disk-image.py" "${CREATE_ARGS[@]}"
 fi
 
 VERIFY_ARGS=(

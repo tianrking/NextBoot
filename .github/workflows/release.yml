@@ -65,13 +65,13 @@ jobs:
             --size 7000 \
             --sector-size 512 \
             --data-fs exfat \
-            --output "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img"
+            --output "target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img"
 
       - name: Compress and checksum
         shell: bash
         run: |
           cd target/release-media
-          for image in nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img; do
+          for image in nextboot-${{ steps.version.outputs.version }}-universal-uefi.img; do
             xz -T0 -0 -f -k "$image"
             python3 - "$image" <<'PY'
           import sys
@@ -83,16 +83,16 @@ jobs:
           PY
           done
           sha256sum \
-            nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img \
-            nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.xz \
-            nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.zip \
+            nextboot-${{ steps.version.outputs.version }}-universal-uefi.img \
+            nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.xz \
+            nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.zip \
             > "SHA256SUMS-${{ steps.version.outputs.version }}.txt"
 
       - name: Verify compressed release assets
         shell: bash
         run: |
-          test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.xz"
-          test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.zip"
+          test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.xz"
+          test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.zip"
           test -s "target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt"
           ls -lh target/release-media/*.img.xz target/release-media/*.img.zip target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt
 
@@ -119,6 +119,7 @@ jobs:
             for (const asset of release.data.assets) {
               if (
                 asset.name.includes("x86_64-unknown-uefi") ||
+                asset.name.includes("all-uefi-universal-512b-exfat") ||
                 asset.name.includes("all-uefi-512b-exfat") ||
                 asset.name.includes("all-uefi-8gb-512b-exfat") ||
                 asset.name.includes("all-uefi-32gb-512b-exfat") ||
@@ -152,6 +153,6 @@ jobs:
 
             After flashing, open `NEXTDATA`, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and boot from the firmware UEFI boot menu. On media larger than the release image, NextBoot can expand `NEXTDATA` on first boot.
           files: |
-            target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.xz
-            target/release-media/nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img.zip
+            target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.xz
+            target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.zip
             target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt
