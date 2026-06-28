@@ -74,13 +74,13 @@ jobs:
           for image in nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img; do
             xz -T0 -0 -f -k "$image"
             python3 - "$image" <<'PY'
-import sys
-import zipfile
+          import sys
+          import zipfile
 
-image = sys.argv[1]
-with zipfile.ZipFile(f"{image}.zip", "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
-    archive.write(image, arcname=image)
-PY
+          image = sys.argv[1]
+          with zipfile.ZipFile(f"{image}.zip", "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
+              archive.write(image, arcname=image)
+          PY
           done
           sha256sum \
             nextboot-${{ steps.version.outputs.version }}-all-uefi-universal-512b-exfat.img \
