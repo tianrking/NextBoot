@@ -94,7 +94,20 @@ def check_flash_dry_run() -> CheckResult:
     return CheckResult("flash dry-run media planning", result.returncode == 0, result.stdout)
 
 
-def run_checks(line_limit: int, skip_flash: bool) -> list[CheckResult]:
+def check_qemu_matrix() -> CheckResult:
+    script = PROJECT_DIR / "scripts" / "check-qemu-matrix.py"
+    result = subprocess.run(
+        [str(script)],
+        cwd=PROJECT_DIR,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    return CheckResult("QEMU smoke matrix declaration", result.returncode == 0, result.stdout)
+
+
+def run_checks(line_limit: int, skip_flash: bool, skip_qemu_matrix: bool) -> list[CheckResult]:
     checks = [
         check_line_lengths(line_limit),
         check_python_compile(),
@@ -102,6 +115,8 @@ def run_checks(line_limit: int, skip_flash: bool) -> list[CheckResult]:
     ]
     if not skip_flash:
         checks.append(check_flash_dry_run())
+    if not skip_qemu_matrix:
+        checks.append(check_qemu_matrix())
     return checks
 
 
@@ -125,12 +140,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="skip flash.sh dry-run media planning checks",
     )
+    parser.add_argument(
+        "--skip-qemu-matrix",
+        action="store_true",
+        help="skip qemu-smoke-matrix.sh coverage declaration checks",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    results = run_checks(args.line_limit, args.skip_flash_dry_run)
+    results = run_checks(args.line_limit, args.skip_flash_dry_run, args.skip_qemu_matrix)
     for result in results:
         print_result(result)
     return 0 if all(result.ok for result in results) else 1

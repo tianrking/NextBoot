@@ -11,9 +11,10 @@ run_qemu_smoke() {
     if [ "${#IMAGES[@]}" -gt 0 ]; then
         EXPECT_ARGS+=(--expect "Found ${#IMAGES[@]} ISO file(s)")
         if [ "$SMOKE_VLNK_ISO" -eq 1 ]; then
+            SMOKE_VLNK_BASENAME="$(basename "$SMOKE_VLNK_FILE")"
             EXPECT_ARGS+=(
-                --expect "Resolved Ventoy VLNK /ISO/nextboot-smoke-vlnk.vlnk.iso -> /ventoy/vlnk-target.iso"
-                --expect "nextboot-smoke-vlnk.vlnk.iso"
+                --expect "Resolved Ventoy VLNK /ISO/${SMOKE_VLNK_BASENAME} -> /ventoy/vlnk-target.iso"
+                --expect "$SMOKE_VLNK_BASENAME"
             )
         else
             for image in "${IMAGES[@]}"; do

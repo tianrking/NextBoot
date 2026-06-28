@@ -242,6 +242,7 @@ def make_vlnk_file(disksig, part_offset_bytes, target_path):
 if smoke_vlnk_iso:
     if not image_files:
         raise SystemExit("VLNK smoke requires a generated image file")
+    vlnk_name = os.path.basename(smoke_vlnk_file) if smoke_vlnk_file else "nextboot-smoke-vlnk.vlnk.iso"
     target_part = next((part for part in partitions if part["include_images"]), None)
     if target_part is None:
         raise SystemExit("VLNK smoke requires an image/data partition")
@@ -257,7 +258,7 @@ if smoke_vlnk_iso:
             dst.write(vlnk_data)
     extra_files.append(
         (
-            "/ISO/nextboot-smoke-vlnk.vlnk.iso",
+            f"/ISO/{vlnk_name}",
             vlnk_data,
         )
     )
