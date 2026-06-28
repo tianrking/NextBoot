@@ -125,6 +125,10 @@ shim、微软 UEFI CA 签名和 SBAT/吊销策略仍在兼容性 gap 中。详�
 
 ### 测试
 
+GitHub Actions 会在每次 push/PR 上运行健康检查、x86_64/AArch64 UEFI check、
+QEMU 镜像生成矩阵和默认 QEMU smoke；完整 QEMU smoke 矩阵由单独的
+`Full QEMU Matrix` workflow 在手动触发和 nightly CI 中运行。本地命令主要用于调试单个失败项。
+
 ```bash
 # 轻量项目健康检查：500 行限制、Python 编译、shell 语法、host 单测、flash/QEMU 镜像/硬件门禁和 UEFI check
 ./scripts/check-project-health.py

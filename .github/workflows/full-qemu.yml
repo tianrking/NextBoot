@@ -1,0 +1,38 @@
+name: Full QEMU Matrix
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: full-qemu-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  qemu-smoke-full:
+    name: QEMU Smoke Full
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU and firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ovmf qemu-system-x86
+      - name: Install Rust target
+        run: |
+          rustup component add rust-src llvm-tools
+          rustup target add x86_64-unknown-uefi
+      - name: Run full QEMU smoke matrix
+        env:
+          NEXTBOOT_FULL_QEMU_MATRIX: "1"
+          NEXTBOOT_QEMU_TIMEOUT: "60"
+        run: scripts/qemu-smoke-matrix.sh

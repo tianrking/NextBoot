@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  health:
+    name: Health Gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust targets
+        run: |
+          rustup component add rust-src llvm-tools
+          rustup target add x86_64-unknown-uefi
+      - name: Run project health checks
+        run: scripts/check-project-health.py
+
+  uefi-builds:
+    name: UEFI Check (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-uefi
+          - aarch64-unknown-uefi
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust target
+        run: |
+          rustup component add rust-src llvm-tools
+          rustup target add "${{ matrix.target }}"
+      - name: Check UEFI target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: scripts/build.sh check
+
+  qemu-image-matrix:
+    name: QEMU Image Matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust target
+        run: |
+          rustup component add rust-src llvm-tools
+          rustup target add x86_64-unknown-uefi
+      - name: Generate and verify QEMU images
+        run: python3 scripts/check-qemu-image-matrix.py
+
+  qemu-smoke-default:
+    name: QEMU Smoke Default
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU and firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ovmf qemu-system-x86
+      - name: Install Rust target
+        run: |
+          rustup component add rust-src llvm-tools
+          rustup target add x86_64-unknown-uefi
+      - name: Run default QEMU smoke matrix
+        env:
+          NEXTBOOT_QEMU_TIMEOUT: "60"
+        run: scripts/qemu-smoke-matrix.sh
