@@ -14,6 +14,7 @@ from health.integration_checks import (
     check_hardware_report,
     check_qemu_image_matrix,
     check_qemu_matrix,
+    check_release_media,
     check_secure_boot_policy,
 )
 from health.rust_checks import check_build, check_host_tests
@@ -29,6 +30,7 @@ def run_checks(
     skip_flash: bool,
     skip_qemu_matrix: bool,
     skip_qemu_image_matrix: bool,
+    skip_release_media: bool,
     skip_hardware_report: bool,
     skip_hardware_matrix_fixture: bool,
     skip_hardware_matrix_report: bool,
@@ -48,6 +50,8 @@ def run_checks(
         checks.append(check_qemu_matrix())
     if not skip_qemu_image_matrix:
         checks.append(check_qemu_image_matrix())
+    if not skip_release_media:
+        checks.append(check_release_media())
     if not skip_hardware_report:
         checks.append(check_hardware_report())
     if not skip_hardware_matrix_fixture:
@@ -92,6 +96,11 @@ def parse_args() -> argparse.Namespace:
         "--skip-qemu-image-matrix",
         action="store_true",
         help="skip no-run QEMU image generation matrix checks",
+    )
+    parser.add_argument(
+        "--skip-release-media",
+        action="store_true",
+        help="skip customer-burnable release media image checks",
     )
     parser.add_argument(
         "--skip-build-check",
@@ -143,6 +152,7 @@ def main() -> int:
         args.skip_flash_dry_run,
         args.skip_qemu_matrix,
         args.skip_qemu_image_matrix,
+        args.skip_release_media,
         args.skip_hardware_report,
         args.skip_hardware_matrix_fixture,
         args.skip_hardware_matrix_report,

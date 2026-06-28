@@ -64,6 +64,11 @@ workflows and which gaps are still worth pursuing.
   AArch64 UEFI artifacts, and `flash.sh --target all` installs
   `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and `EFI/BOOT/BOOTAA64.EFI`
   on one ESP for portable SSD, USB, or SD media.
+- Customer-burnable release media: `scripts/create-release-media.sh` creates a
+  raw GPT image with a FAT32 ESP, `EFI/BOOT/BOOTX64.EFI`, an exFAT `NEXTDATA`
+  partition, and an empty `/ISO` directory. Users can burn the image to USB,
+  SSD, or SD media, then drag boot images into `/ISO` without running NextBoot
+  commands.
 
 ## Useful Ventoy Ideas Still Open
 

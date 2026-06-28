@@ -26,6 +26,13 @@ def check_qemu_image_matrix() -> CheckResult:
     )
 
 
+def check_release_media() -> CheckResult:
+    return run_script_check(
+        "check-release-media.py",
+        "release media image generation",
+    )
+
+
 def check_hardware_report() -> CheckResult:
     return run_script_check(
         "check-hardware-report.py",
