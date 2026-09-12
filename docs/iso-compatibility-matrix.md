@@ -25,7 +25,7 @@ machine boots the image.
 | --- | --- | --- | --- |
 | Ubuntu/Casper | Ubuntu Desktop, Linux Mint, Pop!_OS | implemented | GRUB/EFI chain-load, casper kernel/initrd fallback |
 | Debian Live/Installer | Debian Live, Debian netinst | qemu-pass | Debian 13.6.0 netinst reaches installer language selection through the GRUB/kernel/initrd path; Live variants and hardware remain unverified |
-| Fedora/RHEL style | Fedora Workstation, Rocky, Alma, CentOS Stream | implemented | BLS/GRUB config parsing, pxeboot kernel/initrd fallback |
+| Fedora/RHEL style | Fedora Workstation, Rocky, Alma, CentOS Stream | qemu-pass | Fedora Workstation 44 reaches GNOME Display Manager through the Ventoy-style kernel/initrd path; RHEL derivatives and hardware remain unverified |
 | Arch style | Arch, Manjaro, BlackArch | implemented | GRUB config parsing, Arch kernel/initrd fallback |
 | openSUSE style | openSUSE Leap/Tumbleweed | implemented | GRUB config parsing, loader kernel/initrd fallback |
 | Generic Linux Live | SystemRescue, Alpine, Clonezilla, GParted, Parted Magic | partial | Generic EFI chain-load plus kernel/initrd candidates |
