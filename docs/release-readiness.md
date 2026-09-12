@@ -31,7 +31,8 @@ v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资�
 | Partition discovery | Both GPT entry orders and invalid/ambiguous inventory tests; Linux CI; native Windows selection rejects system/boot disks and identifies a GPT ESP plus NEXTDATA by stable volume GUID | Physical Linux/macOS update checks and physical Windows USB update |
 | Update data preservation | Journaled backup/replacement/recovery and conflict rejection; actual EFI + 50-file runtime migration/no-op/rollback; Linux FAT/exFAT post-update filesystem checks; native Windows disposable-VHD update/no-op/rollback/remount check passed in CI at d4a2b93 | Physical host update and power-interruption testing, backup retention management |
 | Build inputs | Rust 1.98.1 and Cargo.lock pinned, --locked builds/tests | Final release CI and build provenance |
-| Synthetic boot paths | Full QEMU matrix and two-image recovery passed at fa310d0 | Re-run against final release commit; synthetic Btrfs fixtures are not ordinary Btrfs support |
+| Synthetic boot paths | Full QEMU matrix and two-image recovery passed at 922a10f; Alpine, Debian, Ubuntu and Kali independent release-media boot checks passed at 922a10f | Synthetic Btrfs fixtures are not ordinary Btrfs support; final release artifact must be checked again |
+| Debian 13.6 netinst x64 | Actual release builder → installer language selection in CI at 922a10f | Complete installation and physical machine verification |
 | Alpine 3.24.1 x64 | Actual release builder → Linux login prompt in QEMU | Physical machine and installation workflow |
 | Ubuntu 26.04 Server x64 | Actual release builder → installer serial-mode selection in CI at fa310d0 | Complete installation and physical machine verification |
 | Kali 2026.2 netinst x64 | Actual release builder → language selection in CI at fa310d0 | Complete installation and physical machine verification |

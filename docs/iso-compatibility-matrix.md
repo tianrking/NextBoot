@@ -24,7 +24,7 @@ machine boots the image.
 | Family | Examples | Current status | Main path |
 | --- | --- | --- | --- |
 | Ubuntu/Casper | Ubuntu Desktop, Linux Mint, Pop!_OS | implemented | GRUB/EFI chain-load, casper kernel/initrd fallback |
-| Debian Live/Installer | Debian Live, Debian netinst | implemented | GRUB/isolinux config parsing, `findiso` fallback |
+| Debian Live/Installer | Debian Live, Debian netinst | qemu-pass | Debian 13.6.0 netinst reaches installer language selection through the GRUB/kernel/initrd path; Live variants and hardware remain unverified |
 | Fedora/RHEL style | Fedora Workstation, Rocky, Alma, CentOS Stream | implemented | BLS/GRUB config parsing, pxeboot kernel/initrd fallback |
 | Arch style | Arch, Manjaro, BlackArch | implemented | GRUB config parsing, Arch kernel/initrd fallback |
 | openSUSE style | openSUSE Leap/Tumbleweed | implemented | GRUB config parsing, loader kernel/initrd fallback |
