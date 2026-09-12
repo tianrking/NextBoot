@@ -61,6 +61,17 @@ class PartitionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     media.linux_partitions('/dev/sdz')
 
+    def test_loop_devices_require_explicit_opt_in(self):
+        payload = {'blockdevices': [{'name': '/dev/loop7', 'type': 'loop', 'children': []}]}
+        with patch.object(media, 'command', return_value=json.dumps(payload).encode()):
+            with self.assertRaises(ValueError):
+                media.linux_partitions('/dev/loop7')
+            self.assertEqual(media.linux_partitions('/dev/loop7', allow_loop=True), [])
+        payload['blockdevices'][0].update(name='/dev/sdz', type='crypt')
+        with patch.object(media, 'command', return_value=json.dumps(payload).encode()):
+            with self.assertRaises(ValueError):
+                media.linux_partitions('/dev/sdz', allow_loop=True)
+
     def test_macos_inventory_and_identity_change(self):
         responses = [
             {'Whole': True, 'DeviceIdentifier': 'disk9'},

@@ -23,6 +23,7 @@ EFI_INSTALL_FILES=()
 EFI_INSTALL_NAMES=()
 EFI_INSTALL_TARGETS=()
 LOADERS_ONLY=0
+ALLOW_LOOP=0
 ROLLBACK=""
 RUNTIME_DIR="${PROJECT_DIR}/target/runtime-assets"
 MOUNT_ROOT=""
@@ -47,6 +48,7 @@ Options:
   --loaders-only    Explicitly omit DATA runtime migration
   --runtime-dir DIR Cached pinned runtime directory (default: target/runtime-assets)
   --rollback ID     Restore backups; use 'pending' for an interrupted update
+  --allow-loop      Allow whole Linux loop disks for explicit image testing
   --dry-run         Inspect the actual disk and print commands without writing
   -y, --yes         Skip confirmation prompt
   -h, --help        Show this help
@@ -135,6 +137,10 @@ parse_args() {
                 LOADERS_ONLY=1
                 shift
                 ;;
+            --allow-loop)
+                ALLOW_LOOP=1
+                shift
+                ;;
             --runtime-dir|--rollback)
                 [ "$#" -ge 2 ] || die "$1 requires a value"
                 if [ "$1" = "--runtime-dir" ]; then RUNTIME_DIR="$2"; else ROLLBACK="$2"; fi
@@ -189,6 +195,7 @@ identify_partitions() {
         *) die "This updater requires Linux or macOS; Windows support is not available yet." ;;
     esac
     [ "$FORCE" -eq 0 ] || args+=(--force)
+    [ "$ALLOW_LOOP" -eq 0 ] || args+=(--allow-loop)
     inventory="$("${PYTHON:-python3}" "$SCRIPT_DIR/media_partitions.py" --host "$host_kind" "${args[@]}" "$DEVICE")" || die "Partition inspection failed; nothing was written."
     IFS=$'\t' read -r ESP_PARTITION DATA_PARTITION <<< "$inventory"
     [ -n "$ESP_PARTITION" ] && [ -n "$DATA_PARTITION" ] || die "Incomplete partition inventory"

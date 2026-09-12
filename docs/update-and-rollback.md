@@ -26,6 +26,8 @@ Partition detection uses GPT type, label and filesystem metadata, supporting
 both earlier and current partition order. The ESP must be FAT and DATA must be
 the separate `NEXTDATA` basic-data partition. `--force` cannot bypass ESP
 validation or supply a missing DATA volume for runtime migration.
+Whole Linux loop disks are rejected by default. The developer-only `--allow-loop`
+option permits explicit image testing while retaining all partition validation.
 
 The first update prepares the pinned runtime cache under `target/runtime-assets`.
 `--runtime-dir DIR` chooses a different cache. Downloads and cached resources

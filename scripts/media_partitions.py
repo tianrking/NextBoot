@@ -48,12 +48,14 @@ def command(args: list[str]) -> bytes:
     return subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
 
-def linux_partitions(device: str) -> list[Partition]:
+def linux_partitions(device: str, allow_loop: bool = False) -> list[Partition]:
     payload = json.loads(command([
         "lsblk", "--json", "--paths", "--output", "NAME,TYPE,PARTTYPE,LABEL,FSTYPE", device,
     ]))
     disks = payload.get("blockdevices", [])
-    if len(disks) != 1 or disks[0].get("type") != "disk":
+    is_loop = (len(disks) == 1 and disks[0].get("type") == "loop"
+               and allow_loop and re.fullmatch(r"/dev/loop[0-9]+", device))
+    if len(disks) != 1 or (disks[0].get("type") != "disk" and not is_loop):
         raise ValueError("select a whole disk, not a partition or mapped device")
     disk = disks[0]
     if disk.get("name") != device:
@@ -97,6 +99,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", choices=("linux", "darwin"), required=True)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--allow-loop", action="store_true", help="allow whole Linux loop disks for explicit image testing")
     parser.add_argument("device")
     args = parser.parse_args()
     try:
@@ -109,7 +112,7 @@ def main() -> int:
             device = os.path.realpath(device)
             if not re.fullmatch(r"/dev/[A-Za-z0-9._-]+", device):
                 raise ValueError("expected a whole disk under /dev")
-            parts = linux_partitions(device)
+            parts = linux_partitions(device, args.allow_loop)
         esp, data = select_partitions(parts, args.force)
         print(f"{esp}\t{data}")
         return 0

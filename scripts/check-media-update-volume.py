@@ -43,7 +43,8 @@ def main():
         device = run(['losetup', '--find', '--show', '--partscan', str(image)])
         if not re.fullmatch(r'/dev/loop[0-9]+', device):
             raise ValueError('unexpected loop device')
-        esp_part, data_part = select_partitions(linux_partitions(device))
+        run(['udevadm', 'settle', '--timeout=10'])
+        esp_part, data_part = select_partitions(linux_partitions(device, allow_loop=True))
         mount(esp_part, esp, 'vfat')
         mount(data_part, data, 'exfat')
         loader = esp / 'EFI/BOOT/BOOTX64.EFI'
@@ -54,7 +55,7 @@ def main():
         config = data / 'ventoy/ventoy.json'
         config.write_bytes(b'user config retained')
         unmount_all()
-        updater = ['bash', str(PROJECT_DIR / 'scripts/update-media.sh'), '--yes']
+        updater = ['bash', str(PROJECT_DIR / 'scripts/update-media.sh'), '--yes', '--allow-loop']
         result = run([*updater, '--target', 'x86_64-unknown-uefi', device])
         identifier = re.search(r'Transaction: ([0-9a-f]{32})', result).group(1)
         mount(esp_part, esp, 'vfat')
