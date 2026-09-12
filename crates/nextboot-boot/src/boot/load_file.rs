@@ -267,13 +267,18 @@ impl LinuxInitrdLoadFile2Protocol {
         if let Err(err) = unsafe {
             bt.install_protocol_interface(Some(handle), &DevicePath::GUID, device_path_interface)
         } {
-            let _ = unsafe {
+            let removed = unsafe {
                 bt.uninstall_protocol_interface(handle, &LoadFile2::GUID, load_file_2_interface)
             };
+            if removed.is_err() {
+                // Firmware still owns this pointer; freeing it would leave a dangling protocol.
+                let _ = Box::leak(protocol);
+            }
             return Err(err);
         }
 
         Ok(RegisteredLinuxInitrdLoadFile2 {
+            handle,
             protocol,
             device_path,
         })
@@ -336,14 +341,31 @@ impl LinuxInitrdLoadFile2Protocol {
 }
 
 pub(super) struct RegisteredLinuxInitrdLoadFile2 {
+    handle: Handle,
     protocol: Box<LinuxInitrdLoadFile2Protocol>,
     device_path: Box<[u8]>,
 }
 
 impl RegisteredLinuxInitrdLoadFile2 {
-    pub(super) fn leak(self) {
-        let _ = Box::leak(self.protocol);
-        let _ = Box::leak(self.device_path);
+    pub(super) fn uninstall(mut self, bt: &BootServices) -> uefi::Result<()> {
+        let path_result = unsafe {
+            bt.uninstall_protocol_interface(
+                self.handle, &DevicePath::GUID, self.device_path.as_mut_ptr().cast::<c_void>(),
+            )
+        };
+        let protocol_result = unsafe {
+            bt.uninstall_protocol_interface(
+                self.handle, &LoadFile2::GUID, self.protocol.load_file_2_ptr().cast::<c_void>(),
+            )
+        };
+        // Keep only allocations that firmware refused to release. Never free a live interface.
+        if path_result.is_err() {
+            let _ = Box::leak(self.device_path);
+        }
+        if protocol_result.is_err() {
+            let _ = Box::leak(self.protocol);
+        }
+        path_result.and(protocol_result)
     }
 }
 

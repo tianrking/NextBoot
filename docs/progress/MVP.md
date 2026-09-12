@@ -48,6 +48,11 @@
   build/check and host validation use --locked. The release build and 68 tests
   across config, filesystem, image and Linux libraries pass with that lockfile.
   This controls dependency drift; byte-for-byte reproducibility is not claimed.
+- Returning-loader regression reproduced and fixed: retain firmware-owned
+  LoadedImage.FilePath instead of substituting a Rust allocation that both
+  firmware and Rust would free. A returning Linux EFI fixture now reaches parent
+  success and initrd protocol cleanup without panic. Linux smoke cases wait for
+  that cleanup marker, beyond the earlier handoff-only assertion.
 
 ## 完成的工作
 

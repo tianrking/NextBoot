@@ -143,7 +143,6 @@ impl BootManager<'_> {
         if let Err(err) = self.patch_loaded_image(
             image,
             device.handle,
-            full_path.as_ptr().cast::<FfiDevicePath>(),
             load_options.as_ref(),
         ) {
             warn!(
@@ -207,7 +206,6 @@ impl BootManager<'_> {
         if let Err(err) = self.patch_loaded_image(
             image,
             device_handle,
-            full_path.as_ptr().cast::<FfiDevicePath>(),
             load_options.as_ref(),
         ) {
             warn!(
@@ -238,12 +236,13 @@ impl BootManager<'_> {
         &self,
         image: Handle,
         source_device: Handle,
-        file_path: *const FfiDevicePath,
         load_options: Option<&LoadOptionsBuffer>,
     ) -> uefi::Result<()> {
         let mut loaded_image = self.bt.open_protocol_exclusive::<RawLoadedImage>(image)?;
         loaded_image.0.device_handle = source_device.as_ptr();
-        loaded_image.0.file_path = file_path;
+        // LoadImage already copied the file path. Firmware owns that allocation
+        // and frees it when the child exits. Replacing it with our Vec's pointer
+        // makes firmware and Rust free the same allocation on StartImage return.
         if let Some(load_options) = load_options {
             loaded_image.0.load_options_size = load_options.size_bytes();
             loaded_image.0.load_options = load_options.as_ptr();

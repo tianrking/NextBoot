@@ -87,27 +87,37 @@ impl BootManager<'_> {
             kernel_size, initrd_size, load_options
         );
 
-        match LinuxInitrdLoadFile2Protocol::install(self.bt, initrd_data) {
+        let provider = match LinuxInitrdLoadFile2Protocol::install(self.bt, initrd_data) {
             Ok(provider) => {
                 info!(
                     "Registered Linux EFI initrd LoadFile2 provider: {} bytes",
                     initrd_size
                 );
-                provider.leak();
+                Some(provider)
             }
-            Err(err) => warn!(
-                "Failed to register Linux EFI initrd LoadFile2 provider: {:?}; falling back to initrd path load option",
-                err.status()
-            ),
-        }
+            Err(err) => {
+                warn!(
+                    "Failed to register Linux EFI initrd LoadFile2 provider: {:?}; falling back to initrd path load option",
+                    err.status()
+                );
+                None
+            }
+        };
 
-        self.load_image_from_device_path_with_options(
+        let result = self.load_image_from_device_path_with_options(
             device.handle,
             &device.device_path,
             &config.kernel_path,
             "Linux EFI stub",
             Some(&load_options),
-        )
+        );
+        // A real OS does not return after ExitBootServices. Returning EFI applications
+        // and failed loaders must release this provider before another boot attempt.
+        if let Some(provider) = provider {
+            provider.uninstall(self.bt)?;
+            info!("Released Linux EFI initrd LoadFile2 provider after loader returned");
+        }
+        result
     }
 
     fn discover_linux_boot_config(&self, distro: LinuxDistro) -> uefi::Result<LinuxBootConfig> {

@@ -101,6 +101,7 @@ run_qemu_smoke() {
                         --expect "Loaded initrd:"
                         --expect "Prepared Linux EFI stub:"
                         --expect "Registered Linux EFI initrd LoadFile2 provider:"
+                        --expect "Released Linux EFI initrd LoadFile2 provider after loader returned"
                         --expect "Loaded EFI image"
                     )
                     if [ "$SMOKE_LINUX_PLUGINS" -eq 1 ]; then
