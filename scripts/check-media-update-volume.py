@@ -22,6 +22,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', type=Path, required=True)
     parser.add_argument('--data-fs', choices=('exfat', 'fat32'), default='exfat')
+    parser.add_argument('--existing-runtime', action='store_true', help='validate a populated release image')
     args = parser.parse_args()
     image = args.image.resolve()
     if (os.name != 'posix' or os.geteuid() != 0 or not image.is_file()
@@ -40,36 +41,48 @@ def main():
         while mounted:
             run(['umount', str(mounted[-1])])
             mounted.pop()
+    def check_filesystems():
+        print(run(['fsck.fat', '-n', '-v', esp_part]), flush=True)
+        print(run(['fsck.exfat' if args.data_fs == 'exfat' else 'fsck.fat', '-n', data_part]), flush=True)
     try:
         device = run(['losetup', '--find', '--show', '--partscan', str(image)])
         if not re.fullmatch(r'/dev/loop[0-9]+', device):
             raise ValueError('unexpected loop device')
         run(['udevadm', 'settle', '--timeout=10'])
         esp_part, data_part = select_partitions(linux_partitions(device, allow_loop=True))
-        print(run(['fsck.fat', '-n', '-v', esp_part]), flush=True)
-        print(run(['fsck.exfat' if args.data_fs == 'exfat' else 'fsck.fat', '-n', data_part]), flush=True)
+        check_filesystems()
         mount(esp_part, esp, 'vfat')
         mount(data_part, data, 'exfat' if args.data_fs == 'exfat' else 'vfat')
         loader = esp / 'EFI/BOOT/BOOTX64.EFI'
         loader.write_bytes(b'previous EFI fixture')
         iso = data / 'ISO/keep.iso'
         iso.write_bytes(b'user ISO retained')
-        (data / 'ventoy').mkdir()
+        (data / 'ventoy').mkdir(exist_ok=True)
+        expected = release_files(DEFAULT_DIRECTORY)
+        originals = {}
+        if args.existing_runtime:
+            for name, content in expected:
+                path = data / name.removeprefix('/')
+                assert path.read_bytes() == content, name
+            (data / 'ventoy/ventoy.cpio').write_bytes(b'previous runtime fixture')
+            for name, _ in expected:
+                originals[name] = (data / name.removeprefix('/')).read_bytes()
         config = data / 'ventoy/ventoy.json'
         config.write_bytes(b'user config retained')
         unmount_all()
+        check_filesystems()
         updater = ['bash', str(PROJECT_DIR / 'scripts/update-media.sh'), '--yes', '--allow-loop']
         result = run([*updater, '--target', 'x86_64-unknown-uefi', device])
         identifier = re.search(r'Transaction: ([0-9a-f]{32})', result).group(1)
         mount(esp_part, esp, 'vfat')
         mount(data_part, data, 'exfat' if args.data_fs == 'exfat' else 'vfat')
         assert loader.read_bytes() == (PROJECT_DIR / 'target/x86_64-unknown-uefi/release/nextboot-boot.efi').read_bytes()
-        expected = release_files(DEFAULT_DIRECTORY)
         for name, content in expected:
             assert (data / name.removeprefix('/')).read_bytes() == content, name
         assert iso.read_bytes() == b'user ISO retained'
         assert config.read_bytes() == b'user config retained'
         unmount_all()
+        check_filesystems()
         run([*updater, '--rollback', identifier, device])
         mount(esp_part, esp, 'vfat')
         mount(data_part, data, 'exfat' if args.data_fs == 'exfat' else 'vfat')
@@ -77,8 +90,13 @@ def main():
         assert iso.read_bytes() == b'user ISO retained'
         assert config.read_bytes() == b'user config retained'
         for name, _ in expected:
-            assert not (data / name.removeprefix('/')).exists(), name
+            path = data / name.removeprefix('/')
+            if args.existing_runtime:
+                assert path.read_bytes() == originals[name], name
+            else:
+                assert not path.exists(), name
         unmount_all()
+        check_filesystems()
         # Force the backend to fail after the frontend has mounted both volumes.
         # This fixture shim never reaches file replacement and is not product code.
         shim = directory / 'python-failure-fixture'

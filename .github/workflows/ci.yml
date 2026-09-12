@@ -106,9 +106,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)" dosfstools exfatprogs
           sudo modprobe exfat
-          for data_fs in exfat fat32; do
+            for data_fs in exfat fat32; do
             scripts/create-release-media.sh --skip-build --without-runtime --size 256 --growable-max-size 512 \
               --data-fs "$data_fs" --output "target/release-media/$data_fs/update-volume-qa.img"
             sudo python3 scripts/check-media-update-volume.py --data-fs "$data_fs" \
-              --image "target/release-media/$data_fs/update-volume-qa.img"
-          done
+                --image "target/release-media/$data_fs/update-volume-qa.img"
+            done
+            # Check generated non-ASCII names and all runtime directory entries
+            # with the operating system, then update and restore old runtime bytes.
+            printf 'Unicode name fixture\n' > target/release-media/straße-é-中文.iso
+            scripts/create-release-media.sh --skip-build --size 256 --growable-max-size 512 \
+              --image target/release-media/straße-é-中文.iso \
+              --output target/release-media/populated/update-volume-qa.img
+            sudo python3 scripts/check-media-update-volume.py --existing-runtime \
+              --image target/release-media/populated/update-volume-qa.img
