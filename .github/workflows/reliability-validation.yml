@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        case: [alpine-standard, debian-13.6-netinst, ubuntu-26.04-server, kali-2026.2-netinst]
+        case: [alpine-standard, debian-13.6-netinst, fedora-44-workstation, ubuntu-26.04-server, kali-2026.2-netinst]
     steps:
       - uses: actions/checkout@v4
       - name: Install QEMU and firmware

@@ -57,6 +57,17 @@ CASES = (
         expects=("Select a language",),
     ),
     IsoCase(
+        name="fedora-44-workstation",
+        filename="Fedora-Workstation-Live-44-1.7.x86_64.iso",
+        url="https://download.fedoraproject.org/pub/fedora/linux/releases/44/Workstation/x86_64/iso/Fedora-Workstation-Live-44-1.7.x86_64.iso",
+        sha256="1620295f6a00c27c3208f0c00b8ece4eab1ec69b9002152d97488bf26a426ddf",
+        disk_size_mib=4096,
+        memory_mib=4096,
+        timeout=420,
+        expects=("Started gdm.service - GNOME Display Manager.",),
+        qemu_args=("-smp", "2", "-cpu", "max", "-device", "virtio-rng-pci"),
+    ),
+    IsoCase(
         name="ubuntu-26.04-server",
         filename="ubuntu-26.04-live-server-amd64.iso",
         url="https://releases.ubuntu.com/26.04/ubuntu-26.04-live-server-amd64.iso",

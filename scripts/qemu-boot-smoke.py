@@ -8,6 +8,7 @@ import os
 import queue
 import threading
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -21,6 +22,9 @@ SEND_KEY_BYTES = {
     "down": b"\x1b[B",
     "up": b"\x1b[A",
 }
+
+
+ANSI_CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def send_qmp_key(port: int, key: str) -> None:
@@ -99,7 +103,7 @@ def run_smoke(args: argparse.Namespace) -> int:
     terminal = TerminalProbe() if args.terminal_probes else None
 
     def update_found() -> bool:
-        text = captured.decode("utf-8", errors="replace")
+        text = ANSI_CSI_RE.sub("", captured.decode("utf-8", errors="replace"))
         for item in expected:
             if not found[item] and item in text:
                 found[item] = True

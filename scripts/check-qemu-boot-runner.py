@@ -46,6 +46,10 @@ class RunnerTests(unittest.TestCase):
         result = self.run_case("import sys,time; sys.stdout.write('PAYLOAD_'); sys.stdout.flush(); time.sleep(.05); print('STARTED')")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_ansi_colored_marker(self):
+        result = self.run_case("import sys; sys.stdout.buffer.write(b'PAYLOAD_\\x1b[31mSTARTED\\x1b[0m'); sys.stdout.flush()")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_input_handshake(self):
         result = self.run_case("import sys; print('READY'); x=sys.stdin.buffer.read(1); print('PAYLOAD_STARTED' if x==b'\\r' else 'BAD')",
                                ('--send-after', 'READY', '--send-key', 'enter', '--send-delay', '0'))
