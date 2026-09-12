@@ -114,8 +114,9 @@ def main():
         assert (roots['data'] / 'ventoy/ventoy.json').read_bytes() == b'keep user config'
         print('passed: native Windows VHD selection, dry-run, runtime update, no-op, rollback and remount preservation')
     finally:
-        if attached:
-            powershell('Dismount-DiskImage -ImagePath $env:NEXTBOOT_TEST_VHD', image)
+        if image.is_file():
+            powershell('$vhd=Get-DiskImage -ImagePath $env:NEXTBOOT_TEST_VHD; '
+                       'if ($vhd.Attached) { Dismount-DiskImage -ImagePath $env:NEXTBOOT_TEST_VHD }', image)
 
 
 if __name__ == '__main__':

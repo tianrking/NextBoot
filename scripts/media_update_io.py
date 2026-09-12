@@ -42,10 +42,16 @@ def roots_for(esp: Path, data: Path | None):
     roots = {'esp': Path(esp).absolute()}
     if data is not None:
         roots['data'] = Path(data).absolute()
-    for root in roots.values():
+    for area, root in roots.items():
         safe_path(root, ADMIN)
-        if not root.is_dir() or root.resolve() != root:
+        if not root.is_dir():
             raise ValueError(f'volume must be an existing directory without linked parents: {root}')
+        for parent in root.parents:
+            if parent.is_symlink() or (hasattr(parent, 'is_junction') and parent.is_junction()):
+                raise ValueError(f'volume has a linked parent: {parent}')
+        # Windows commonly supplies an 8.3 TEMP path (RUNNER~1). Its long-name
+        # expansion is not a link. Check actual links before canonicalizing it.
+        roots[area] = root.resolve(strict=True)
     if data is not None and (roots['esp'].is_relative_to(roots['data']) or roots['data'].is_relative_to(roots['esp'])):
         raise ValueError('ESP and DATA roots must be separate, non-overlapping volumes')
     return roots
