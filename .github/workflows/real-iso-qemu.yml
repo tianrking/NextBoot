@@ -33,9 +33,13 @@ env:
 
 jobs:
   real-iso-qemu:
-    name: Alpine, Ubuntu, Kali Real ISO Boot
+    name: Real ISO (${{ matrix.case }})
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [alpine-standard, ubuntu-26.04-server, kali-2026.2-netinst]
     steps:
       - uses: actions/checkout@v4
       - name: Install QEMU, firmware, and archive tools
@@ -47,4 +51,11 @@ jobs:
           rustup component add rust-src llvm-tools
           rustup target add x86_64-unknown-uefi
       - name: Boot real Linux ISOs through NextBoot
-        run: python3 scripts/check-real-iso-qemu.py
+        run: python3 scripts/check-real-iso-qemu.py --case "${{ matrix.case }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-iso-${{ matrix.case }}-evidence
+          path: |
+            target/real-iso/*.log
+            target/real-iso/*.evidence.json

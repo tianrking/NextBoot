@@ -1,6 +1,16 @@
 name: Full QEMU Matrix
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'scripts/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'docs/runtime-assets.json'
+      - '.github/workflows/full-qemu.yml'
   schedule:
     - cron: "17 18 * * *"
   workflow_dispatch:
@@ -36,3 +46,10 @@ jobs:
           NEXTBOOT_FULL_QEMU_MATRIX: "1"
           NEXTBOOT_QEMU_TIMEOUT: "60"
         run: scripts/qemu-smoke-matrix.sh
+      - name: Recover from a broken image and boot another
+        run: python3 scripts/check-boot-retry-qemu.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-matrix-logs
+          path: target/**/*.log

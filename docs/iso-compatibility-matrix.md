@@ -68,6 +68,9 @@ Each row needs:
 
 ## Compatibility Work Items
 
+Exact-image results are recorded in [real ISO evidence](validation/real-iso-evidence.md).
+These do not promote every image in the corresponding family to a passing status.
+
 1. Add real ISO sample rows as images are tested.
 2. Promote rows from `planned` to `qemu-pass` only with automated evidence.
 3. Promote rows to `hardware-pass` only with a hardware report.

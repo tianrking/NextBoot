@@ -63,6 +63,18 @@
 - Validation for recovery: x86_64 release build, 33 virtual-I/O host tests, seven
   QEMU-runner checks, source health, and the two-image QEMU recovery workflow pass
   locally. Full-matrix and cross-architecture CI must be rechecked for this change.
+- The recovery implementation now passes the full QEMU matrix and two-image
+  retry test in CI at fa310d0, along with all seven basic checks. Alpine login,
+  Kali language selection and Ubuntu serial-mode selection all pass through
+  actual release media. All eleven checks pass on that commit.
+- Real ISO jobs run independently in both PR and scheduled/main workflows.
+  Boot evidence now includes source state, ISO/loader/firmware hashes, VM
+  configuration, markers, result and log digest. Failed launches cannot reuse
+  a stale serial log. Ubuntu VM resources are aligned with a successful direct
+  official-ISO control; local Windows-hosted verification also reached the
+  installer with the larger VM. Alpine evidence recording and failed-launch
+  recording/stale-log rejection were verified locally. Main-branch pushes now
+  run the full matrix and recovery check as well as independent real ISO jobs.
 
 ## 完成的工作
 

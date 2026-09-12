@@ -31,10 +31,10 @@ v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资�
 | Partition discovery | Both GPT entry orders and invalid/ambiguous inventory tests; Linux CI | Physical Linux/macOS update checks and native Windows updater |
 | Update data preservation | ESP selection no longer assumes partition 1 | Transactional replacement, rollback and runtime migration from old media |
 | Build inputs | Rust 1.98.1 and Cargo.lock pinned, --locked builds/tests | Final release CI and build provenance |
-| Synthetic boot paths | Full QEMU matrix passed at 7b8fe81 and a26604e | Re-run against final release commit; synthetic Btrfs fixtures are not ordinary Btrfs support |
+| Synthetic boot paths | Full QEMU matrix and two-image recovery passed at fa310d0 | Re-run against final release commit; synthetic Btrfs fixtures are not ordinary Btrfs support |
 | Alpine 3.24.1 x64 | Actual release builder → Linux login prompt in QEMU | Physical machine and installation workflow |
-| Ubuntu 26.04 Server x64 | Actual release builder → live system and installer service | Installer UI verification is in progress; current serial test needs terminal probe handling |
-| Kali 2026.2 netinst x64 | Pinned case is defined | Current branch complete run pending |
+| Ubuntu 26.04 Server x64 | Actual release builder → installer serial-mode selection in CI at fa310d0 | Complete installation and physical machine verification |
+| Kali 2026.2 netinst x64 | Actual release builder → language selection in CI at fa310d0 | Complete installation and physical machine verification |
 | Windows and WinPE | Code paths and synthetic tests exist | Official image installation/recovery checks |
 | Other mainstream images | Families listed in ISO compatibility matrix | Exact version/hash/result rows, including rescue and appliance images |
 | Failed image recovery | Broken ISO → menu → different Linux ISO passed in QEMU, including both attempts' resource cleanup; retry timeout disabled | Broad firmware/real-image regression coverage and cleanup-refusal behavior on hardware |

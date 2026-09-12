@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import shutil
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from runtime_assets import prepare
 
@@ -29,6 +32,7 @@ class IsoCase:
     memory_mib: int
     timeout: int
     expects: tuple[str, ...]
+    qemu_args: tuple[str, ...] = ()
 
 
 CASES = (
@@ -48,9 +52,10 @@ CASES = (
         url="https://releases.ubuntu.com/26.04/ubuntu-26.04-live-server-amd64.iso",
         sha256="dec49008a71f6098d0bcfc822021f4d042d5f2db279e4d75bdd981304f1ca5d9",
         disk_size_mib=4096,
-        memory_mib=2048,
+        memory_mib=4096,
         timeout=600,
         expects=("Ubuntu 26.04 LTS ubuntu-server ttyS0", "Continue in basic mode"),
+        qemu_args=("-smp", "2", "-cpu", "max", "-device", "virtio-rng-pci"),
     ),
     IsoCase(
         name="kali-2026.2-netinst",
@@ -164,6 +169,8 @@ def boot_case(case: IsoCase, disk: Path, env: dict[str, str]) -> None:
     qemu = env.get("QEMU_BINARY", "qemu-system-x86_64")
     ovmf = ovmf_code_path(env)
     log = TARGET_DIR / f"{case.name}.serial.log"
+    # A launcher failure must not attach a previous run's log as fresh evidence.
+    log.unlink(missing_ok=True)
     with socket.socket() as reservation:
         reservation.bind(('127.0.0.1', 0))
         qmp_port = reservation.getsockname()[1]
@@ -205,6 +212,7 @@ def boot_case(case: IsoCase, disk: Path, env: dict[str, str]) -> None:
         "q35,accel=tcg",
         "-m",
         f"{case.memory_mib}M",
+        *case.qemu_args,
         "-net",
         "none",
         "-nographic",
@@ -219,8 +227,44 @@ def boot_case(case: IsoCase, disk: Path, env: dict[str, str]) -> None:
         "-device",
         "nvme,drive=nextboot_disk,serial=NEXTBOOT0,bootindex=1",
     ]
-    result = run(command, env, timeout=case.timeout + 60)
-    require(result.returncode == 0, result.stdout)
+    evidence_path = TARGET_DIR / f"{case.name}.evidence.json"
+    loader = PROJECT_DIR / "target/x86_64-unknown-uefi/release/nextboot-boot.efi"
+    evidence = {
+        "schema": 1,
+        "case": case.name,
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "validation_level": "qemu-boot-markers-only",
+        "host_platform": sys.platform,
+        "source_commit": run(["git", "rev-parse", "HEAD"], env).stdout.strip(),
+        "working_tree_clean": not run(["git", "status", "--porcelain"], env).stdout.strip(),
+        "iso": {"filename": case.filename, "url": case.url, "sha256": sha256_file(TARGET_DIR / case.filename)},
+        "loader_sha256": sha256_file(loader),
+        "firmware": {"filename": ovmf.name, "sha256": sha256_file(ovmf)},
+        "qemu_version": run([qemu, "--version"], env).stdout.splitlines()[0],
+        "machine": "q35,accel=tcg",
+        "memory_mib": case.memory_mib,
+        "extra_qemu_args": case.qemu_args,
+        "media": "release builder, GPT/exFAT, NVMe, 512-byte sectors",
+        "disk_size_mib": case.disk_size_mib,
+        "timeout_seconds": case.timeout,
+        "expected_markers": expect_args[1::2],
+        "serial_log": log.name,
+    }
+    started = time.monotonic()
+    evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+    try:
+        result = run(command, env, timeout=case.timeout + 60)
+        require(result.returncode == 0, result.stdout)
+        evidence["status"] = "pass"
+    except (AssertionError, OSError, subprocess.TimeoutExpired):
+        evidence["status"] = "fail"
+        raise
+    finally:
+        evidence["elapsed_seconds"] = round(time.monotonic() - started, 2)
+        if log.exists():
+            evidence["serial_log_sha256"] = sha256_file(log)
+        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> int:

@@ -63,4 +63,6 @@ jobs:
         if: always()
         with:
           name: real-iso-${{ matrix.case }}-logs
-          path: target/real-iso/*.log
+          path: |
+            target/real-iso/*.log
+            target/real-iso/*.evidence.json
