@@ -12,7 +12,8 @@ backups, no-op updates and rollback share the existing file-update core.
 The default target is x64; other release architectures can be selected.
 
 Validation includes eight disk-selection regressions and an administrator CI
-test restricted to a newly created VHD under target. That test covers native
+test restricted to a newly created VHD under target. The current main CI passed
+that test at `d4a2b93`; it covers native
 FAT32/exFAT access, 50 runtime resources, ISO/config preservation, rollback and
 detach/remount. It uses a non-booted PE fixture, not a claim of Windows OS boot
-or physical-device validation. See the current CI result for execution status.
+or physical-device validation.

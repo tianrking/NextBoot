@@ -239,7 +239,8 @@ TARGET=all ./scripts/build.sh release
 
 更新前会备份原文件并保存恢复记录，写入失败时尝试回滚，也支持按事务编号恢复旧版本。
 Linux/macOS 命令、回滚方法和当前验证边界见[更新与回滚说明](docs/update-and-rollback.md)。
-原生 Windows 设备更新入口仍在开发中。这是未来用户级 updater 的后端；首次烧录 raw image 会清空目标设备，已有介质应使用更新流程保留数据。
+Windows 原生入口按磁盘、分区和卷的稳定身份选择目标，并始终拒绝系统盘和启动盘。
+当前端到端证据来自一次性 VHD，而不是物理 USB；首次烧录 raw image 会清空目标设备，已有介质应使用更新流程保留数据。
 
 ## Secure Boot
 

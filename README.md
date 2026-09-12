@@ -269,7 +269,10 @@ TARGET=all ./scripts/build.sh release
 
 Backups and a recovery journal support automatic failure rollback and explicit
 restoration of a previous transaction. See [updating and rollback](docs/update-and-rollback.md)
-for current Linux/macOS usage, recovery commands and validation limits.
+for Linux/macOS and native Windows usage, recovery commands and validation
+limits. Windows selects a disk by stable disk/partition/volume identity and
+always refuses the system and boot disks; its current end-to-end evidence uses
+a disposable VHD, not a physical USB device.
 
 This is the backend for a future user-facing updater. It is intentionally
 separate from first-install flashing because flashing a raw image erases the

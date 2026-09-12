@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import py_compile
+import os
+from pathlib import Path
 import subprocess
 
 from health.common import CheckResult, PROJECT_DIR, project_files, rel
@@ -39,8 +41,16 @@ def check_python_compile() -> CheckResult:
 
 def check_shell_syntax() -> CheckResult:
     shell_files = [path for path in project_files() if path.suffix == ".sh"]
+    bash = "bash"
+    if os.name == "nt":
+        # Windows' system bash.exe launches WSL and is not a shell parser when
+        # no distribution is installed. Prefer the Git-for-Windows Bash that
+        # ships with the project host tooling.
+        candidate = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git/bin/bash.exe"
+        if candidate.is_file():
+            bash = str(candidate)
     result = subprocess.run(
-        ["bash", "-n", *map(str, shell_files)],
+        [bash, "-n", *map(str, shell_files)],
         cwd=PROJECT_DIR,
         text=True,
         stdout=subprocess.PIPE,

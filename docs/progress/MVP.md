@@ -93,10 +93,12 @@
   mounts and reads mount paths from diskutil's structured output.
 - Local evidence: 18 transaction/loader test cases (the POSIX symlink case is
   skipped on Windows), 13 partition/frontend plan cases, and actual-loader plus
-  50-file runtime migration/no-op/rollback integration. Real FAT/exFAT loopback
-  frontend coverage was added to CI; results must be checked after publication.
-- Native Windows disk handling, physical host validation and power-loss behavior
-  remain outstanding. This implementation does not claim cross-volume atomicity.
+  50-file runtime migration/no-op/rollback integration. Linux CI covers real
+  FAT/exFAT loopback filesystems before and after updates. Windows CI covers
+  stable disk/volume selection plus a fresh native VHD update, no-op, rollback,
+  detach and remount.
+- Physical host validation and power-loss behavior remain outstanding. This
+  implementation does not claim cross-volume atomicity.
 
 ### Phase 1: 项目设置 ✅
 - [x] 创建 workspace 结构

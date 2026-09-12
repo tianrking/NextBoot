@@ -132,7 +132,8 @@ Current local evidence includes fault-injected write failure, process interrupti
 retry after recovery, failed rollback with a retained journal, corrupt backups,
 external file changes, wrong-volume refusal, concurrent updates, insufficient
 space, path restrictions and actual EFI/runtime migration with ISO/config hashes
-preserved. Windows runs these filesystem tests; this does not yet establish a
-Windows device-update workflow. Linux CI additionally exercises the shell
-frontend on disposable loopback FAT/exFAT volumes. Physical Linux/macOS device
-checks remain required before claiming broad host compatibility.
+preserved. Windows CI additionally exercises the native selector and updater on
+a fresh FAT32/exFAT VHD, including detach/remount after rollback. Linux CI
+exercises the shell frontend on disposable loopback FAT/exFAT volumes. Physical
+Windows, Linux and macOS device checks remain required before claiming broad
+host compatibility.
