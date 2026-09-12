@@ -68,7 +68,9 @@ class UpdateTests(unittest.TestCase):
     def interrupt_after_first_replacement(self):
         replace = os.replace
         def crash(source, destination):
-            if Path(destination) == self.loader:
+            # Windows may canonicalize a short temporary root while the fixture
+            # retains its original spelling. Compare the real existing target.
+            if Path(destination).resolve() == self.loader.resolve():
                 raise KeyboardInterrupt('simulated process termination')
             replace(source, destination)
         with patch.object(update.os, 'replace', side_effect=crash), self.assertRaises(KeyboardInterrupt):
@@ -97,7 +99,7 @@ class UpdateTests(unittest.TestCase):
     def test_write_failure_rolls_back_every_changed_volume(self):
         replace = os.replace
         def fail(source, destination):
-            if Path(destination) == self.loader:
+            if Path(destination).resolve() == self.loader.resolve():
                 raise OSError('simulated write failure')
             replace(source, destination)
         with patch.object(update.os, 'replace', side_effect=fail), self.assertRaisesRegex(RuntimeError, 'original files were restored'):
@@ -114,7 +116,7 @@ class UpdateTests(unittest.TestCase):
                 raise OSError('commit record write failed')
             return finish(roots, journal, status)
         def fail_restore(path, content):
-            if path == self.loader:
+            if Path(path).resolve() == self.loader.resolve():
                 raise OSError('volume temporarily unavailable during rollback')
             return write(path, content)
         with patch.object(update, 'finish', side_effect=fail_commit), patch.object(update, 'durable_write', side_effect=fail_restore):
