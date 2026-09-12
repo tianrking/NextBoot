@@ -1,8 +1,13 @@
 # NextBoot
 
-> 一次烧录。拖入启动镜像。只要固件能看到这块 UEFI 设备，就可以启动。
+> UEFI 多镜像装机与恢复介质，目前正在完善可靠性。
 
 [English](README.md)
+
+**开发状态：尚未认证新的可靠发布版本。** 已核验的 v0.0.3 发布介质缺少此前真实
+ISO 测试使用的兼容运行资源。开发分支已补齐资源并校验实际介质内容，这些修复尚未
+进入 v0.0.3。请先查看[发布验收清单](docs/release-readiness.md)，区分已验证能力、
+待完成项和旧发布包。
 
 [![CI](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml)
 [![Full QEMU Matrix](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml)
@@ -87,7 +92,7 @@ nextboot-v0.0.3-universal-uefi.img.zip
 | --- | --- |
 | USB 512B FAT32 | QEMU boot smoke 到达 `NEXTBOOT_SMOKE_EFI_STARTED` |
 | NVMe 4K exFAT | QEMU boot smoke 到达 `NEXTBOOT_SMOKE_EFI_STARTED` |
-| 真实 Linux ISO | QEMU 将 Alpine standard 启动到 login，将 Ubuntu Server 启动到 installer，将 Kali netinst 启动到 debian-installer |
+| 真实 Linux ISO | 当前分支证据和待完成项见[发布验收清单](docs/release-readiness.md)；存在测试定义不代表已通过 |
 | USB SSD 4K 布局 | QEMU 镜像矩阵覆盖 exFAT、FAT32、NTFS、UDF、ext2/3/4、Btrfs smoke 场景 |
 | SD 风格介质 | 已有 QEMU 镜像/文件系统验证；固件启动行为仍需要真实设备证据 |
 | 真实硬件 | 已有结构化报告工具，公开兼容矩阵还需要补充真实 pass 行 |
@@ -134,7 +139,7 @@ flowchart LR
 | GPT split layout | 支持 |
 | FAT ESP fallback loaders | `BOOTX64.EFI`、`BOOTIA32.EFI`、`BOOTAA64.EFI` |
 | Release media growth | 单一通用镜像，首次启动 GPT/exFAT 扩容 |
-| 数据文件系统 | FAT32、exFAT、ext2、ext3、ext4、NTFS、UDF、有限 XFS、有限 Btrfs |
+| 数据文件系统 | FAT32、exFAT、ext2/3/4、NTFS、UDF 读取；有限 XFS；Btrfs 目前是合成测试格式，不代表普通 mkfs.btrfs 支持 |
 | QEMU 存储总线 | virtio、NVMe、SATA、USB mass storage、SDHCI SD |
 | 扇区大小 | 覆盖 QEMU 可暴露的 512B 与 4K-native 风格路径 |
 | Linux ISO 插件 | persistence、injection、DUD、auto-install smoke 覆盖 |
@@ -177,7 +182,7 @@ target/release-media/
 ## 测试
 
 CI 会在每次 push 和 pull request 上运行项目健康检查、UEFI target checks、QEMU 镜像生成矩阵，以及默认 QEMU boot smoke。
-计划任务/手动触发的 Real ISO QEMU workflow 会额外下载带 SHA256 固定校验的 Alpine、Ubuntu Server 和 Kali netinst ISO，并通过 NextBoot 真启动。
+Release Reliability 的 PR 工作流运行完整 QEMU 矩阵，并使用正式介质构建流程验证带 SHA256 固定校验的 Alpine、Ubuntu Server 和 Kali netinst ISO。旧的定时 full/real-ISO 工作流当前已停用，其徽标不能视为最新验证证据。
 
 常用本地检查：
 

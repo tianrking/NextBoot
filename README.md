@@ -1,8 +1,14 @@
 # NextBoot
 
-> Burn once. Drag boot images. Boot anywhere UEFI can see the device.
+> UEFI multi-image installation and recovery media, currently being hardened.
 
 [简体中文](README.zh-CN.md)
+
+**Development status:** no new reliable release has been certified. The inspected
+v0.0.3 image omits compatibility resources used by the earlier real-ISO tests.
+The development branch now bundles and verifies those resources; these changes
+are not in v0.0.3. See the [release acceptance ledger](docs/release-readiness.md)
+before interpreting compatibility claims or choosing an image for use.
 
 [![CI](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml)
 [![Full QEMU Matrix](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml)
@@ -101,7 +107,7 @@ style storage:
 | --- | --- |
 | USB 512B FAT32 | QEMU boot smoke reaches `NEXTBOOT_SMOKE_EFI_STARTED` |
 | NVMe 4K exFAT | QEMU boot smoke reaches `NEXTBOOT_SMOKE_EFI_STARTED` |
-| Real Linux ISOs | QEMU boots Alpine standard to login, Ubuntu Server to installer, and Kali netinst to debian-installer |
+| Real Linux ISOs | Current-branch evidence and pending cases are recorded in the [acceptance ledger](docs/release-readiness.md); test definitions alone are not passes |
 | USB SSD 4K layouts | QEMU image matrix covers exFAT, FAT32, NTFS, UDF, ext2/3/4, and Btrfs smoke cases |
 | SD-style media | QEMU image/filesystem verification exists; firmware boot behavior still needs real-device evidence |
 | Real hardware | Structured report tooling exists, but the public compatibility matrix still needs real pass rows |
@@ -155,7 +161,7 @@ disk as a bootable virtual block device.
 | GPT split layout | Supported |
 | FAT ESP fallback loaders | `BOOTX64.EFI`, `BOOTIA32.EFI`, `BOOTAA64.EFI` |
 | Release media growth | Single universal image with first-boot GPT/exFAT expansion |
-| Data filesystems | FAT32, exFAT, ext2, ext3, ext4, NTFS, UDF, limited XFS, limited Btrfs |
+| Data filesystems | FAT32, exFAT, ext2/3/4, NTFS, UDF readers; limited XFS; Btrfs is a synthetic fixture format, not ordinary mkfs.btrfs support |
 | Storage buses in QEMU | virtio, NVMe, SATA, USB mass storage, SDHCI SD |
 | Sector sizes | 512B and 4K-native style paths where QEMU exposes them |
 | Linux ISO plugins | Persistence, injection, DUD, auto-install smoke coverage |
@@ -199,8 +205,10 @@ target/release-media/
 
 CI runs the project health gate, UEFI target checks, QEMU image generation
 matrix, and default QEMU boot smoke on every push and pull request.
-The scheduled/manual Real ISO QEMU workflow additionally downloads SHA256-pinned
-Alpine, Ubuntu Server, and Kali netinst ISOs and boots them through NextBoot.
+The Release Reliability PR workflow runs the full QEMU matrix and downloads
+SHA256-pinned Alpine, Ubuntu Server, and Kali netinst ISOs through the same release
+builder. Older scheduled full/real-ISO workflows are disabled; their badges must
+not be interpreted as fresh evidence.
 
 Useful local checks:
 

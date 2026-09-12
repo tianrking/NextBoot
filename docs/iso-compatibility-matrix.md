@@ -1,5 +1,9 @@
 # ISO Compatibility Matrix
 
+Current development evidence and release blockers are tracked in
+[release readiness](release-readiness.md). Family-level implementation entries
+below do not establish compatibility for every ISO in that family.
+
 This matrix defines the UEFI-only ISO coverage that matters before NextBoot can
 claim mainstream compatibility. Rows start as `planned`, move to `qemu-pass`
 when an automated smoke exists, and move to `hardware-pass` only after a real

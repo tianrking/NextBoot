@@ -1,5 +1,8 @@
 # Release Media
 
+This describes the current development builder. The inspected v0.0.3 public
+image does not contain the runtime added below. See [release readiness](release-readiness.md).
+
 NextBoot does not need an end-user installer or project-specific flasher. The
 release artifact is a raw media image that normal image writers can flash.
 
@@ -26,6 +29,19 @@ The image already contains:
   `EFI/BOOT/BOOTAA64.EFI`.
 - A growable exFAT Data partition labeled `NEXTDATA`.
 - An empty `/ISO` directory for user boot images.
+- Eight pinned compatibility runtime files under `/ventoy`, original licenses,
+  patch attribution and resulting hashes. Preserve these files when adding ISOs.
+
+Builds use Rust 1.98.1 and the tracked Cargo.lock. Runtime resources are checked
+against `docs/runtime-assets.json`; cached corrupt files fail verification.
+`--ventoy-assets DIR` imports matching upstream assets for offline builds.
+`--without-runtime` is exclusively for developer fixtures and is not releasable.
+`--target all` is required for the three fallback loaders listed above; a default
+local invocation builds only x86_64.
+
+Before a release, `scripts/package-release-sources.py --version VERSION` packages
+the exact tracked NextBoot source and checksum-pinned upstream source archive.
+Release automation includes both archives in the checksum manifest and assets.
 
 ## Maintainer Build
 
