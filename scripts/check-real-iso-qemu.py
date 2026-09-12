@@ -197,6 +197,7 @@ def boot_case(case: IsoCase, disk: Path, env: dict[str, str]) -> None:
         "enter",
         "--qmp-port",
         str(qmp_port),
+        "--terminal-probes",
         *expect_args,
         "--",
         qemu,

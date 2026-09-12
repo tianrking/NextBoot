@@ -8,11 +8,24 @@ import io
 import json
 import runpy
 from unittest.mock import MagicMock, patch
+from terminal_probe import TerminalProbe
 
 RUNNER = Path(__file__).with_name('qemu-boot-smoke.py')
 
 
 class RunnerTests(unittest.TestCase):
+    def test_fragmented_terminal_probe_and_size(self):
+        probe = TerminalProbe()
+        self.assertEqual(probe.feed(b'\x1b[1;1H\x1b['), b'')
+        self.assertEqual(probe.feed(b'6n'), b'\x1b[1;1R')
+        self.assertEqual(probe.feed(b'\x1b[32766;32766H\x1b[6n'), b'\x1b[24;80R')
+        self.assertEqual(probe.feed(b'\x1b[?25h\x1b[5n'), b'\x1b[0n')
+
+    def test_terminal_probe_handshake(self):
+        result = self.run_case("import sys; sys.stdout.buffer.write(b'\\x1b[32766;32766H\\x1b[6n'); sys.stdout.flush(); x=sys.stdin.buffer.read(8); print('PAYLOAD_STARTED' if x==b'\\x1b[24;80R' else 'BAD')",
+                               ('--terminal-probes',))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_qmp_keyboard_command(self):
         scope = runpy.run_path(str(RUNNER))
         client = MagicMock()

@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import time
+from terminal_probe import TerminalProbe
 
 
 SEND_KEY_BYTES = {
@@ -68,7 +69,7 @@ def run_smoke(args: argparse.Namespace) -> int:
 
     process = subprocess.Popen(
         args.command,
-        stdin=subprocess.PIPE if send_after else subprocess.DEVNULL,
+        stdin=subprocess.PIPE if send_after or args.terminal_probes else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
@@ -93,6 +94,7 @@ def run_smoke(args: argparse.Namespace) -> int:
     captured = bytearray()
     expected = list(args.expect)
     found = {item: False for item in expected}
+    terminal = TerminalProbe() if args.terminal_probes else None
 
     def update_found() -> bool:
         text = captured.decode("utf-8", errors="replace")
@@ -138,6 +140,14 @@ def run_smoke(args: argparse.Namespace) -> int:
             if chunk is None:
                 break
             captured.extend(chunk)
+            if terminal is not None and process.stdin is not None:
+                response = terminal.feed(chunk)
+                if response:
+                    try:
+                        process.stdin.write(response)
+                        process.stdin.flush()
+                    except BrokenPipeError:
+                        pass
             if args.log:
                 with open(args.log, 'ab') as live_log:
                     live_log.write(chunk)
@@ -181,6 +191,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--send-text", help="literal text to send to QEMU stdin")
     parser.add_argument("--send-key", choices=sorted(SEND_KEY_BYTES), help="named key to send to QEMU stdin")
     parser.add_argument('--qmp-port', type=int, help='localhost QMP port for an emulated keyboard event')
+    parser.add_argument('--terminal-probes', action='store_true',
+                        help='answer serial cursor/status probes for a 24-row, 80-column terminal')
     parser.add_argument(
         "--expect",
         action="append",
