@@ -5,11 +5,13 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import tempfile
+import re
 
 from runtime_assets import PROJECT_DIR, manifest
 
 ADMIN = '.nextboot-update'
 EFI_MACHINES = {'BOOTX64.EFI': 0x8664, 'BOOTIA32.EFI': 0x14c, 'BOOTAA64.EFI': 0xaa64}
+WINDOWS_VOLUME_ROOT = re.compile(r'\\\\\?\\Volume\{[0-9a-fA-F-]{36}\}\\')
 
 
 def owned_paths():
@@ -46,6 +48,11 @@ def roots_for(esp: Path, data: Path | None):
         safe_path(root, ADMIN)
         if not root.is_dir():
             raise ValueError(f'volume must be an existing directory without linked parents: {root}')
+        # pathlib cannot realpath a valid \\?\Volume{GUID}\ root on some
+        # Windows hosts. It is already bound to the selected partition and
+        # rechecked by the native frontend, so preserve that stable root.
+        if os.name == 'nt' and WINDOWS_VOLUME_ROOT.fullmatch(str(root)):
+            continue
         for parent in root.parents:
             if parent.is_symlink() or (hasattr(parent, 'is_junction') and parent.is_junction()):
                 raise ValueError(f'volume has a linked parent: {parent}')

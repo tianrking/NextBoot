@@ -2,7 +2,7 @@
 """Selection invariants for native Windows updates, without touching a disk."""
 import copy
 import unittest
-from windows_media import select_disk, ESP_GUID, BASIC_GUID
+from windows_media import VOLUME_PATH, select_disk, ESP_GUID, BASIC_GUID
 
 ESP = '\\\\?\\Volume{11111111-1111-1111-1111-111111111111}\\'
 DATA = '\\\\?\\Volume{22222222-2222-2222-2222-222222222222}\\'
@@ -84,6 +84,10 @@ class SelectionTests(unittest.TestCase):
         self.disk['UniqueId'] = 'disk-identity'
         self.disk['Partitions'][1]['Size'] -= 512
         self.assertNotEqual(initial, self.select()['identity'])
+
+    def test_volume_guid_roots_are_required(self):
+        self.assertTrue(VOLUME_PATH.fullmatch(ESP))
+        self.assertFalse(VOLUME_PATH.fullmatch('E:\\'))
 
 
 if __name__ == '__main__':

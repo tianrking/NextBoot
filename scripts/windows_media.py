@@ -94,16 +94,24 @@ def select_disk(disks, number, allow_fixed=False, allow_virtual=False, inspect_v
         (part['Guid'], part['Type'], part['Offset'], part['Size'], part['Root'],
          part['Volume']['serial'], part['Volume']['filesystem'], part['Volume']['label'])
         for part in (esp[0], data[0])))
-    return {'disk': disk, 'esp': esp[0]['Root'], 'data': data[0]['Root'], 'identity': identity}
+    return {'disk': disk, 'esp': esp[0]['Root'], 'data': data[0]['Root'],
+            '_partitions': {'esp': esp[0], 'data': data[0]}, 'identity': identity}
 
 
 def checked_roots(selection):
-    # pathlib may canonicalize a volume GUID to an existing drive letter. Resolve
-    # first, then verify that the root is still exactly the original volume.
+    # pathlib cannot realpath a valid \\?\Volume{GUID}\ root on all Python/
+    # Windows combinations. Requery the volume metadata and retain the GUID
+    # root, which is the identity obtained from Get-Partition.
     roots = {}
     for area in ('esp', 'data'):
-        root = Path(selection[area]).resolve(strict=True)
-        if not root.is_dir() or not os.path.samefile(root, selection[area]):
+        source = selection[area]
+        root = Path(source)
+        if not root.is_dir():
             raise ValueError('volume root changed during inspection')
+        observed = volume_info(source)
+        partition = selection['_partitions'][area]
+        if (observed['serial'], observed['filesystem'], observed['label']) != (
+                partition['Volume']['serial'], partition['Volume']['filesystem'], partition['Volume']['label']):
+            raise ValueError('volume metadata changed during inspection')
         roots[area] = root
     return roots
