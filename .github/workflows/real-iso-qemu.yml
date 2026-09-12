@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        case: [alpine-standard, ubuntu-26.04-server, kali-2026.2-netinst]
+        case: [alpine-standard, debian-13.6-netinst, ubuntu-26.04-server, kali-2026.2-netinst]
     steps:
       - uses: actions/checkout@v4
       - name: Install QEMU, firmware, and archive tools

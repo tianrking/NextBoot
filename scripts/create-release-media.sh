@@ -212,7 +212,7 @@ if [ "$WITHOUT_RUNTIME" -eq 1 ]; then
 else
     RUNTIME_ARGS=()
     [ -z "$VENTOY_ASSETS_DIR" ] || RUNTIME_ARGS+=(--source "$VENTOY_ASSETS_DIR")
-    VENTOY_ASSETS_DIR="$(python3 "$SCRIPT_DIR/prepare-runtime-assets.py" "${RUNTIME_ARGS[@]}")"
+    VENTOY_ASSETS_DIR="$("${PYTHON:-python3}" "$SCRIPT_DIR/prepare-runtime-assets.py" "${RUNTIME_ARGS[@]}")"
 fi
 export NEXTBOOT_VERIFIED_RUNTIME=$((1 - WITHOUT_RUNTIME))
 if [ "$SKIP_BUILD" -eq 0 ] && [ -z "$EFI_OVERRIDE" ]; then
@@ -283,10 +283,10 @@ if [ "$DATA_FS" = "exfat" ]; then
     NEXTBOOT_GROWABLE_EXFAT=1 \
     NEXTBOOT_GROWABLE_EXFAT_MAX_MIB="$GROWABLE_MAX_SIZE_MB" \
     NEXTBOOT_VENTOY_ASSETS_DIR="$VENTOY_ASSETS_DIR" \
-        python3 "$SCRIPT_DIR/qemu/create-disk-image.py" "${CREATE_ARGS[@]}"
+        "${PYTHON:-python3}" "$SCRIPT_DIR/qemu/create-disk-image.py" "${CREATE_ARGS[@]}"
 else
     NEXTBOOT_VENTOY_ASSETS_DIR="$VENTOY_ASSETS_DIR" \
-        python3 "$SCRIPT_DIR/qemu/create-disk-image.py" "${CREATE_ARGS[@]}"
+        "${PYTHON:-python3}" "$SCRIPT_DIR/qemu/create-disk-image.py" "${CREATE_ARGS[@]}"
 fi
 
 VERIFY_ARGS=(
@@ -307,9 +307,9 @@ if [ "$IMAGE_COUNT" -gt 0 ]; then
         VERIFY_ARGS+=(--image "$image")
     done
 fi
-python3 "$SCRIPT_DIR/verify-qemu-image.py" "${VERIFY_ARGS[@]}"
+"${PYTHON:-python3}" "$SCRIPT_DIR/verify-qemu-image.py" "${VERIFY_ARGS[@]}"
 if [ "$WITHOUT_RUNTIME" -eq 0 ]; then
-    python3 "$SCRIPT_DIR/verify-runtime-media.py" "$OUTPUT" \
+    "${PYTHON:-python3}" "$SCRIPT_DIR/verify-runtime-media.py" "$OUTPUT" \
         --sector-size "$SECTOR_SIZE" --data-fs "$DATA_FS" --assets "$VENTOY_ASSETS_DIR"
 fi
 

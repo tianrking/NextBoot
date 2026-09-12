@@ -47,6 +47,16 @@ CASES = (
         expects=("Welcome to Alpine Linux 3.24", "localhost login:"),
     ),
     IsoCase(
+        name="debian-13.6-netinst",
+        filename="debian-13.6.0-amd64-netinst.iso",
+        url="https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.6.0-amd64-netinst.iso",
+        sha256="65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7",
+        disk_size_mib=1536,
+        memory_mib=1536,
+        timeout=300,
+        expects=("Select a language",),
+    ),
+    IsoCase(
         name="ubuntu-26.04-server",
         filename="ubuntu-26.04-live-server-amd64.iso",
         url="https://releases.ubuntu.com/26.04/ubuntu-26.04-live-server-amd64.iso",
@@ -134,14 +144,24 @@ def ovmf_code_path(env: dict[str, str]) -> Path:
 
 
 def build_release(env: dict[str, str]) -> None:
-    result = run([str(PROJECT_DIR / "scripts" / "build.sh"), "release"], env)
+    result = run([project_argument(PROJECT_DIR / "scripts" / "build.sh"), "release"], env)
     require(result.returncode == 0, result.stdout)
+
+
+def project_argument(path: Path) -> str:
+    """Give Git Bash relative paths for repository files on Windows."""
+    if os.name == "nt":
+        try:
+            return path.resolve().relative_to(PROJECT_DIR).as_posix()
+        except ValueError:
+            pass
+    return str(path)
 
 
 def create_disk(case: IsoCase, iso: Path, disk: Path, env: dict[str, str]) -> None:
     result = run(
         [
-            str(PROJECT_DIR / "scripts" / "create-release-media.sh"),
+            project_argument(PROJECT_DIR / "scripts" / "create-release-media.sh"),
             "--skip-build",
             "--target",
             "x86_64-unknown-uefi",
@@ -152,11 +172,11 @@ def create_disk(case: IsoCase, iso: Path, disk: Path, env: dict[str, str]) -> No
             "--size",
             str(case.disk_size_mib),
             "--image",
-            str(iso),
+            project_argument(iso),
             "--output",
-            str(disk),
+            project_argument(disk),
             "--ventoy-assets",
-            env["NEXTBOOT_VENTOY_ASSETS_DIR"],
+            project_argument(Path(env["NEXTBOOT_VENTOY_ASSETS_DIR"])),
         ],
         env,
     )
@@ -275,6 +295,10 @@ def main() -> int:
     args = parser.parse_args()
 
     env = os.environ.copy()
+    if os.name == "nt":
+        # Git Bash accepts this portable spelling and does not depend on the
+        # Microsoft Store's optional python3 app-execution alias.
+        env["PYTHON"] = Path(sys.executable).as_posix()
     TARGET_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
