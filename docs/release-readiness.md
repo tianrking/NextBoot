@@ -29,7 +29,7 @@ v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资�
 | Media contents | Builder includes SHA256-pinned runtime, notices and provenance; all 50 files verified in actual exFAT media | Final multi-architecture release artifact verification |
 | Growth | Host geometry tests, unchanged/rejected-shrink image hashes, QEMU 256 → 512 MiB growth, second boot no-op, runtime preservation | Real device capacity and host remount checks |
 | Partition discovery | Both GPT entry orders and invalid/ambiguous inventory tests; Linux CI | Physical Linux/macOS update checks and native Windows updater |
-| Update data preservation | ESP selection no longer assumes partition 1 | Transactional replacement, rollback and runtime migration from old media |
+| Update data preservation | Journaled backup/replacement/recovery, conflict rejection, and actual EFI + 50-file runtime migration/no-op/rollback pass on local fixtures; ISO/config hashes preserved | Linux FAT/exFAT frontend CI, physical host update and power-interruption testing, backup retention management |
 | Build inputs | Rust 1.98.1 and Cargo.lock pinned, --locked builds/tests | Final release CI and build provenance |
 | Synthetic boot paths | Full QEMU matrix and two-image recovery passed at fa310d0 | Re-run against final release commit; synthetic Btrfs fixtures are not ordinary Btrfs support |
 | Alpine 3.24.1 x64 | Actual release builder → Linux login prompt in QEMU | Physical machine and installation workflow |

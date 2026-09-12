@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Update the NextBoot UEFI loaders on an existing disk without touching NEXTDATA.
+# Update loaders and pinned runtime on existing media, preserving user files.
 
 set -euo pipefail
 
@@ -22,6 +22,14 @@ DATA_PARTITION=""
 EFI_INSTALL_FILES=()
 EFI_INSTALL_NAMES=()
 EFI_INSTALL_TARGETS=()
+LOADERS_ONLY=0
+ROLLBACK=""
+RUNTIME_DIR="${PROJECT_DIR}/target/runtime-assets"
+MOUNT_ROOT=""
+ESP_MOUNT=""
+DATA_MOUNT=""
+OWN_ESP_MOUNT=0
+OWN_DATA_MOUNT=0
 
 usage() {
     cat <<USAGE
@@ -36,12 +44,16 @@ Options:
                     i686-unknown-uefi, aarch64-unknown-uefi, or all
                     (default: all)
   --force           Allow missing NEXTDATA label; still require a verified NextBoot ESP
+  --loaders-only    Explicitly omit DATA runtime migration
+  --runtime-dir DIR Cached pinned runtime directory (default: target/runtime-assets)
+  --rollback ID     Restore backups; use 'pending' for an interrupted update
   --dry-run         Inspect the actual disk and print commands without writing
   -y, --yes         Skip confirmation prompt
   -h, --help        Show this help
 
-This updates only the ESP fallback loaders under EFI/BOOT. It does not
-partition, format, delete, or copy anything in the NEXTDATA /ISO partition.
+This updates ESP fallback loaders and the pinned runtime on NEXTDATA. Original
+files are backed up and errors trigger rollback. /ISO and user configuration
+are preserved. It never partitions or formats the disk.
 USAGE
 }
 
@@ -119,6 +131,15 @@ parse_args() {
                 FORCE=1
                 shift
                 ;;
+            --loaders-only)
+                LOADERS_ONLY=1
+                shift
+                ;;
+            --runtime-dir|--rollback)
+                [ "$#" -ge 2 ] || die "$1 requires a value"
+                if [ "$1" = "--runtime-dir" ]; then RUNTIME_DIR="$2"; else ROLLBACK="$2"; fi
+                shift 2
+                ;;
             --dry-run)
                 DRY_RUN=1
                 shift
@@ -177,49 +198,112 @@ confirm_update() {
     if [ "$ASSUME_YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
         return
     fi
-    warn "This updates only the ESP bootloader files on ${DEVICE}."
-    warn "NEXTDATA and /ISO contents will not be formatted or deleted."
+    warn "This updates bootloader/runtime files on ${DEVICE}, retaining backups."
+    warn "/ISO and user configuration will be preserved; no partition is formatted."
     printf 'Type UPDATE to continue: '
     read -r answer
     [ "$answer" = "UPDATE" ] || die "aborted"
 }
 
-update_macos_esp() {
-    local esp_part
-    local esp_mount
-    esp_part="$(esp_partition)"
-    if [ "$DRY_RUN" -eq 1 ]; then
-        run_cmd diskutil mount "$esp_part"
-        esp_mount="/Volumes/NEXBOOT"
+cleanup_mounts() {
+    local cleanup_status=0
+    if [[ "$HOST_OS" == "darwin"* ]]; then
+        [ "$OWN_DATA_MOUNT" -eq 0 ] || run_cmd diskutil unmount "$DATA_PARTITION" || cleanup_status=1
+        [ "$OWN_ESP_MOUNT" -eq 0 ] || run_cmd diskutil unmount "$ESP_PARTITION" || cleanup_status=1
     else
-        esp_mount="$(ensure_macos_mounted "$esp_part")"
+        [ "$OWN_DATA_MOUNT" -eq 0 ] || run_sudo umount "$DATA_MOUNT" || cleanup_status=1
+        [ "$OWN_ESP_MOUNT" -eq 0 ] || run_sudo umount "$ESP_MOUNT" || cleanup_status=1
+        if [ -n "$MOUNT_ROOT" ] && [ "$cleanup_status" -eq 0 ]; then
+            # Only remove empty mount directories created for this invocation.
+            [ -z "$DATA_MOUNT" ] || run_cmd rmdir "$DATA_MOUNT"
+            run_cmd rmdir "$ESP_MOUNT" "$MOUNT_ROOT"
+        fi
     fi
-    copy_efi_tree "$esp_mount"
-    sync
-    run_cmd diskutil unmount "$esp_part"
+    return "$cleanup_status"
 }
 
-update_linux_esp() {
-    local esp_part
-    local esp_mount="/tmp/nextboot_update_esp"
-    esp_part="$(esp_partition)"
-    run_sudo mkdir -p "$esp_mount"
-    run_sudo mount "$esp_part" "$esp_mount"
-    copy_efi_tree_sudo "$esp_mount"
-    sync
-    run_sudo umount "$esp_mount"
+updater_macos_mountpoint() {
+    diskutil info -plist "$1" | "${PYTHON:-python3}" -c \
+        'import plistlib,sys; print(plistlib.load(sys.stdin.buffer).get("MountPoint", ""))'
+}
+
+mount_volumes() {
+    if [[ "$HOST_OS" == "darwin"* ]]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            ESP_MOUNT="/Volumes/NEXBOOT"
+            run_cmd diskutil mount "$ESP_PARTITION"
+            if [ "$LOADERS_ONLY" -eq 0 ]; then
+                DATA_MOUNT="/Volumes/NEXTDATA"
+                run_cmd diskutil mount "$DATA_PARTITION"
+            fi
+            return
+        fi
+        ESP_MOUNT="$(updater_macos_mountpoint "$ESP_PARTITION")"
+        if [ -z "$ESP_MOUNT" ] || [ "$ESP_MOUNT" = "Not mounted" ]; then
+            run_cmd diskutil mount "$ESP_PARTITION"
+            OWN_ESP_MOUNT=1
+            ESP_MOUNT="$(updater_macos_mountpoint "$ESP_PARTITION")"
+        fi
+        [ -d "$ESP_MOUNT" ] || die "ESP mount could not be verified"
+        if [ "$LOADERS_ONLY" -eq 0 ]; then
+            DATA_MOUNT="$(updater_macos_mountpoint "$DATA_PARTITION")"
+            if [ -z "$DATA_MOUNT" ] || [ "$DATA_MOUNT" = "Not mounted" ]; then
+                run_cmd diskutil mount "$DATA_PARTITION"
+                OWN_DATA_MOUNT=1
+                DATA_MOUNT="$(updater_macos_mountpoint "$DATA_PARTITION")"
+            fi
+            [ -d "$DATA_MOUNT" ] || die "DATA mount could not be verified"
+        fi
+    else
+        if [ "$DRY_RUN" -eq 1 ]; then MOUNT_ROOT="/tmp/nextboot-update.DRYRUN"; else
+            MOUNT_ROOT="$(mktemp -d /tmp/nextboot-update.XXXXXX)"
+        fi
+        ESP_MOUNT="${MOUNT_ROOT}/esp"
+        run_cmd mkdir -p "$ESP_MOUNT"
+        run_sudo mount "$ESP_PARTITION" "$ESP_MOUNT"
+        OWN_ESP_MOUNT=1
+        if [ "$LOADERS_ONLY" -eq 0 ]; then
+            DATA_MOUNT="${MOUNT_ROOT}/data"
+            run_cmd mkdir -p "$DATA_MOUNT"
+            run_sudo mount "$DATA_PARTITION" "$DATA_MOUNT"
+            OWN_DATA_MOUNT=1
+        fi
+    fi
+}
+
+update_files() {
+    local -a args=(--esp "$ESP_MOUNT")
+    [ -z "$DATA_MOUNT" ] || args+=(--data "$DATA_MOUNT")
+    [ "$LOADERS_ONLY" -eq 0 ] || args+=(--loaders-only)
+    if [ -n "$ROLLBACK" ]; then args+=(--rollback "$ROLLBACK"); else
+        args+=(--runtime-dir "$RUNTIME_DIR")
+        for index in "${!EFI_INSTALL_FILES[@]}"; do
+            args+=(--loader "${EFI_INSTALL_NAMES[$index]}=${EFI_INSTALL_FILES[$index]}")
+        done
+    fi
+    if [[ "$HOST_OS" == "darwin"* ]]; then
+        run_cmd "${PYTHON:-python3}" "$SCRIPT_DIR/update-mounted-media.py" "${args[@]}"
+    else
+        run_sudo "${PYTHON:-python3}" "$SCRIPT_DIR/update-mounted-media.py" "${args[@]}"
+    fi
 }
 
 parse_args "$@"
 normalize_device
-configure_flash_target
-resolve_efi_files
+if [ -z "$ROLLBACK" ]; then
+    configure_flash_target
+    resolve_efi_files
+fi
 
 if [ "$DRY_RUN" -eq 0 ] && [ ! -e "$DEVICE" ]; then
     die "Device not found: ${DEVICE}"
 fi
 
 identify_partitions
+[ "$LOADERS_ONLY" -eq 1 ] || [ "$DATA_PARTITION" != "-" ] || die "Runtime update/recovery requires NEXTDATA; --force cannot waive this."
+if [ -z "$ROLLBACK" ] && [ "$LOADERS_ONLY" -eq 0 ]; then
+    run_cmd "${PYTHON:-python3}" "$SCRIPT_DIR/prepare-runtime-assets.py" --output "$RUNTIME_DIR"
+fi
 
 info "NextBoot Media Updater"
 warn "Target device: ${DEVICE}"
@@ -232,15 +316,17 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 confirm_update
-
-if [[ "$HOST_OS" == "darwin"* ]]; then
-    update_macos_esp
-else
-    update_linux_esp
-fi
+trap 'saved_status=$?; trap - EXIT; cleanup_mounts || saved_status=1; exit "$saved_status"' EXIT
+mount_volumes
+update_files
+cleanup_mounts || die "Files updated, but a volume could not be unmounted safely."
+OWN_ESP_MOUNT=0
+OWN_DATA_MOUNT=0
+MOUNT_ROOT=""
+trap - EXIT
 
 if [ "$DRY_RUN" -eq 1 ]; then
-    info "Dry run complete. NEXTDATA would be preserved."
+    info "Dry run complete. /ISO and user configuration would be preserved."
 else
-    info "Update complete. NEXTDATA and /ISO were preserved."
+    info "Operation complete. /ISO and user configuration were preserved; backups retained."
 fi

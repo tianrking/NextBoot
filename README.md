@@ -259,13 +259,17 @@ This is not the preferred end-user flow; public users should receive a release
 ## Non-Destructive Update
 
 Existing NextBoot media can be updated without deleting user images. The update
-path replaces only the UEFI fallback loaders in the ESP and preserves
-`NEXTDATA`, `/ISO`, and user configuration:
+path replaces UEFI fallback loaders and the pinned compatibility runtime, and preserves
+`/ISO`, user configuration and the partition layout:
 
 ```bash
 TARGET=all ./scripts/build.sh release
 ./scripts/update-media.sh /dev/diskX
 ```
+
+Backups and a recovery journal support automatic failure rollback and explicit
+restoration of a previous transaction. See [updating and rollback](docs/update-and-rollback.md)
+for current Linux/macOS usage, recovery commands and validation limits.
 
 This is the backend for a future user-facing updater. It is intentionally
 separate from first-install flashing because flashing a raw image erases the
@@ -306,7 +310,7 @@ scripts/
   flash.sh                  Developer direct-to-device writer
   run-qemu.sh               Single QEMU scenario runner
   qemu-smoke-matrix.sh      Compatibility smoke matrix
-  update-media.sh           Non-destructive ESP bootloader updater
+  update-media.sh           Loader/runtime updater with backup and rollback
   check-project-health.py   CI health gate
 
 docs/

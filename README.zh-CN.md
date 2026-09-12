@@ -230,14 +230,16 @@ scripts/check-real-iso-qemu.py
 
 ## 非破坏性更新
 
-已有 NextBoot 介质可以在不删除用户镜像的情况下更新。更新路径只替换 ESP 里的 UEFI fallback loaders，并保留 `NEXTDATA`、`/ISO` 和用户配置：
+已有 NextBoot 介质可以在不删除用户镜像的情况下更新。更新路径替换 ESP 里的 UEFI 加载器及固定版本的兼容运行资源，并保留 `/ISO` 和用户配置：
 
 ```bash
 TARGET=all ./scripts/build.sh release
 ./scripts/update-media.sh /dev/diskX
 ```
 
-这是未来用户级 updater 的后端。它和第一次安装烧录刻意分开：烧录 raw image 会清空目标设备，而更新不能删除用户数据。
+更新前会备份原文件并保存恢复记录，写入失败时尝试回滚，也支持按事务编号恢复旧版本。
+Linux/macOS 命令、回滚方法和当前验证边界见[更新与回滚说明](docs/update-and-rollback.md)。
+原生 Windows 设备更新入口仍在开发中。这是未来用户级 updater 的后端；首次烧录 raw image 会清空目标设备，已有介质应使用更新流程保留数据。
 
 ## Secure Boot
 
@@ -270,7 +272,7 @@ scripts/
   flash.sh                  开发者 direct-to-device writer
   run-qemu.sh               单个 QEMU 场景 runner
   qemu-smoke-matrix.sh      兼容性 smoke matrix
-  update-media.sh           非破坏性 ESP bootloader updater
+  update-media.sh           支持备份与回滚的加载器和运行资源更新
   check-project-health.py   CI health gate
 
 docs/

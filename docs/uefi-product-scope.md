@@ -55,7 +55,8 @@ workflows depend on persistence, automated installation, or injected drivers.
 Install and update are different operations:
 
 - Install writes a whole raw image to a device and erases that device.
-- Update replaces only the NextBoot UEFI loader files in the ESP.
+- Update replaces NextBoot UEFI loaders and its pinned compatibility runtime,
+  keeping backups and a recovery journal.
 
 The update operation must preserve:
 
@@ -64,11 +65,13 @@ The update operation must preserve:
 - User plugin/config files.
 - User-created folders on the data partition.
 
-The developer-facing implementation is `scripts/update-media.sh`. It mounts
-only the ESP and updates `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and
-`EFI/BOOT/BOOTAA64.EFI` as requested. A future GUI updater can call the same
-operation, but the important product guarantee is that update never partitions,
-formats, or rewrites `NEXTDATA`.
+The developer-facing implementation is `scripts/update-media.sh`, with shared
+file operations in `scripts/update-mounted-media.py`. It updates the requested
+ESP fallback loaders and the explicit runtime allowlist on DATA. User images,
+configuration and other folders remain outside that allowlist. A future GUI
+updater can use the same operation; updating never partitions or formats the
+disk. See [updating and rollback](update-and-rollback.md) for recovery semantics
+and the limits of current validation.
 
 ## Definition Of Done For UEFI-Only Maturity
 

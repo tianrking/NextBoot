@@ -98,7 +98,7 @@ class ShellPlanTests(unittest.TestCase):
         self.bash = str(git_bash) if os.name == 'nt' and git_bash.exists() else shutil.which('bash')
         self.assertIsNotNone(self.bash, 'bash is required')
 
-    def plan(self, host, device, parts, inspect_fail=False):
+    def plan(self, host, device, parts, inspect_fail=False, extra=()):
         if inspect_fail:
             body = 'exit 1\n'
         else:
@@ -109,7 +109,7 @@ class ShellPlanTests(unittest.TestCase):
         env = os.environ.copy()
         env.update(NEXTBOOT_OSTYPE=host, PYTHON=self.inspector.as_posix())
         return subprocess.run([self.bash, (self.root / 'scripts/update-media.sh').as_posix(),
-                               '--dry-run', '--target', 'all', device], env=env, capture_output=True, text=True)
+                               '--dry-run', '--target', 'all', *extra, device], env=env, capture_output=True, text=True)
 
     def test_release_and_legacy_linux(self):
         for number in (1, 2):
@@ -117,14 +117,31 @@ class ShellPlanTests(unittest.TestCase):
                 result = self.plan('linux', '/dev/sdz', [partition(f'/dev/sdz{number}', True), partition(f'/dev/sdz{3-number}')])
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn(f'+ sudo mount /dev/sdz{number} ', result.stdout)
-                self.assertNotIn(f'+ sudo mount /dev/sdz{3-number} ', result.stdout)
+                self.assertIn(f'+ sudo mount /dev/sdz{3-number} ', result.stdout)
+                self.assertIn('update-mounted-media.py', result.stdout)
+                self.assertNotIn('+ sudo cp ', result.stdout)
                 self.assertNotIn('mkfs', result.stdout)
 
     def test_macos_release(self):
         result = self.plan('darwin', '/dev/rdisk9', [partition('/dev/disk9s1'), partition('/dev/disk9s2', True)])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('+ diskutil mount /dev/disk9s2', result.stdout)
-        self.assertNotIn('+ diskutil mount /dev/disk9s1', result.stdout)
+        self.assertIn('+ diskutil mount /dev/disk9s1', result.stdout)
+
+    def test_explicit_loaders_only_does_not_mount_data(self):
+        result = self.plan('linux', '/dev/sdz', [partition('/dev/sdz1'), partition('/dev/sdz2', True)], extra=('--loaders-only',))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('+ sudo mount /dev/sdz1 ', result.stdout)
+        self.assertNotIn('prepare-runtime-assets.py', result.stdout)
+        self.assertIn('--loaders-only', result.stdout)
+
+    def test_rollback_does_not_require_builds_or_downloads(self):
+        shutil.rmtree(self.root / 'target')
+        result = self.plan('linux', '/dev/sdz', [partition('/dev/sdz1'), partition('/dev/sdz2', True)], extra=('--rollback', 'pending'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('prepare-runtime-assets.py', result.stdout)
+        self.assertNotIn('--loader ', result.stdout)
+        self.assertIn('--rollback pending', result.stdout)
 
     def test_failed_inspection_stops_before_mount(self):
         result = self.plan('linux', '/dev/sdz', [], True)

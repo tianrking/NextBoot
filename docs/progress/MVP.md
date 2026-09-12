@@ -78,6 +78,26 @@
 
 ## 完成的工作
 
+### 2026-09-12: Recoverable updating
+
+- The mounted-volume backend now stages and verifies each new file, backs up
+  existing bytes, writes a pending journal, and restores original files after
+  write errors. Explicit recovery works after process interruption without
+  requiring builds or downloads. Intact backups are retained after completion.
+- Runtime migration uses the same pinned 50-file bundle as the release builder.
+  Only the fallback loaders and explicit runtime paths can be changed; ISO,
+  configuration, unrelated files, and externally modified targets are protected.
+- Linux/macOS frontend integration now mounts DATA for runtime updates, supports
+  rollback and loader-only mode, and cleans up mounts it created after errors.
+  Linux uses a unique temporary mount directory. macOS preserves pre-existing
+  mounts and reads mount paths from diskutil's structured output.
+- Local evidence: 17 transaction/loader test cases (the POSIX symlink case is
+  skipped on Windows), 12 partition/frontend plan cases, and actual-loader plus
+  50-file runtime migration/no-op/rollback integration. Real FAT/exFAT loopback
+  frontend coverage was added to CI; results must be checked after publication.
+- Native Windows disk handling, physical host validation and power-loss behavior
+  remain outstanding. This implementation does not claim cross-volume atomicity.
+
 ### Phase 1: 项目设置 ✅
 - [x] 创建 workspace 结构
 - [x] 配置 UEFI target
