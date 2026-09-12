@@ -1,0 +1,4 @@
+*.sh text eol=lf
+*.py text eol=lf
+# Preserve upstream license notices byte-for-byte, including original whitespace.
+docs/third-party/ventoy/*.txt -text whitespace=-blank-at-eol,-blank-at-eof

@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "upstream": "https://github.com/ventoy/Ventoy",
+  "version": "1.1.16",
+  "commit": "2f66a309e4a3f0e08953aabfb0f1cf7e12b39f5d",
+  "source_archive": "https://github.com/ventoy/Ventoy/archive/2f66a309e4a3f0e08953aabfb0f1cf7e12b39f5d.tar.gz",
+  "files": [
+    {
+      "path": "ventoy.cpio",
+      "source_path": "INSTALL/ventoy/ventoy.cpio",
+      "sha256": "a123e61afd060ffbac98548a0aa771ee92be1fc6a929736cf55e43afbf238996",
+      "size": 60416
+    },
+    {
+      "path": "ventoy_x86.cpio",
+      "source_path": "INSTALL/ventoy/ventoy_x86.cpio",
+      "sha256": "619ad6a332b3cf51321ac721dd885fc288f729296c1957e96c8d25b23a521a71",
+      "size": 2995712
+    },
+    {
+      "path": "ventoy_arm64.cpio",
+      "source_path": "INSTALL/ventoy/ventoy_arm64.cpio",
+      "sha256": "9135543ef02c6339f073d04ac1bd8025563d063a569e4adabe34e857fd29d31a",
+      "size": 1687040
+    },
+    {
+      "path": "wimboot.x86_64.xz",
+      "source_path": "INSTALL/ventoy/wimboot.x86_64.xz",
+      "sha256": "f2a7ac2828a157536cdafd8c28578ba86b96f023a24cd6c8c15e58fd159a6200",
+      "size": 25188
+    },
+    {
+      "path": "wimboot.i386.efi.xz",
+      "source_path": "INSTALL/ventoy/wimboot.i386.efi.xz",
+      "sha256": "b057ffa8525cfabd38db1479e754d8ab8961f0e20a9c134f52c61ec5e78ea842",
+      "size": 16212
+    },
+    {
+      "path": "vtoyjump64.exe",
+      "source_path": "INSTALL/ventoy/vtoyjump64.exe",
+      "sha256": "2bdce5cb68cdeb67d29613e4e48f71ed0ff8e10494db01a10d19985d7f9db91e",
+      "size": 173568
+    },
+    {
+      "path": "vtoyjump32.exe",
+      "source_path": "INSTALL/ventoy/vtoyjump32.exe",
+      "sha256": "8b4b42810f3b8ae5bd2c36e997a7359a7b769a8559ff87a9a8f7c02c7dea5b7d",
+      "size": 151040
+    },
+    {
+      "path": "common_bcd.xz",
+      "source_path": "INSTALL/ventoy/common_bcd.xz",
+      "sha256": "08eb11ca075348836674f6f8d8fc213a5e7a777990b6faba34a66764696716dd",
+      "size": 4316
+    }
+  ]
+}

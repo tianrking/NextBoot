@@ -7,6 +7,7 @@ import argparse
 import os
 
 from health.common import DEFAULT_BUILD_TARGET, DEFAULT_LINE_LIMIT, HOST_TEST_PACKAGES, CheckResult
+from health.common import run_script_check
 from health.integration_checks import (
     check_flash_dry_run,
     check_hardware_matrix_fixture,
@@ -45,6 +46,8 @@ def run_checks(
         check_line_lengths(line_limit),
         check_python_compile(),
         check_shell_syntax(),
+        run_script_check('check-runtime-assets.py', 'Pinned runtime integrity'),
+        run_script_check('check-qemu-boot-runner.py', 'Portable QEMU log runner'),
     ]
     if not skip_flash:
         checks.append(check_flash_dry_run())

@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import selectors
-import signal
+import queue
+import threading
 import subprocess
 import sys
 import time
@@ -48,8 +48,20 @@ def run_smoke(args: argparse.Namespace) -> int:
     )
     assert process.stdout is not None
 
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
+    chunks: queue.Queue[bytes | None] = queue.Queue()
+
+    def read_output() -> None:
+        try:
+            while True:
+                chunk = os.read(process.stdout.fileno(), 4096)
+                if not chunk:
+                    break
+                chunks.put(chunk)
+        finally:
+            chunks.put(None)
+
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
 
     deadline = time.monotonic() + args.timeout
     captured = bytearray()
@@ -90,33 +102,28 @@ def run_smoke(args: argparse.Namespace) -> int:
 
     try:
         while time.monotonic() < deadline:
-            if process.poll() is not None:
-                remaining = process.stdout.read()
-                if remaining:
-                    captured.extend(remaining)
-                maybe_send_input()
-                if update_found():
-                    if send_done:
-                        return report_success()
-                break
-
             timeout = max(0.05, min(0.5, deadline - time.monotonic()))
-            for key, _events in selector.select(timeout):
-                chunk = os.read(key.fileobj.fileno(), 4096)
-                if not chunk:
-                    continue
-                captured.extend(chunk)
-                maybe_send_input()
-                if update_found():
-                    if send_done:
-                        terminate(process)
-                        return report_success()
+            try:
+                chunk = chunks.get(timeout=timeout)
+            except queue.Empty:
+                continue
+            if chunk is None:
+                break
+            captured.extend(chunk)
+            maybe_send_input()
+            if update_found() and send_done:
+                terminate(process)
+                return report_success()
         terminate(process)
     except KeyboardInterrupt:
         terminate(process)
         raise
     finally:
-        selector.close()
+        terminate(process)
+        reader.join(timeout=3)
+        process.stdout.close()
+        if process.stdin is not None:
+            process.stdin.close()
 
     if args.log:
         with open(args.log, "wb") as out:
@@ -125,10 +132,7 @@ def run_smoke(args: argparse.Namespace) -> int:
     text = captured.decode("utf-8", errors="replace")
     missing = [item for item, ok in found.items() if not ok]
     print("QEMU boot smoke failed", file=sys.stderr)
-    if process.returncode is not None and process.returncode not in (
-        -signal.SIGTERM,
-        -signal.SIGKILL,
-    ):
+    if process.returncode is not None:
         print(f"  QEMU exited with status {process.returncode}", file=sys.stderr)
     for item in missing:
         print(f"  missing: {item}", file=sys.stderr)

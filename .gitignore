@@ -19,6 +19,8 @@ test/disk.img
 # 临时文件
 *.tmp
 *.log
+__pycache__/
+*.pyc
 
 # Cargo
 Cargo.lock

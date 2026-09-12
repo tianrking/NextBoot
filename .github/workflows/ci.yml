@@ -85,3 +85,17 @@ jobs:
         env:
           NEXTBOOT_QEMU_TIMEOUT: "60"
         run: scripts/qemu-smoke-matrix.sh
+
+  release-runtime:
+    name: Release Runtime Integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release loader
+        run: scripts/build.sh release
+      - name: Build and inspect official runtime bundle
+        run: |
+          scripts/create-release-media.sh --skip-build --size 256 --growable-max-size 512 \
+            --output target/release-media/runtime-qa.img
+          python3 scripts/verify-runtime-media.py target/release-media/runtime-qa.img

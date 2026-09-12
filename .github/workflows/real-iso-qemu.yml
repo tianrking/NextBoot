@@ -6,6 +6,11 @@ on:
     paths:
       - ".github/workflows/real-iso-qemu.yml"
       - "scripts/check-real-iso-qemu.py"
+      - "scripts/runtime_assets.py"
+      - "scripts/prepare-runtime-assets.py"
+      - "scripts/create-release-media.sh"
+      - "scripts/verify-runtime-media.py"
+      - "docs/runtime-assets.json"
       - "scripts/qemu/**"
       - "scripts/run-qemu.sh"
       - "crates/nextboot-boot/**"

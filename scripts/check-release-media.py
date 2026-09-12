@@ -41,6 +41,7 @@ def run_case(
     output = workdir / output_name
     command = [
         str(RELEASE_SCRIPT),
+        "--without-runtime",
         "--skip-build",
         "--efi",
         str(efi),

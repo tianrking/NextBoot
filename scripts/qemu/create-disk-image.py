@@ -6,6 +6,9 @@ import sys
 import time
 import uuid
 import zlib
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from disk_image.exfat import write_exfat_volume
 from disk_image.btrfs import write_btrfs_volume
@@ -111,7 +114,11 @@ extra_files = []
 
 ventoy_assets_dir = os.environ.get("NEXTBOOT_VENTOY_ASSETS_DIR", "")
 if ventoy_assets_dir:
-    extra_files.extend(copy_ventoy_assets(ventoy_assets_dir))
+    if os.environ.get("NEXTBOOT_VERIFIED_RUNTIME") == "1":
+        from runtime_assets import release_files
+        extra_files.extend(release_files(Path(ventoy_assets_dir)))
+    else:
+        extra_files.extend(copy_ventoy_assets(ventoy_assets_dir))
 
 if smoke_auto_memdisk:
     extra_files.extend(make_smoke_auto_memdisk_files(image_files))

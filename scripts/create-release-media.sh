@@ -14,6 +14,7 @@ GROWABLE_MAX_SIZE_MB="16777216"
 OUTPUT=""
 EFI_OVERRIDE=""
 VENTOY_ASSETS_DIR=""
+WITHOUT_RUNTIME=0
 SKIP_BUILD=0
 EXTRA_EFI_OVERRIDE_COUNT=0
 declare -a IMAGES=()
@@ -40,7 +41,8 @@ Options:
   --output PATH         output .img path
   --efi PATH            use an explicit EFI binary instead of target/TARGET/MODE
   --extra-efi NAME=PATH add an extra fallback EFI loader for QA media; repeatable
-  --ventoy-assets DIR   copy optional Ventoy runtime assets into /ventoy
+  --ventoy-assets DIR   import checksum-verified runtime assets from a local directory
+  --without-runtime    developer fixtures only: omit runtime assets (not releasable)
   --skip-build          do not run scripts/build.sh before creating the image
   -h, --help            Show this help
 
@@ -166,6 +168,10 @@ while [ "$#" -gt 0 ]; do
             VENTOY_ASSETS_DIR="$2"
             shift 2
             ;;
+        --without-runtime)
+            WITHOUT_RUNTIME=1
+            shift
+            ;;
         --skip-build)
             SKIP_BUILD=1
             shift
@@ -200,6 +206,15 @@ case "$GROWABLE_MAX_SIZE_MB" in
 esac
 
 configure_targets
+if [ "$WITHOUT_RUNTIME" -eq 1 ]; then
+    [ -z "$VENTOY_ASSETS_DIR" ] || die "--without-runtime conflicts with --ventoy-assets"
+    echo "WARNING: developer fixture without compatibility runtime; not a releasable image." >&2
+else
+    RUNTIME_ARGS=()
+    [ -z "$VENTOY_ASSETS_DIR" ] || RUNTIME_ARGS+=(--source "$VENTOY_ASSETS_DIR")
+    VENTOY_ASSETS_DIR="$(python3 "$SCRIPT_DIR/prepare-runtime-assets.py" "${RUNTIME_ARGS[@]}")"
+fi
+export NEXTBOOT_VERIFIED_RUNTIME=$((1 - WITHOUT_RUNTIME))
 if [ "$SKIP_BUILD" -eq 0 ] && [ -z "$EFI_OVERRIDE" ]; then
     TARGET="$TARGET" "$SCRIPT_DIR/build.sh" "$MODE"
 fi
@@ -293,6 +308,10 @@ if [ "$IMAGE_COUNT" -gt 0 ]; then
     done
 fi
 python3 "$SCRIPT_DIR/verify-qemu-image.py" "${VERIFY_ARGS[@]}"
+if [ "$WITHOUT_RUNTIME" -eq 0 ]; then
+    python3 "$SCRIPT_DIR/verify-runtime-media.py" "$OUTPUT" \
+        --sector-size "$SECTOR_SIZE" --data-fs "$DATA_FS" --assets "$VENTOY_ASSETS_DIR"
+fi
 
 echo "Wrote release media image: $OUTPUT"
 echo "Embedded ${#EFI_FILES[@]} UEFI fallback loader(s): ${EFI_BOOT_NAMES[*]}"

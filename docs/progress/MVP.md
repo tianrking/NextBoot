@@ -19,6 +19,15 @@
   isolated from build output and no physical disk was written.
 - In progress: release/runtime parity, full QEMU failure diagnosis, and evidence
   for real OS workflows. Hardware qualification remains outstanding.
+- Runtime parity implemented: release builds now include eight SHA256-pinned
+  upstream resources, original license notices, patch attribution, and resulting
+  hashes. Fifty files are verified inside the actual disk after generation.
+  Real ISO QA uses that same release builder. The explicit `--without-runtime`
+  option is only for developer fixtures.
+- Local Rust host tests and x86_64 release build pass. The first updater commit
+  also passes Linux CI, all three architecture checks, and default QEMU smoke.
+- QEMU log capture now supports Windows pipes; marker fragmentation, input
+  handshake, EOF failure, and timeout termination checks pass locally.
 - Historical completion checkboxes below describe implementation, not certified
   compatibility or production release readiness.
 

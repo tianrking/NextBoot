@@ -1,0 +1,22 @@
+NextBoot compatibility runtime
+
+This bundle includes selected unmodified upstream assets from Ventoy 1.1.16,
+commit 2f66a309e4a3f0e08953aabfb0f1cf7e12b39f5d, except ventoy.cpio:
+NextBoot patches its hook/ventoy-hook-lib.sh to adjust device-mapper offsets
+when the data partition does not start at sector 2048.
+
+The patch source is scripts/qemu/disk_image/ventoy_assets.py in the NextBoot
+source release. Original and resulting file hashes are recorded in
+nextboot-runtime.json. Upstream license notices are included under License/.
+
+Ventoy-developed components are GPLv3+. Other bundled components retain their
+respective upstream licenses. The NextBoot Cargo package license declaration
+does not relicense this compatibility runtime or the modified upstream hooks.
+
+Upstream project: https://github.com/ventoy/Ventoy
+Exact source: https://github.com/ventoy/Ventoy/archive/2f66a309e4a3f0e08953aabfb0f1cf7e12b39f5d.tar.gz
+NextBoot source and patch: https://github.com/tianrking/NextBoot
+
+Source archives and third-party materials must accompany public release
+distribution. This notice records provenance; it does not establish boot
+compatibility for every operating system or firmware architecture.
