@@ -67,6 +67,9 @@ jobs:
             --data-fs exfat \
             --output "target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img"
 
+      - name: Package matching sources and license materials
+        run: python3 scripts/package-release-sources.py --version "${{ steps.version.outputs.version }}"
+
       - name: Compress and checksum
         shell: bash
         run: |
@@ -86,6 +89,8 @@ jobs:
             nextboot-${{ steps.version.outputs.version }}-universal-uefi.img \
             nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.xz \
             nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.zip \
+            nextboot-${{ steps.version.outputs.version }}-source.tar.gz \
+            ventoy-*-source.tar.gz \
             > "SHA256SUMS-${{ steps.version.outputs.version }}.txt"
 
       - name: Verify compressed release assets
@@ -152,7 +157,11 @@ jobs:
             The image contains `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and `EFI/BOOT/BOOTAA64.EFI` fallback loaders for x86_64, IA32, and AArch64 UEFI firmware. Legacy BIOS is not included, and Secure Boot still requires disabled Secure Boot or an enrolled local key.
 
             After flashing, open `NEXTDATA`, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and boot from the firmware UEFI boot menu. On media larger than the release image, NextBoot can expand `NEXTDATA` on first boot.
+
+            The compatibility runtime is included under `/ventoy`. Preserve this directory. Runtime provenance and original license notices are included on the media. Matching NextBoot and pinned Ventoy source archives are attached to this release; external components retain their respective licenses.
           files: |
             target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.xz
             target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.zip
             target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt
+            target/release-media/nextboot-${{ steps.version.outputs.version }}-source.tar.gz
+            target/release-media/ventoy-*-source.tar.gz

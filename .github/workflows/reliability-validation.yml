@@ -1,0 +1,56 @@
+name: Release Reliability
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'scripts/**'
+      - 'docs/runtime-assets.json'
+      - '.github/workflows/reliability-validation.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: reliability-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  full-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU and firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ovmf qemu-system-x86
+      - name: Full QEMU matrix
+        env:
+          NEXTBOOT_FULL_QEMU_MATRIX: '1'
+          NEXTBOOT_QEMU_TIMEOUT: '60'
+        run: scripts/qemu-smoke-matrix.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-matrix-logs
+          path: target/**/*.log
+
+  real-iso:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU and firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl ovmf qemu-system-x86
+      - name: Real ISO through release media
+        run: python3 scripts/check-real-iso-qemu.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-iso-logs
+          path: target/real-iso/*.log

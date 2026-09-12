@@ -7,6 +7,8 @@ import argparse
 import os
 import queue
 import threading
+import json
+import socket
 import subprocess
 import sys
 import time
@@ -16,6 +18,27 @@ SEND_KEY_BYTES = {
     "enter": b"\r",
     "escape": b"\x1b",
 }
+
+
+def send_qmp_key(port: int, key: str) -> None:
+    """Send a real emulated keyboard event; redirected serial stdin is not ConIn on every host."""
+    with socket.create_connection(('127.0.0.1', port), timeout=5) as client:
+        with client.makefile('rb') as stream:
+            greeting = json.loads(stream.readline())
+            if 'QMP' not in greeting:
+                raise ValueError('invalid QMP greeting')
+            for index, command in enumerate([
+                {'execute': 'qmp_capabilities'},
+                {'execute': 'send-key', 'arguments': {'keys': [{'type': 'qcode', 'data': {'enter': 'ret', 'escape': 'esc'}[key]}]}},
+            ]):
+                command['id'] = index
+                client.sendall(json.dumps(command).encode() + b'\n')
+                while True:
+                    response = json.loads(stream.readline())
+                    if response.get('id') == index:
+                        if 'error' in response:
+                            raise ValueError(f'QMP keyboard event failed: {response["error"]}')
+                        break
 
 
 def terminate(process: subprocess.Popen[bytes]) -> None:
@@ -39,6 +62,9 @@ def run_smoke(args: argparse.Namespace) -> int:
         send_bytes += SEND_KEY_BYTES[args.send_key]
     send_after = args.send_after
     send_done = not send_after
+    if args.log:
+        with open(args.log, 'wb'):
+            pass
 
     process = subprocess.Popen(
         args.command,
@@ -84,7 +110,9 @@ def run_smoke(args: argparse.Namespace) -> int:
             return
         if args.send_delay > 0:
             time.sleep(args.send_delay)
-        if process.stdin is not None and send_bytes:
+        if args.qmp_port:
+            send_qmp_key(args.qmp_port, args.send_key)
+        elif process.stdin is not None and send_bytes:
             try:
                 os.write(process.stdin.fileno(), send_bytes)
             except BrokenPipeError:
@@ -110,6 +138,9 @@ def run_smoke(args: argparse.Namespace) -> int:
             if chunk is None:
                 break
             captured.extend(chunk)
+            if args.log:
+                with open(args.log, 'ab') as live_log:
+                    live_log.write(chunk)
             maybe_send_input()
             if update_found() and send_done:
                 terminate(process)
@@ -149,6 +180,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--send-delay", type=float, default=0.25, help="seconds to wait before sending input")
     parser.add_argument("--send-text", help="literal text to send to QEMU stdin")
     parser.add_argument("--send-key", choices=sorted(SEND_KEY_BYTES), help="named key to send to QEMU stdin")
+    parser.add_argument('--qmp-port', type=int, help='localhost QMP port for an emulated keyboard event')
     parser.add_argument(
         "--expect",
         action="append",
@@ -157,6 +189,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="QEMU command after --")
     args = parser.parse_args(argv)
+    if args.qmp_port and (not 1 <= args.qmp_port <= 65535 or not args.send_key or not args.send_after or args.send_text):
+        parser.error('--qmp-port requires a valid port, --send-after and --send-key, without --send-text')
     if args.command and args.command[0] == "--":
         args.command = args.command[1:]
     if not args.expect:

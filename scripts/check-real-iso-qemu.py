@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -163,6 +164,9 @@ def boot_case(case: IsoCase, disk: Path, env: dict[str, str]) -> None:
     qemu = env.get("QEMU_BINARY", "qemu-system-x86_64")
     ovmf = ovmf_code_path(env)
     log = TARGET_DIR / f"{case.name}.serial.log"
+    with socket.socket() as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        qmp_port = reservation.getsockname()[1]
     expect_args = [
         "--expect",
         "NextBoot v",
@@ -191,6 +195,8 @@ def boot_case(case: IsoCase, disk: Path, env: dict[str, str]) -> None:
         "Phase 3: Displaying boot menu",
         "--send-key",
         "enter",
+        "--qmp-port",
+        str(qmp_port),
         *expect_args,
         "--",
         qemu,
@@ -203,6 +209,8 @@ def boot_case(case: IsoCase, disk: Path, env: dict[str, str]) -> None:
         "-nographic",
         "-serial",
         "mon:stdio",
+        "-qmp",
+        f"tcp:127.0.0.1:{qmp_port},server=on,wait=off",
         "-drive",
         f"if=pflash,format=raw,readonly=on,file={ovmf}",
         "-drive",

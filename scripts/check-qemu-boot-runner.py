@@ -4,11 +4,26 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+import io
+import json
+import runpy
+from unittest.mock import MagicMock, patch
 
 RUNNER = Path(__file__).with_name('qemu-boot-smoke.py')
 
 
 class RunnerTests(unittest.TestCase):
+    def test_qmp_keyboard_command(self):
+        scope = runpy.run_path(str(RUNNER))
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.makefile.return_value = io.BytesIO(b'{"QMP":{}}\n{"return":{},"id":0}\n{"return":{},"id":1}\n')
+        with patch.object(scope['socket'], 'create_connection', return_value=client):
+            scope['send_qmp_key'](12345, 'enter')
+        commands = [json.loads(call.args[0]) for call in client.sendall.call_args_list]
+        self.assertEqual(commands[1]['execute'], 'send-key')
+        self.assertEqual(commands[1]['arguments']['keys'], [{'type': 'qcode', 'data': 'ret'}])
+
     def run_case(self, script, extra=()):
         return subprocess.run([sys.executable, str(RUNNER), '--timeout', '2', '--expect', 'PAYLOAD_STARTED',
                                *extra, '--', sys.executable, '-u', '-c', script],

@@ -3,7 +3,8 @@
   "upstream": "https://github.com/ventoy/Ventoy",
   "version": "1.1.16",
   "commit": "2f66a309e4a3f0e08953aabfb0f1cf7e12b39f5d",
-  "source_archive": "https://github.com/ventoy/Ventoy/archive/2f66a309e4a3f0e08953aabfb0f1cf7e12b39f5d.tar.gz",
+  "source_archive": "https://codeload.github.com/ventoy/Ventoy/tar.gz/2f66a309e4a3f0e08953aabfb0f1cf7e12b39f5d",
+  "source_sha256": "1cd1b23f31cb8743f5d380183744acd8936f8e711499b2204b76d319542fd686",
   "files": [
     {
       "path": "ventoy.cpio",
