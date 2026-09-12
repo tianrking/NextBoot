@@ -113,7 +113,8 @@ CASES = (
         (
             "verified split GPT layout: NEXBOOT_DATA=exfat NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
-            "usb-storage",
+            "usb-bot",
+            "scsi-hd",
         ),
     ),
     ImageCase(
@@ -122,7 +123,8 @@ CASES = (
         (
             "verified split GPT layout: NEXBOOT_DATA=fat32 NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
-            "usb-storage",
+            "usb-bot",
+            "scsi-hd",
         ),
     ),
     ImageCase(
@@ -131,7 +133,8 @@ CASES = (
         (
             "verified split GPT layout: NEXBOOT_DATA=ntfs NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
-            "usb-storage",
+            "usb-bot",
+            "scsi-hd",
         ),
     ),
     ImageCase(
@@ -140,7 +143,8 @@ CASES = (
         (
             "verified split GPT layout: NEXBOOT_DATA=udf NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
-            "usb-storage",
+            "usb-bot",
+            "scsi-hd",
         ),
     ),
     ImageCase(
@@ -149,7 +153,8 @@ CASES = (
         (
             "verified split GPT layout: NEXBOOT_DATA=ext2 NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
-            "usb-storage",
+            "usb-bot",
+            "scsi-hd",
         ),
     ),
     ImageCase(
@@ -158,7 +163,8 @@ CASES = (
         (
             "verified split GPT layout: NEXBOOT_DATA=ext3 NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
-            "usb-storage",
+            "usb-bot",
+            "scsi-hd",
         ),
     ),
     ImageCase(
@@ -167,7 +173,8 @@ CASES = (
         (
             "verified split GPT layout: NEXBOOT_DATA=ext4 NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
-            "usb-storage",
+            "usb-bot",
+            "scsi-hd",
         ),
     ),
     ImageCase(
@@ -241,7 +248,8 @@ CASES = (
         (
             "verified split GPT layout: NEXBOOT_DATA=btrfs NEXBOOT_EFI=FAT16-32MiB",
             "logical_block_size=4096",
-            "usb-storage",
+            "usb-bot",
+            "scsi-hd",
         ),
     ),
     ImageCase(
