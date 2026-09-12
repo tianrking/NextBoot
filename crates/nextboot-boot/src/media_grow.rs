@@ -355,24 +355,14 @@ fn plan_exfat_growth(
         .and_then(|bytes| bytes.checked_div(4))
         .and_then(|entries| entries.checked_sub(2))
         .ok_or("invalid exFAT FAT capacity")?;
-    let requested_clusters = (available_blocks - cluster_heap_offset) / sectors_per_cluster;
-    let cluster_count = requested_clusters
-        .min(fat_capacity)
-        .min(u64::from(u32::MAX - 2));
-    if cluster_count < 16 {
-        return Err("expanded exFAT cluster count is too small");
-    }
-    let new_blocks = cluster_heap_offset
-        .checked_add(
-            cluster_count
-                .checked_mul(sectors_per_cluster)
-                .ok_or("exFAT growth overflows")?,
-        )
-        .ok_or("exFAT growth overflows")?;
+    let old_blocks = read_le_u64(&boot, 72).ok_or("missing exFAT volume length")?;
+    let plan = nextboot_fs::exfat::growth::plan_growth(
+        old_blocks, available_blocks, cluster_heap_offset, sectors_per_cluster, fat_capacity,
+    )?;
     Ok(ExfatGrowth {
-        old_blocks: read_le_u64(&boot, 72).ok_or("missing exFAT volume length")?,
-        new_blocks,
-        cluster_count: u32::try_from(cluster_count).map_err(|_| "exFAT cluster count overflows")?,
+        old_blocks,
+        new_blocks: plan.volume_blocks,
+        cluster_count: plan.cluster_count,
     })
 }
 

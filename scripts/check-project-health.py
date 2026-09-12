@@ -48,6 +48,7 @@ def run_checks(
         check_shell_syntax(),
         run_script_check('check-runtime-assets.py', 'Pinned runtime integrity'),
         run_script_check('check-qemu-boot-runner.py', 'Portable QEMU log runner'),
+        run_script_check('check-media-growth.py', 'Media growth idempotence and shrink rejection'),
     ]
     if not skip_flash:
         checks.append(check_flash_dry_run())

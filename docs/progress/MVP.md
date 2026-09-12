@@ -35,6 +35,15 @@
   https://github.com/qemu/qemu/commit/3089637461693837cafd2709ef36d0cf6a4a8ed8
 - Historical completion checkboxes below describe implementation, not certified
   compatibility or production release readiness.
+- Growth correction: preserve the partial-cluster tail in exFAT VolumeLength;
+  reject shrink attempts before writes and make repeated desktop growth a no-op.
+  Three host geometry tests and generated-image preservation checks pass.
+  The rebuilt release loader passed QEMU at 256 MiB, grew the same image to
+  512 MiB, and reported no further growth on reboot. All fifty bundled runtime
+  and notice files still verify after firmware growth.
+- Full QEMU boot matrix passed on commit 7b8fe81. Its image-generation assertions
+  were subsequently aligned with the corrected USB BOT topology. Alpine 3.24.1
+  reached its login prompt through the actual release-media builder locally.
 
 ## 完成的工作
 

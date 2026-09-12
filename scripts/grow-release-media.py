@@ -128,7 +128,7 @@ def update_exfat_boot_checksum(region: bytearray, sector_size: int) -> None:
     )
 
 
-def grow_exfat_boot(handle, sector_size: int, data: GptPartition, new_blocks: int) -> int:
+def plan_exfat_boot(handle, sector_size: int, data: GptPartition, new_blocks: int) -> tuple[int, bytearray]:
     boot_offset = data.start_lba * sector_size
     boot_region = bytearray(read_at(handle, boot_offset, EXFAT_BOOT_REGION_SECTORS * sector_size))
     boot = boot_region[:sector_size]
@@ -142,18 +142,22 @@ def grow_exfat_boot(handle, sector_size: int, data: GptPartition, new_blocks: in
     require(fat_length > 0 and cluster_heap_offset > 24, "invalid growable exFAT geometry")
 
     fat_cluster_capacity = fat_length * sector_size // 4 - 2
-    requested_clusters = (new_blocks - cluster_heap_offset) // sectors_per_cluster
-    new_cluster_count = min(requested_clusters, fat_cluster_capacity, 0xFFFF_FFFD)
+    old_blocks = u64(boot, 72)
+    require(new_blocks >= old_blocks, "refusing to shrink existing exFAT volume")
+    require(old_blocks > cluster_heap_offset, "invalid existing exFAT volume length")
+    capacity = min(fat_cluster_capacity, 0xFFFF_FFFD)
+    require((old_blocks - cluster_heap_offset) // sectors_per_cluster <= capacity,
+            "existing exFAT clusters exceed FAT capacity")
+    capacity_blocks = cluster_heap_offset + capacity * sectors_per_cluster
+    grown_blocks = min(new_blocks, max(capacity_blocks, old_blocks))
+    new_cluster_count = (grown_blocks - cluster_heap_offset) // sectors_per_cluster
     require(new_cluster_count >= 16, "expanded exFAT volume would be too small")
-    grown_blocks = cluster_heap_offset + new_cluster_count * sectors_per_cluster
 
     put_u64(boot, 72, grown_blocks)
     put_u32(boot, 92, new_cluster_count)
     boot_region[:sector_size] = boot
     update_exfat_boot_checksum(boot_region, sector_size)
-    write_at(handle, boot_offset, boot_region)
-    write_at(handle, boot_offset + 12 * sector_size, boot_region)
-    return grown_blocks
+    return grown_blocks, boot_region
 
 
 def grow(path: str, sector_size: int, media_size_bytes: int | None = None) -> str:
@@ -193,13 +197,20 @@ def grow(path: str, sector_size: int, media_size_bytes: int | None = None) -> st
         new_last_usable = backup_entries_lba - 1
         require(new_last_usable > data.start_lba, "no room for expanded data partition")
         available_blocks = new_last_usable - data.start_lba + 1
-        grown_blocks = grow_exfat_boot(handle, sector_size, data, available_blocks)
+        grown_blocks, boot_region = plan_exfat_boot(handle, sector_size, data, available_blocks)
         new_data_end = data.start_lba + grown_blocks - 1
-        require(new_data_end > data.end_lba or u64(header, 32) != last_lba, "release media is already grown")
+        require(new_data_end >= data.end_lba, "refusing to shrink existing data partition")
+        if new_data_end == data.end_lba and u64(header, 32) == last_lba:
+            return "release media is already grown; no changes made"
 
         entry_offset = data.index * entry_size
         put_u64(entries, entry_offset + 40, new_data_end)
         entries_crc = zlib.crc32(entries) & 0xFFFFFFFF
+
+        # Every geometry check above is complete before the first write.
+        boot_offset = data.start_lba * sector_size
+        write_at(handle, boot_offset, boot_region)
+        write_at(handle, boot_offset + 12 * sector_size, boot_region)
 
         put_u32(mbr, 0x1BE + 12, min(total_blocks - 1, 0xFFFF_FFFF))
         write_at(handle, 0, mbr)
@@ -237,10 +248,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.target_size_mib is not None:
-        with open(args.disk_image, "ab") as handle:
-            handle.truncate(args.target_size_mib * 1024 * 1024)
     try:
+        if args.target_size_mib is not None:
+            require(os.path.isfile(args.disk_image), "--target-size-mib requires a regular image file")
+            target_bytes = args.target_size_mib * 1024 * 1024
+            require(target_bytes >= os.path.getsize(args.disk_image), "refusing to shrink image file")
+            with open(args.disk_image, "ab") as handle:
+                handle.truncate(target_bytes)
         print(grow(args.disk_image, args.sector_size, args.media_size_bytes))
     except GrowError as error:
         print(f"grow-release-media: {error}")

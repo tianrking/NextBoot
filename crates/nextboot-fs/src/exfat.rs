@@ -10,5 +10,7 @@ mod extent;
 mod fs;
 #[path = "exfat/model.rs"]
 mod model;
+#[path = "exfat/growth.rs"]
+pub mod growth;
 
 pub use fs::{is_exfat, ExFat, ExFatInfo};
