@@ -59,8 +59,17 @@ append_qemu_storage_device() {
             QEMU_OPTS+=(
                 -device "qemu-xhci,id=xhci"
                 -drive "if=none,id=nextboot_disk,format=raw,file=${disk_img}"
-                -device "usb-storage,drive=nextboot_disk,bootindex=1${device_discard_opts:-$device_block_opts}"
             )
+            if [ "$sector_size" -ne 512 ]; then
+                # QEMU 8.2's usb-storage wrapper silently drops block-size
+                # properties. An explicit BOT SCSI child preserves the geometry.
+                QEMU_OPTS+=(
+                    -device "usb-bot,id=nextboot_usb"
+                    -device "scsi-hd,bus=nextboot_usb.0,drive=nextboot_disk,bootindex=1${device_discard_opts}"
+                )
+            else
+                QEMU_OPTS+=(-device "usb-storage,drive=nextboot_disk,bootindex=1")
+            fi
             ;;
         sd)
             QEMU_OPTS+=(

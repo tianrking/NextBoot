@@ -28,6 +28,11 @@
   also passes Linux CI, all three architecture checks, and default QEMU smoke.
 - QEMU log capture now supports Windows pipes; marker fragmentation, input
   handshake, EOF failure, and timeout termination checks pass locally.
+- USB 4K failure reproduced with QEMU 8.2 and Ubuntu OVMF 2024.02: the legacy
+  usb-storage wrapper ignored block-size properties. The identical image boots
+  into NextBoot when the USB BOT device has an explicitly configured scsi-hd
+  child. The full matrix now uses that topology for USB 4K. Upstream diagnosis:
+  https://github.com/qemu/qemu/commit/3089637461693837cafd2709ef36d0cf6a4a8ed8
 - Historical completion checkboxes below describe implementation, not certified
   compatibility or production release readiness.
 
