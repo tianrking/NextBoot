@@ -58,10 +58,10 @@ resolve_rustc() {
     fi
 
     local path_rustc
-    local path_rustc_link
     path_rustc="$(command -v rustc || true)"
-    path_rustc_link="$(readlink "${path_rustc}" 2>/dev/null || true)"
-    if [ -n "${path_rustc}" ] && [ "${path_rustc_link}" != "rustup" ]; then
+    # rustup's proxy activates (and, on a fresh host, installs) the pinned
+    # rust-toolchain.toml version. Try it before searching installed toolchains.
+    if [ -n "${path_rustc}" ]; then
         if "${path_rustc}" --print sysroot >/dev/null 2>&1; then
             RUSTC_BIN="${path_rustc}"
             return
