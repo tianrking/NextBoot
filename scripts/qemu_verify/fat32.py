@@ -76,6 +76,11 @@ class Fat32Volume:
 
     def read_directory(self, cluster: int) -> list[FileRecord]:
         data = b"".join(self.read_cluster(item) for item in self.cluster_chain(cluster))
+        if cluster != self.root_cluster:
+            require(data[:11] == b'.          ' and data[32:43] == b'..         ',
+                    f'{self.partition.name}: FAT32 subdirectory is missing dot entries')
+            require((u16(data, 20) << 16) | u16(data, 26) == cluster,
+                    f'{self.partition.name}: incorrect dot cluster')
         records: list[FileRecord] = []
         lfn_parts: dict[int, str] = {}
         for offset in range(0, len(data), 32):

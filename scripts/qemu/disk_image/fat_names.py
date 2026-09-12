@@ -18,6 +18,13 @@ class Directory:
         self.entries = []
         self.used_short_names = set()
 
+    def add_dot_entries(self, parent_cluster):
+        # FAT subdirectories begin with these two short directory entries.
+        self.entries.extend([
+            directory_entry(b'.          ', 0x10, self.first_cluster, 0),
+            directory_entry(b'..         ', 0x10, parent_cluster, 0),
+        ])
+
     def add(self, name, attr, first_cluster, size):
         short, needs_lfn = make_short_name(name, self.used_short_names)
         if needs_lfn or name.upper() != short_to_display_name(short):
@@ -103,6 +110,9 @@ def directory_entry(name11, attr, first_cluster, size):
     entry = bytearray(32)
     entry[0:11] = name11
     entry[11] = attr
+    # A fixed valid DOS date (1980-01-01), rather than month/day zero.
+    for offset in (16, 18, 24):
+        struct.pack_into('<H', entry, offset, 0x21)
     struct.pack_into("<H", entry, 20, (first_cluster >> 16) & 0xFFFF)
     struct.pack_into("<H", entry, 26, first_cluster & 0xFFFF)
     struct.pack_into("<I", entry, 28, size)

@@ -21,6 +21,7 @@ def run(command, **kwargs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', type=Path, required=True)
+    parser.add_argument('--data-fs', choices=('exfat', 'fat32'), default='exfat')
     args = parser.parse_args()
     image = args.image.resolve()
     if (os.name != 'posix' or os.geteuid() != 0 or not image.is_file()
@@ -45,8 +46,10 @@ def main():
             raise ValueError('unexpected loop device')
         run(['udevadm', 'settle', '--timeout=10'])
         esp_part, data_part = select_partitions(linux_partitions(device, allow_loop=True))
+        print(run(['fsck.fat', '-n', '-v', esp_part]), flush=True)
+        print(run(['fsck.exfat' if args.data_fs == 'exfat' else 'fsck.fat', '-n', data_part]), flush=True)
         mount(esp_part, esp, 'vfat')
-        mount(data_part, data, 'exfat')
+        mount(data_part, data, 'exfat' if args.data_fs == 'exfat' else 'vfat')
         loader = esp / 'EFI/BOOT/BOOTX64.EFI'
         loader.write_bytes(b'previous EFI fixture')
         iso = data / 'ISO/keep.iso'
@@ -59,7 +62,7 @@ def main():
         result = run([*updater, '--target', 'x86_64-unknown-uefi', device])
         identifier = re.search(r'Transaction: ([0-9a-f]{32})', result).group(1)
         mount(esp_part, esp, 'vfat')
-        mount(data_part, data, 'exfat')
+        mount(data_part, data, 'exfat' if args.data_fs == 'exfat' else 'vfat')
         assert loader.read_bytes() == (PROJECT_DIR / 'target/x86_64-unknown-uefi/release/nextboot-boot.efi').read_bytes()
         expected = release_files(DEFAULT_DIRECTORY)
         for name, content in expected:
@@ -69,7 +72,7 @@ def main():
         unmount_all()
         run([*updater, '--rollback', identifier, device])
         mount(esp_part, esp, 'vfat')
-        mount(data_part, data, 'exfat')
+        mount(data_part, data, 'exfat' if args.data_fs == 'exfat' else 'vfat')
         assert loader.read_bytes() == b'previous EFI fixture'
         assert iso.read_bytes() == b'user ISO retained'
         assert config.read_bytes() == b'user config retained'
@@ -87,7 +90,11 @@ def main():
         for partition in (esp_part, data_part):
             assert subprocess.run(['findmnt', '--source', partition], capture_output=True).returncode != 0
         shim.unlink()
-        print('passed: Linux host updater on FAT/exFAT, 50 runtime files, ISO/config preservation, rollback and failure unmount cleanup')
+        print(f'passed: Linux host updater on FAT/{args.data_fs}, 50 runtime files, ISO/config preservation, rollback and failure unmount cleanup')
+    except Exception:
+        diagnostics = subprocess.run(['dmesg', '--level=err,warn'], capture_output=True, text=True)
+        print('\n'.join(diagnostics.stdout.splitlines()[-35:]), flush=True)
+        raise
     finally:
         # Never recursively remove a directory that could still contain a mount.
         unmount_all()

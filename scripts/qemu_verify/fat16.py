@@ -81,6 +81,9 @@ class Fat16Volume:
             data = self.image.read_blocks(self.root_dir_lba, self.root_dir_sectors)
         else:
             data = b"".join(self.read_cluster(item) for item in self.cluster_chain(cluster))
+            require(data[:11] == b'.          ' and data[32:43] == b'..         ',
+                    f'{self.partition.name}: FAT16 subdirectory is missing dot entries')
+            require(u16(data, 26) == cluster, f'{self.partition.name}: incorrect dot cluster')
 
         records: list[FileRecord] = []
         lfn_parts: dict[int, str] = {}

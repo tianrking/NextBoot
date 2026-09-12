@@ -1,7 +1,7 @@
 import struct
 import time
 
-from .fat_names import fat_label
+from .fat_names import directory_entry, fat_label
 
 
 def write_fat16_volume(f, part, deps):
@@ -77,6 +77,7 @@ def write_fat16_volume(f, part, deps):
         target_dir.add(target_name, 0x20, first, size)
 
     root = Directory(0)
+    root.entries.append(directory_entry(fat_label(part['label']), 0x08, 0, 0))
     directories = []
     dirs_by_path = {"/": root}
 
@@ -88,6 +89,7 @@ def write_fat16_volume(f, part, deps):
             next_path = current_path.rstrip("/") + "/" + component
             if next_path not in dirs_by_path:
                 directory = Directory(allocate_cluster())
+                directory.add_dot_entries(current.first_cluster)
                 current.add(component, 0x10, directory.first_cluster, 0)
                 dirs_by_path[next_path] = directory
                 directories.append(directory)

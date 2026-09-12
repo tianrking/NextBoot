@@ -104,8 +104,11 @@ jobs:
       - name: Validate host updating on real FAT and exFAT volumes
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)" dosfstools exfatprogs
           sudo modprobe exfat
-          scripts/create-release-media.sh --skip-build --without-runtime --size 256 --growable-max-size 512 \
-            --output target/release-media/update-volume-qa.img
-          sudo python3 scripts/check-media-update-volume.py --image target/release-media/update-volume-qa.img
+          for data_fs in exfat fat32; do
+            scripts/create-release-media.sh --skip-build --without-runtime --size 256 --growable-max-size 512 \
+              --data-fs "$data_fs" --output "target/release-media/$data_fs/update-volume-qa.img"
+            sudo python3 scripts/check-media-update-volume.py --data-fs "$data_fs" \
+              --image "target/release-media/$data_fs/update-volume-qa.img"
+          done

@@ -3,6 +3,8 @@ import os
 import struct
 import time
 
+from .fat_names import directory_entry
+
 def write_fat32_volume(f, part, deps):
     sector_size = deps["sector_size"]
     fat32_geometry = deps["fat32_geometry"]
@@ -102,6 +104,7 @@ def write_fat32_volume(f, part, deps):
     set_fat(1, 0x0FFFFFFF)
 
     root = Directory(allocate_cluster())
+    root.entries.append(directory_entry(fat_label(part['label']), 0x08, 0, 0))
     directories = [root]
     dirs_by_path = {"/": root}
 
@@ -113,6 +116,7 @@ def write_fat32_volume(f, part, deps):
             next_path = current_path.rstrip("/") + "/" + component
             if next_path not in dirs_by_path:
                 directory = Directory(allocate_cluster())
+                directory.add_dot_entries(0 if current is root else current.first_cluster)
                 current.add(component, 0x10, directory.first_cluster, 0)
                 dirs_by_path[next_path] = directory
                 directories.append(directory)
@@ -168,7 +172,7 @@ def write_fat32_volume(f, part, deps):
     fsinfo = bytearray(sector_size)
     struct.pack_into("<I", fsinfo, 0, 0x41615252)
     struct.pack_into("<I", fsinfo, 484, 0x61417272)
-    struct.pack_into("<I", fsinfo, 488, max(0, cluster_count - next_cluster))
+    struct.pack_into("<I", fsinfo, 488, max(0, cluster_count - (next_cluster - 2)))
     struct.pack_into("<I", fsinfo, 492, next_cluster)
     struct.pack_into("<I", fsinfo, 508, 0xAA550000)
 
