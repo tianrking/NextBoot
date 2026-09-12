@@ -44,8 +44,13 @@ jobs:
           path: target/**/*.log
 
   real-iso:
+    name: Real ISO (${{ matrix.case }})
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [alpine-standard, ubuntu-26.04-server, kali-2026.2-netinst]
     steps:
       - uses: actions/checkout@v4
       - name: Install QEMU and firmware
@@ -53,9 +58,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends curl ovmf qemu-system-x86
       - name: Real ISO through release media
-        run: python3 scripts/check-real-iso-qemu.py
+        run: python3 scripts/check-real-iso-qemu.py --case "${{ matrix.case }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: real-iso-logs
+          name: real-iso-${{ matrix.case }}-logs
           path: target/real-iso/*.log
