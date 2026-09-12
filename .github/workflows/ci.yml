@@ -19,6 +19,24 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  windows-update:
+    name: Native Windows Media Update
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify selection and recoverable file updates
+        run: |
+          python scripts/check-windows-media.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/check-media-update.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Update and recover disposable native Windows volumes
+        run: python scripts/check-windows-media-volume.py
+
   health:
     name: Health Gate
     runs-on: ubuntu-24.04

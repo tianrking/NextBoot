@@ -51,6 +51,7 @@ def run_checks(
         run_script_check('check-media-growth.py', 'Media growth idempotence and shrink rejection'),
         run_script_check('check-media-update.py', 'Update preservation and recovery'),
         run_script_check('check-exfat-metadata.py', 'exFAT host metadata and Unicode names'),
+        run_script_check('check-windows-media.py', 'Windows disk and volume identity'),
     ]
     if not skip_flash:
         checks.append(check_flash_dry_run())

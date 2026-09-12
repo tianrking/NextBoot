@@ -3,7 +3,8 @@
 Development implementation, updated 2026-09-12. The Linux/macOS frontend now
 updates loaders and the pinned compatibility runtime without formatting the
 disk. It preserves `/ISO`, user configuration and files outside the explicit
-update allowlist. The native Windows device frontend is still being developed.
+update allowlist. The native Windows frontend uses the same file-update core;
+its disk identity checks and disposable VHD validation are tracked separately.
 
 ## Update an existing disk
 
@@ -41,6 +42,39 @@ whose runtime is missing. `--yes` skips the interactive confirmation. Dry-run
 inspects partition metadata and prints the operations; it does not mount, download
 or write. File validation and the precise changed-file list are available from
 the mounted-volume backend's `--dry-run` option.
+
+## Native Windows update
+
+Use Python 3.12 or newer and an administrator Windows Terminal. The native entry
+point uses Windows disk metadata and volume GUIDs; it does not assign letters,
+format partitions, or require Bash. Build the required release EFI first (or
+provide its directory with `--artifacts`). The default architecture is x64.
+
+```powershell
+python scripts/update-media-windows.py --list
+python scripts/prepare-runtime-assets.py
+python scripts/update-media-windows.py --disk 3 --dry-run
+python scripts/update-media-windows.py --disk 3
+python scripts/update-media-windows.py --disk 3 --rollback TRANSACTION_ID
+```
+
+Replace `3` with the actual NextBoot disk number shown by the inventory. System
+and boot disks are always refused. USB disks are accepted by default; a
+non-system fixed disk requires `--allow-fixed`, and a disposable VHD requires
+`--allow-virtual`. These options do not bypass GPT, filesystem or volume checks.
+Both a FAT ESP and a separate FAT32/exFAT `NEXTDATA` are required. Disk/partition
+identities are checked again immediately before writing.
+
+`--target ia32`, `--target aa64` and `--target all` select other built release
+artifacts. `--loaders-only` explicitly omits runtime migration. `--offline`
+requires a previously prepared runtime cache. Dry-run requires that cache when
+runtime migration is selected; it previews exact changed files without writing
+or downloading. `--yes` skips the disk-number confirmation. To recover an
+interrupted operation, use `--rollback pending`.
+
+Windows validation uses disposable native VHD volumes and does not establish
+physical USB compatibility or power-loss durability. The VHD test uses a
+non-booted PE fixture for file operations; real EFI/OS boot evidence is separate.
 
 ## Backups and rollback
 
