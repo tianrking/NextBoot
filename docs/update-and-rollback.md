@@ -45,7 +45,8 @@ the mounted-volume backend's `--dry-run` option.
 ## Backups and rollback
 
 Every changed file is staged and checksum-verified. Existing bytes are copied
-and verified before replacements begin. Each volume retains its own backup
+and verified before replacements begin. Runtime files are replaced before EFI
+loaders. Each volume retains its own backup
 under `.nextboot-update/<transaction-id>/`; the ESP holds the transaction
 manifest and a pending-operation record. The updater prints the transaction ID.
 Identical files are skipped, and a repeated update does not create a new backup

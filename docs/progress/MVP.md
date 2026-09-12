@@ -91,8 +91,8 @@
   rollback and loader-only mode, and cleans up mounts it created after errors.
   Linux uses a unique temporary mount directory. macOS preserves pre-existing
   mounts and reads mount paths from diskutil's structured output.
-- Local evidence: 17 transaction/loader test cases (the POSIX symlink case is
-  skipped on Windows), 12 partition/frontend plan cases, and actual-loader plus
+- Local evidence: 18 transaction/loader test cases (the POSIX symlink case is
+  skipped on Windows), 13 partition/frontend plan cases, and actual-loader plus
   50-file runtime migration/no-op/rollback integration. Real FAT/exFAT loopback
   frontend coverage was added to CI; results must be checked after publication.
 - Native Windows disk handling, physical host validation and power-loss behavior

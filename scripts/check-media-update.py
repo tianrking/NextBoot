@@ -87,6 +87,13 @@ class UpdateTests(unittest.TestCase):
         self.assertIsNotNone(self.apply())
         self.assert_users_untouched()
 
+    def test_runtime_is_installed_before_any_loader_replacement(self):
+        self.payload.reverse()  # frontend input order must not expose a new loader first
+        self.interrupt_after_first_replacement()
+        self.assertEqual(self.loader.read_bytes(), b'old loader')
+        update.rollback(self.esp, self.data)
+        self.assert_users_untouched()
+
     def test_write_failure_rolls_back_every_changed_volume(self):
         replace = os.replace
         def fail(source, destination):

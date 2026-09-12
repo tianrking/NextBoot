@@ -137,6 +137,8 @@ def apply(esp: Path, data: Path | None, payload, dry_run=False):
         if pending.exists():
             raise ValueError('unfinished update found; run rollback before updating')
         changes = plan(roots, payload)
+        # Publish dependencies before the boot entry points that consume them.
+        changes.sort(key=lambda item: item[0]['area'] == 'esp')
         if not changes:
             return None
         identifier = uuid.uuid4().hex
