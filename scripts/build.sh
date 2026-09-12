@@ -172,6 +172,8 @@ case "${1:-debug}" in
         ;;
 esac
 
+CARGO_ARGS+=(--locked)
+
 echo -e "${YELLOW}Target: ${TARGET}${NC}"
 echo -e "${YELLOW}Toolchain: ${TOOLCHAIN}${NC}"
 echo -e "${YELLOW}Rustc: ${RUSTC_BIN}${NC}"

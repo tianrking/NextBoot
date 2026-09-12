@@ -22,5 +22,4 @@ test/disk.img
 __pycache__/
 *.pyc
 
-# Cargo
-Cargo.lock
+# Cargo.lock is tracked: this workspace ships an executable bootloader.

@@ -104,6 +104,7 @@ def check_host_tests() -> CheckResult:
             [
                 str(cargo),
                 "test",
+                "--locked",
                 "-p",
                 package,
                 "--lib",

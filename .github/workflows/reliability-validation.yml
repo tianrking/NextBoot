@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'scripts/**'
       - 'docs/runtime-assets.json'
       - '.github/workflows/reliability-validation.yml'

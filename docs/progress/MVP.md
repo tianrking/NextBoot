@@ -44,6 +44,10 @@
 - Full QEMU boot matrix passed on commit 7b8fe81. Its image-generation assertions
   were subsequently aligned with the corrected USB BOT topology. Alpine 3.24.1
   reached its login prompt through the actual release-media builder locally.
+- Build inputs are now pinned to Rust 1.98.1 and the checked-in Cargo.lock;
+  build/check and host validation use --locked. The release build and 68 tests
+  across config, filesystem, image and Linux libraries pass with that lockfile.
+  This controls dependency drift; byte-for-byte reproducibility is not claimed.
 
 ## 完成的工作
 
