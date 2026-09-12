@@ -35,8 +35,11 @@ def exfat_table_checksum(data):
 
 def exfat_name_hash(name):
     checksum = 0
-    for byte in name.upper().encode("utf-16le"):
-        checksum = rotate_checksum16(checksum, byte)
+    # exFAT maps individual UTF-16 code units; full Unicode upper() may expand
+    # characters (such as sharp s) or change supplementary-plane characters.
+    for (unit,) in struct.iter_unpack("<H", name.encode("utf-16le")):
+        for byte in struct.pack("<H", exfat_upcase_unit(unit)):
+            checksum = rotate_checksum16(checksum, byte)
     return checksum
 
 
@@ -49,18 +52,28 @@ def exfat_entry_set_checksum(entries):
     return checksum
 
 
+def exfat_upcase_unit(codepoint):
+    upper = chr(codepoint).upper()
+    return ord(upper) if len(upper) == 1 and ord(upper) <= 0xFFFF else codepoint
+
+
 def exfat_upcase_table():
+    # Identity-run compression is specified in exFAT section 7.2.5. Besides
+    # saving space, it avoids a 16-bit checksum-length bug in exfatprogs 1.2.2
+    # when presented with a full 131072-byte uncompressed table.
+    mappings = [exfat_upcase_unit(unit) for unit in range(0x10000)]
     table = bytearray()
-    for codepoint in range(0x10000):
-        char = chr(codepoint)
-        upper = char.upper()
-        if len(upper) != 1:
-            mapped = codepoint
+    index = 0
+    while index < len(mappings):
+        end = index
+        while end < len(mappings) and mappings[end] == end and end - index < 0xFFFF:
+            end += 1
+        if end - index >= 3:
+            table.extend(struct.pack("<HH", 0xFFFF, end - index))
+            index = end
         else:
-            mapped = ord(upper)
-            if mapped > 0xFFFF:
-                mapped = codepoint
-        table.extend(struct.pack("<H", mapped))
+            table.extend(struct.pack("<H", mappings[index]))
+            index += 1
     return bytes(table)
 
 
@@ -110,10 +123,13 @@ def exfat_entry_set(name, attr, first_cluster, size, contiguous):
     file_entry[0] = 0x85
     file_entry[1] = secondary_count
     struct.pack_into("<H", file_entry, 4, attr)
+    # Valid DOS dates for creation, modification and access (1980-01-01).
+    for date_offset in (10, 14, 18):
+        struct.pack_into("<H", file_entry, date_offset, 0x21)
 
     stream_entry = bytearray(32)
     stream_entry[0] = 0xC0
-    stream_entry[1] = 0x02 if contiguous else 0
+    stream_entry[1] = 0x03 if contiguous and size else 0x01
     stream_entry[3] = len(code_units)
     struct.pack_into("<H", stream_entry, 4, exfat_name_hash(name))
     struct.pack_into("<Q", stream_entry, 8, size)

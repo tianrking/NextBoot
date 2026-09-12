@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .exfat_metadata import checksum, decode_upcase, name_hash
+
 from .common import (
     EXFAT_EOC,
     FileExtent,
@@ -150,9 +152,16 @@ class ExFatVolume:
         upcase_cluster = u32(upcase, 20)
         upcase_size = u64(upcase, 24)
         require(upcase_cluster >= 2, f"{self.partition.name}: invalid exFAT upcase cluster")
-        require(upcase_size > 0, f"{self.partition.name}: empty exFAT upcase table")
+        require(0 < upcase_size <= 131072, f"{self.partition.name}: invalid exFAT upcase size")
+        chain = self.cluster_chain(upcase_cluster)
+        data = b"".join(self.read_cluster(cluster) for cluster in chain)[:upcase_size]
+        require(len(data) == upcase_size, f"{self.partition.name}: truncated exFAT upcase table")
+        self.upcase_table = decode_upcase(data, u32(upcase, 4))
 
     def parse_entry_set(self, group: bytes) -> FileRecord | None:
+        require(checksum(group, 16, (2, 3)) == u16(group, 2), 'exFAT entry checksum mismatch')
+        require(len(group) >= 96 and group[32] == 0xC0, 'missing exFAT stream extension')
+        require(group[33] & 1, 'exFAT stream must allow allocation')
         attr = u16(group, 4)
         if attr & 0x0006:
             return None
@@ -160,7 +169,7 @@ class ExFatVolume:
         first_cluster = 0
         size = 0
         name_length = 0
-        name_chars: list[str] = []
+        name_bytes = bytearray()
         contiguous = False
 
         for offset in range(32, len(group), 32):
@@ -171,15 +180,19 @@ class ExFatVolume:
                 first_cluster = u32(entry, 20)
                 size = u64(entry, 24)
             elif entry[0] == 0xC1:
-                remaining = name_length - len(name_chars)
+                remaining = name_length - len(name_bytes) // 2
                 for index in range(min(15, max(0, remaining))):
                     value = u16(entry, 2 + index * 2)
                     if value == 0:
                         break
-                    name_chars.append(chr(value))
+                    name_bytes.extend(value.to_bytes(2, 'little'))
+
+        require(len(name_bytes) == name_length * 2, 'truncated exFAT name')
+        require(name_hash(name_bytes, self.upcase_table) == u16(group, 36), 'exFAT name hash mismatch')
+        require(not contiguous or size > 0, 'empty exFAT stream has NoFatChain set')
 
         return FileRecord(
-            name="".join(name_chars),
+            name=name_bytes.decode('utf-16le'),
             is_dir=bool(attr & 0x0010),
             size=size,
             first_cluster=first_cluster,
