@@ -17,6 +17,8 @@ DEVICE=""
 DRY_RUN=0
 ASSUME_YES=0
 FORCE=0
+ESP_PARTITION=""
+DATA_PARTITION=""
 EFI_INSTALL_FILES=()
 EFI_INSTALL_NAMES=()
 EFI_INSTALL_TARGETS=()
@@ -33,8 +35,8 @@ Options:
   --target TARGET   UEFI target to update: x86_64-unknown-uefi,
                     i686-unknown-uefi, aarch64-unknown-uefi, or all
                     (default: all)
-  --force           Update even if NEXTDATA cannot be detected
-  --dry-run         Print commands without writing
+  --force           Allow missing NEXTDATA label; still require a verified NextBoot ESP
+  --dry-run         Inspect the actual disk and print commands without writing
   -y, --yes         Skip confirmation prompt
   -h, --help        Show this help
 
@@ -150,34 +152,25 @@ normalize_device() {
 }
 
 esp_partition() {
-    if [[ "$HOST_OS" == "darwin"* ]]; then
-        printf '%ss1\n' "$DEVICE"
-    else
-        linux_partition_path "$DEVICE" 1
-    fi
+    printf '%s\n' "$ESP_PARTITION"
 }
 
 data_partition() {
-    if [[ "$HOST_OS" == "darwin"* ]]; then
-        printf '%ss2\n' "$DEVICE"
-    else
-        linux_partition_path "$DEVICE" 2
-    fi
+    printf '%s\n' "$DATA_PARTITION"
 }
 
-has_nextdata_partition() {
-    if [ "$DRY_RUN" -eq 1 ]; then
-        return 0
-    fi
-
-    local data_part
-    data_part="$(data_partition)"
-    if [[ "$HOST_OS" == "darwin"* ]]; then
-        diskutil info "$data_part" 2>/dev/null | grep -Eq 'Volume Name:[[:space:]]+NEXTDATA'
-    else
-        [ -e "$data_part" ] || return 1
-        lsblk -no LABEL "$data_part" 2>/dev/null | grep -qx 'NEXTDATA'
-    fi
+identify_partitions() {
+    local host_kind inventory
+    local -a args=()
+    case "$HOST_OS" in
+        darwin*) host_kind=darwin ;;
+        linux*) host_kind=linux ;;
+        *) die "This updater requires Linux or macOS; Windows support is not available yet." ;;
+    esac
+    [ "$FORCE" -eq 0 ] || args+=(--force)
+    inventory="$("${PYTHON:-python3}" "$SCRIPT_DIR/media_partitions.py" --host "$host_kind" "${args[@]}" "$DEVICE")" || die "Partition inspection failed; nothing was written."
+    IFS=$'\t' read -r ESP_PARTITION DATA_PARTITION <<< "$inventory"
+    [ -n "$ESP_PARTITION" ] && [ -n "$DATA_PARTITION" ] || die "Incomplete partition inventory"
 }
 
 confirm_update() {
@@ -226,12 +219,11 @@ if [ "$DRY_RUN" -eq 0 ] && [ ! -e "$DEVICE" ]; then
     die "Device not found: ${DEVICE}"
 fi
 
-if ! has_nextdata_partition && [ "$FORCE" -eq 0 ]; then
-    die "NEXTDATA was not detected on $(data_partition); use --force only if this is a NextBoot disk"
-fi
+identify_partitions
 
 info "NextBoot Media Updater"
 warn "Target device: ${DEVICE}"
+note "Verified ESP: ${ESP_PARTITION}; NEXTDATA: ${DATA_PARTITION}"
 for index in "${!EFI_INSTALL_FILES[@]}"; do
     warn "Update ${EFI_INSTALL_TARGETS[$index]}: ${EFI_INSTALL_FILES[$index]} -> EFI/BOOT/${EFI_INSTALL_NAMES[$index]}"
 done

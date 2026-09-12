@@ -2,7 +2,25 @@
 
 ## Version: 0.1.0
 
-### Status: CODE COMPLETE (编译中)
+### Status: HARDENING — release readiness is not yet established
+
+## 2026-09-12: Reliable release work
+
+- Product scope confirmed: UEFI multi-image installation and recovery media,
+  prioritizing x86_64 mainstream workflows and retaining separate evidence for
+  other architectures. Runtime compatibility assets may be reused with their
+  provenance, checksums, and licenses recorded.
+- Completed: update partition discovery now uses GPT types and volume metadata
+  instead of fixed partition numbers. Release and older layouts are covered;
+  ambiguous disks and invalid ESP filesystems fail before mounting. Force cannot
+  waive ESP validation. Dry runs inspect the actual inventory.
+- Validation: 10 partition/parser and shell orchestration tests pass locally,
+  with additional subcases for both layouts and unsafe inventories. Fixtures are
+  isolated from build output and no physical disk was written.
+- In progress: release/runtime parity, full QEMU failure diagnosis, and evidence
+  for real OS workflows. Hardware qualification remains outstanding.
+- Historical completion checkboxes below describe implementation, not certified
+  compatibility or production release readiness.
 
 ## 完成的工作
 
