@@ -18,6 +18,8 @@ from terminal_probe import TerminalProbe
 SEND_KEY_BYTES = {
     "enter": b"\r",
     "escape": b"\x1b",
+    "down": b"\x1b[B",
+    "up": b"\x1b[A",
 }
 
 
@@ -30,7 +32,7 @@ def send_qmp_key(port: int, key: str) -> None:
                 raise ValueError('invalid QMP greeting')
             for index, command in enumerate([
                 {'execute': 'qmp_capabilities'},
-                {'execute': 'send-key', 'arguments': {'keys': [{'type': 'qcode', 'data': {'enter': 'ret', 'escape': 'esc'}[key]}]}},
+                {'execute': 'send-key', 'arguments': {'keys': [{'type': 'qcode', 'data': {'enter': 'ret', 'escape': 'esc', 'down': 'down', 'up': 'up'}[key]}]}},
             ]):
                 command['id'] = index
                 client.sendall(json.dumps(command).encode() + b'\n')

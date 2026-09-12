@@ -4,6 +4,7 @@
 
 use crate::scanner::{ImageFormat, IsoFile, OsType};
 use alloc::vec::Vec;
+use core::cell::{Cell, RefCell};
 use log::{info, warn};
 use nextboot_fs::FileExtent;
 use nextboot_virtio::{MemoryOverlay, VirtualBlockIo, VirtualDeviceConfig, VirtualDeviceType};
@@ -22,6 +23,7 @@ mod linux_ventoy;
 mod load_file;
 mod model;
 mod os_param;
+mod registration;
 mod source_volume;
 mod util;
 mod vdi_parent;
@@ -49,6 +51,9 @@ pub struct BootManager<'a> {
     parent_image: Handle,
     iso: &'a IsoFile,
     qemu_linux_serial_console: bool,
+    cleanup_ok: Cell<bool>,
+    runtime_allocations: RefCell<Vec<*mut u8>>,
+    os_param_published: Cell<bool>,
 }
 
 impl<'a> BootManager<'a> {
@@ -66,11 +71,35 @@ impl<'a> BootManager<'a> {
             parent_image,
             iso,
             qemu_linux_serial_console,
+            cleanup_ok: Cell::new(true),
+            runtime_allocations: RefCell::new(Vec::new()),
+            os_param_published: Cell::new(false),
         }
     }
 
     /// 准备并执行引导
     pub fn prepare_and_boot(&self) -> uefi::Result<()> {
+        let result = self.prepare_boot_inner();
+        if result.as_ref().is_err_and(|error| error.status() == Status::COMPROMISED_DATA) {
+            self.cleanup_ok.set(false);
+        }
+        if self.cleanup_ok.get() {
+            if let Err(error) = self.release_os_parameters() {
+                self.cleanup_ok.set(false);
+                return Err(error);
+            }
+        }
+        if !self.cleanup_ok.get() {
+            return Err(Status::DEVICE_ERROR.into());
+        }
+        result
+    }
+
+    pub fn can_retry(&self) -> bool {
+        self.cleanup_ok.get()
+    }
+
+    fn prepare_boot_inner(&self) -> uefi::Result<()> {
         info!("Preparing to boot: {}", self.iso.path);
         if self.iso.image_format.is_efi_executable() {
             return self.boot_efi_executable();
@@ -98,6 +127,9 @@ impl<'a> BootManager<'a> {
         }
 
         let virtual_device = self.create_virtual_block_io(boot_config)?;
+        if !self.cleanup_ok.get() {
+            return Err(Status::DEVICE_ERROR.into());
+        }
 
         if self.iso.image_format.is_iso() && self.iso.os_type.is_linux() {
             return self.boot_linux(&virtual_device);

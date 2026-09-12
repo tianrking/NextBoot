@@ -343,6 +343,18 @@ pub struct RegisteredIsoSimpleFileSystem {
 }
 
 impl RegisteredIsoSimpleFileSystem {
+    pub fn uninstall(mut self, bt: &BootServices, handle: Handle) -> uefi::Result<()> {
+        let result = unsafe {
+            bt.uninstall_protocol_interface(
+                handle, &IsoSimpleFileSystem::GUID, self.protocol.protocol_ptr().cast::<c_void>(),
+            )
+        };
+        if result.is_err() {
+            self.leak();
+        }
+        result
+    }
+
     pub fn leak(self) {
         let _ = Box::leak(self.protocol);
     }

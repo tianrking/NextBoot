@@ -29,6 +29,7 @@ const VENTOY_RUNTIME_ALIGNMENT: usize = 4096;
 
 impl BootManager<'_> {
     pub(super) fn publish_os_param(&self, config: &VirtualDeviceConfig) -> uefi::Result<()> {
+        self.os_param_published.set(true);
         let data = self.build_os_param_payload(config)?;
         let name = CString16::try_from(NEXTBOOT_OS_PARAM_NAME)
             .map_err(|_| uefi::Status::INVALID_PARAMETER)?;
@@ -249,15 +250,44 @@ impl BootManager<'_> {
                     .ok_or(uefi::Status::OUT_OF_RESOURCES)?,
             )
             .ok_or(uefi::Status::OUT_OF_RESOURCES)?;
+        if self.runtime_allocations.borrow_mut().try_reserve(1).is_err() {
+            return Err(Status::OUT_OF_RESOURCES.into());
+        }
         let raw = self
             .bt
             .allocate_pool(MemoryType::RUNTIME_SERVICES_DATA, allocation_size)?;
+        self.runtime_allocations.borrow_mut().push(raw);
         let aligned = align_up(raw as usize, alignment).ok_or(uefi::Status::OUT_OF_RESOURCES)?;
         unsafe {
             ptr::copy_nonoverlapping(data.as_ptr(), aligned as *mut u8, data.len());
         }
 
         Ok(aligned)
+    }
+
+    pub(super) fn release_os_parameters(&self) -> uefi::Result<()> {
+        if self.os_param_published.get() {
+            for (name, guid) in [
+                (NEXTBOOT_OS_PARAM_NAME, NEXTBOOT_OS_PARAM_VENDOR_GUID),
+                (crate::ventoy::VENTOY_OS_PARAM_NAME, VENTOY_OS_PARAM_VENDOR_GUID),
+            ] {
+                let name = CString16::try_from(name).map_err(|_| Status::INVALID_PARAMETER)?;
+                if let Err(error) = self.rt.set_variable(
+                    name.as_ref(), &VariableVendor(guid), VariableAttributes::empty(), &[],
+                ) {
+                    if error.status() != Status::NOT_FOUND {
+                        // Preserve the allocations if a runtime variable could still point at them.
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        for allocation in self.runtime_allocations.borrow_mut().drain(..) {
+            unsafe { self.bt.free_pool(allocation) }?;
+        }
+        self.os_param_published.set(false);
+        info!("Released boot attempt runtime metadata");
+        Ok(())
     }
 
     fn detect_ventoy_source_partition_type(&self) -> uefi::Result<u16> {

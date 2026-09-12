@@ -37,7 +37,7 @@ v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资�
 | Kali 2026.2 netinst x64 | Pinned case is defined | Current branch complete run pending |
 | Windows and WinPE | Code paths and synthetic tests exist | Official image installation/recovery checks |
 | Other mainstream images | Families listed in ISO compatibility matrix | Exact version/hash/result rows, including rescue and appliance images |
-| Failed image recovery | Current diagnostics and status exist | Return to menu safely, release registered resources, retry another image |
+| Failed image recovery | Broken ISO → menu → different Linux ISO passed in QEMU, including both attempts' resource cleanup; retry timeout disabled | Broad firmware/real-image regression coverage and cleanup-refusal behavior on hardware |
 | Real hardware | Report tooling exists; public CSV has zero rows | Genuine device reports; no synthetic rows counted |
 | Documentation | Current limitations and runtime notices documented | Final user guide, troubleshooting, update/rollback, release notes and checksums synchronized to exact release |
 

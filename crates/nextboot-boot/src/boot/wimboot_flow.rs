@@ -49,6 +49,7 @@ impl BootManager<'_> {
         );
 
         let source_device = VirtualBootDevice {
+            _registration: None,
             handle: self.iso.volume_handle,
             device_path: self.handle_device_path_bytes(self.iso.volume_handle)?,
         };
@@ -210,6 +211,7 @@ impl BootManager<'_> {
         );
 
         let source_device = VirtualBootDevice {
+            _registration: None,
             handle: self.iso.volume_handle,
             device_path: self.handle_device_path_bytes(self.iso.volume_handle)?,
         };

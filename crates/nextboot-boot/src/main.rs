@@ -149,16 +149,19 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
         );
     }
 
-    // Phase 3: 显示菜单
-    info!("Phase 3: Displaying boot menu...");
-    let selected_iso = show_menu(st, &iso_files)?;
-
-    match selected_iso {
-        Some(iso) => {
-            info!("Selected: {}", iso.path);
-
-            // Phase 4: 启动选中的 ISO
-            info!("Phase 4: Booting selected ISO...");
+    let mut first_display = true;
+    let mut attempt = 0u64;
+    loop {
+        info!("Phase 3: Displaying boot menu...");
+        let Some(iso) = show_menu(st, &iso_files, first_display)? else {
+            info!("No ISO selected, exiting");
+            return Ok(());
+        };
+        first_display = false;
+        attempt = attempt.saturating_add(1);
+        info!("Selected: {}", iso.path);
+        info!("Phase 4: Booting selected ISO...");
+        let (result, can_retry) = {
             let boot_manager = BootManager::new(
                 st.boot_services(),
                 st.runtime_services(),
@@ -166,14 +169,33 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
                 &iso,
                 qemu_linux_serial_console,
             );
-            boot_manager.prepare_and_boot()?;
+            let result = boot_manager.prepare_and_boot();
+            (result, boot_manager.can_retry())
+        };
+        if !can_retry {
+            error!("Firmware retained boot resources; restart before trying another image");
+            show_message(st, "Firmware could not release the previous boot device.\r\n  Press any key to restart the computer safely.");
+            wait_for_key(st);
+            // Do not return and unload NextBoot while firmware retains our callbacks.
+            st.runtime_services().reset(
+                uefi::table::runtime::ResetType::COLD, Status::SUCCESS, None,
+            );
         }
-        None => {
-            info!("No ISO selected, exiting");
+        info!("Boot attempt {} resources released", attempt);
+        let message = match result {
+            Ok(()) => format!("{} returned to NextBoot.", iso.path),
+            Err(error) => {
+                error!("Boot failed: {:?}", error);
+                format!("Could not boot {}. Status: {:?}.", iso.path, error.status())
+            }
+        };
+        info!("Boot attempt ended; return-to-menu is available");
+        show_message(st, &format!("{}\r\n\r\n  Press any key to return to the menu, or Esc to exit.", message));
+        if wait_for_key(st) == nextboot_menu::Input::Escape {
+            return Ok(());
         }
+        info!("Returned to boot menu; automatic boot timeout disabled");
     }
-
-    Ok(())
 }
 
 fn qemu_linux_serial_console_enabled(st: &SystemTable<Boot>) -> bool {

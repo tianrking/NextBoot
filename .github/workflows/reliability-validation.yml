@@ -35,6 +35,8 @@ jobs:
           NEXTBOOT_FULL_QEMU_MATRIX: '1'
           NEXTBOOT_QEMU_TIMEOUT: '60'
         run: scripts/qemu-smoke-matrix.sh
+      - name: Recover from a broken image and boot another
+        run: python3 scripts/check-boot-retry-qemu.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

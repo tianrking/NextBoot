@@ -24,6 +24,7 @@ impl BootManager<'_> {
         info!("Booting Linux ISO...");
         match self.try_direct_linux_efi_stub(device) {
             Ok(()) => return Ok(()),
+            Err(err) if !self.can_retry() => return Err(err),
             Err(err) => warn!(
                 "Direct Linux EFI-stub boot failed for {}: {:?}; trying default EFI chain-load paths",
                 self.iso.path,
@@ -96,6 +97,10 @@ impl BootManager<'_> {
                 Some(provider)
             }
             Err(err) => {
+                if err.status() == Status::COMPROMISED_DATA {
+                    self.cleanup_ok.set(false);
+                    return Err(err);
+                }
                 warn!(
                     "Failed to register Linux EFI initrd LoadFile2 provider: {:?}; falling back to initrd path load option",
                     err.status()
@@ -114,7 +119,10 @@ impl BootManager<'_> {
         // A real OS does not return after ExitBootServices. Returning EFI applications
         // and failed loaders must release this provider before another boot attempt.
         if let Some(provider) = provider {
-            provider.uninstall(self.bt)?;
+            if let Err(error) = provider.uninstall(self.bt) {
+                self.cleanup_ok.set(false);
+                return Err(error);
+            }
             info!("Released Linux EFI initrd LoadFile2 provider after loader returned");
         }
         result

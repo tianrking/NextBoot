@@ -3,9 +3,10 @@ use alloc::vec::Vec;
 use uefi::table::boot::BootServices;
 use uefi::Handle;
 
-pub(super) struct VirtualBootDevice {
+pub(super) struct VirtualBootDevice<'a> {
     pub(super) handle: Handle,
     pub(super) device_path: Vec<u8>,
+    pub(super) _registration: Option<super::registration::VirtualRegistration<'a>>,
 }
 
 /// 引导模式

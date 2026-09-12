@@ -67,18 +67,13 @@ impl BootManager<'_> {
                         virtual_handle,
                         err.status()
                     );
+                    if err.status() == Status::COMPROMISED_DATA {
+                        self.cleanup_ok.set(false);
+                    }
                     None
                 }
             }
         };
-
-        registered.leak();
-        if let Some(protocol) = simple_file_system {
-            protocol.leak();
-        }
-        if let Some(protocol) = load_file_protocol {
-            protocol.leak();
-        }
 
         info!(
             "Virtual Block IO installed on {:?}: {:?}, source extents: {}",
@@ -90,6 +85,13 @@ impl BootManager<'_> {
         Ok(VirtualBootDevice {
             handle: virtual_handle,
             device_path,
+            _registration: Some(super::registration::VirtualRegistration {
+                bt: self.bt,
+                cleanup_ok: &self.cleanup_ok,
+                block: Some(registered),
+                filesystem: simple_file_system,
+                files: load_file_protocol,
+            }),
         })
     }
 

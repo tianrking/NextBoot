@@ -13,8 +13,9 @@ use uefi::prelude::*;
 pub(crate) fn show_menu(
     st: &mut SystemTable<Boot>,
     iso_files: &[scanner::IsoFile],
+    first_display: bool,
 ) -> uefi::Result<Option<scanner::IsoFile>> {
-    if !authorize_boot_password(st, iso_files)? {
+    if first_display && !authorize_boot_password(st, iso_files)? {
         return Ok(None);
     }
 
@@ -46,7 +47,11 @@ pub(crate) fn show_menu(
         .collect();
 
     let default_selection = default_menu_selection(iso_files);
-    let menu_timeout = menu_timeout_for_selection(iso_files, default_selection);
+    let menu_timeout = if first_display {
+        menu_timeout_for_selection(iso_files, default_selection)
+    } else {
+        None
+    };
     let mut state = MenuState::new(items);
     state.selected = default_selection.min(state.items.len().saturating_sub(1));
     let config = MenuConfig {

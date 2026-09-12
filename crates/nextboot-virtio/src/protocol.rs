@@ -12,8 +12,6 @@ use uefi::proto::device_path::DevicePath;
 #[cfg(not(test))]
 use uefi::proto::media::block::BlockIO;
 #[cfg(not(test))]
-use uefi::proto::media::disk::{DiskIo, DiskIo2};
-#[cfg(not(test))]
 use uefi::proto::unsafe_protocol;
 #[cfg(not(test))]
 use uefi::table::boot::BootServices;
@@ -124,69 +122,38 @@ impl VirtualBlockIoProtocol {
     pub fn install(self, bt: &BootServices) -> uefi::Result<RegisteredVirtualBlockIo> {
         let mut protocol = Box::new(self);
         protocol.boot_services = bt as *const BootServices as *const c_void;
-        let block_io_interface = protocol.as_ptr().cast::<c_void>();
-        let handle =
-            unsafe { bt.install_protocol_interface(None, &BlockIO::GUID, block_io_interface) }?;
-
-        let block_io_2_interface = protocol.block_io_2_ptr().cast::<c_void>();
-        if let Err(err) = unsafe {
-            bt.install_protocol_interface(Some(handle), &BlockIo2::GUID, block_io_2_interface)
-        } {
-            let _ = unsafe {
-                bt.uninstall_protocol_interface(handle, &BlockIO::GUID, block_io_interface)
-            };
-            return Err(err);
-        }
-
-        let disk_io_interface = protocol.disk_io_ptr().cast::<c_void>();
-        if let Err(err) =
-            unsafe { bt.install_protocol_interface(Some(handle), &DiskIo::GUID, disk_io_interface) }
-        {
-            let _ = unsafe {
-                bt.uninstall_protocol_interface(handle, &BlockIo2::GUID, block_io_2_interface)
-            };
-            let _ = unsafe {
-                bt.uninstall_protocol_interface(handle, &BlockIO::GUID, block_io_interface)
-            };
-            return Err(err);
-        }
-
-        let disk_io_2_interface = protocol.disk_io_2_ptr().cast::<c_void>();
-        if let Err(err) = unsafe {
-            bt.install_protocol_interface(Some(handle), &DiskIo2::GUID, disk_io_2_interface)
-        } {
-            let _ = unsafe {
-                bt.uninstall_protocol_interface(handle, &DiskIo::GUID, disk_io_interface)
-            };
-            let _ = unsafe {
-                bt.uninstall_protocol_interface(handle, &BlockIo2::GUID, block_io_2_interface)
-            };
-            let _ = unsafe {
-                bt.uninstall_protocol_interface(handle, &BlockIO::GUID, block_io_interface)
-            };
-            return Err(err);
-        }
-
         let mut device_path = protocol.device_path_bytes().into_boxed_slice();
-        let device_path_interface = device_path.as_mut_ptr().cast::<c_void>();
-        if let Err(err) = unsafe {
-            bt.install_protocol_interface(Some(handle), &DevicePath::GUID, device_path_interface)
-        } {
-            let _ = unsafe {
-                bt.uninstall_protocol_interface(handle, &DiskIo2::GUID, disk_io_2_interface)
-            };
-            let _ = unsafe {
-                bt.uninstall_protocol_interface(handle, &DiskIo::GUID, disk_io_interface)
-            };
-            let _ = unsafe {
-                bt.uninstall_protocol_interface(handle, &BlockIo2::GUID, block_io_2_interface)
-            };
-            let _ = unsafe {
-                bt.uninstall_protocol_interface(handle, &BlockIO::GUID, block_io_interface)
-            };
-            return Err(err);
+        let interfaces = [
+            (BlockIO::GUID, protocol.as_ptr().cast::<c_void>()),
+            (BlockIo2::GUID, protocol.block_io_2_ptr().cast::<c_void>()),
+            (DevicePath::GUID, device_path.as_mut_ptr().cast::<c_void>()),
+        ];
+        // Let firmware's DiskIo driver adapt BlockIO when ConnectController runs.
+        // Preinstalling DiskIo here conflicts with that driver's Start/Stop ownership
+        // and can leave a dangling BY_DRIVER BlockIo2 open after its failed Start.
+        let mut installed_handle = None;
+        for (index, (guid, interface)) in interfaces.iter().enumerate() {
+            match unsafe { bt.install_protocol_interface(installed_handle, guid, *interface) } {
+                Ok(handle) => installed_handle = Some(handle),
+                Err(error) => {
+                    let mut rollback_ok = true;
+                    if let Some(handle) = installed_handle {
+                        for (guid, interface) in interfaces[..index].iter().rev() {
+                            rollback_ok &= unsafe {
+                                bt.uninstall_protocol_interface(handle, guid, *interface)
+                            }.is_ok();
+                        }
+                    }
+                    if !rollback_ok {
+                        let _ = Box::leak(protocol);
+                        let _ = Box::leak(device_path);
+                        return Err(uefi::Status::COMPROMISED_DATA.into());
+                    }
+                    return Err(error);
+                }
+            }
         }
-
+        let handle = installed_handle.ok_or(uefi::Status::DEVICE_ERROR)?;
         Ok(RegisteredVirtualBlockIo {
             handle,
             protocol,
@@ -266,6 +233,29 @@ impl RegisteredVirtualBlockIo {
         let _ = Box::leak(protocol);
         let _ = Box::leak(device_path);
         handle
+    }
+
+    /// Unregister interfaces before releasing their backing allocations.
+    /// On failure keep the allocations alive because firmware may still refer to them.
+    pub fn uninstall(mut self, bt: &BootServices) -> uefi::Result<()> {
+        let interfaces = [
+            (DevicePath::GUID, self.device_path_ptr().cast::<c_void>()),
+            (BlockIo2::GUID, self.block_io_2_ptr().cast::<c_void>()),
+            (BlockIO::GUID, self.protocol_ptr().cast::<c_void>()),
+        ];
+        let mut failure = None;
+        for (guid, interface) in interfaces {
+            if let Err(error) = unsafe {
+                bt.uninstall_protocol_interface(self.handle, &guid, interface)
+            } {
+                failure = Some(error);
+            }
+        }
+        if let Some(error) = failure {
+            self.leak();
+            return Err(error);
+        }
+        Ok(())
     }
 }
 

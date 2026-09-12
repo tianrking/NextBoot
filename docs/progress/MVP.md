@@ -53,6 +53,16 @@
   firmware and Rust would free. A returning Linux EFI fixture now reaches parent
   success and initrd protocol cleanup without panic. Linux smoke cases wait for
   that cleanup marker, beyond the earlier handoff-only assertion.
+- Failed-image recovery implemented: a broken ISO now returns to the menu and a
+  different Linux ISO can start in the same session. Both attempts' virtual
+  devices, initrd provider and runtime metadata were verified released in QEMU.
+  The second menu disables the automatic boot timeout. Firmware cleanup refusal
+  stops retries and retains referenced allocations. The recovery test also found
+  and fixed conflicting ownership between preinstalled DiskIo and OVMF's adapter;
+  firmware now owns its DiskIo adapter on NextBoot's BlockIO device.
+- Validation for recovery: x86_64 release build, 33 virtual-I/O host tests, seven
+  QEMU-runner checks, source health, and the two-image QEMU recovery workflow pass
+  locally. Full-matrix and cross-architecture CI must be rechecked for this change.
 
 ## 完成的工作
 

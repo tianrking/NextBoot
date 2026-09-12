@@ -109,9 +109,13 @@ impl PreloadedLoadFileProtocol {
         if let Err(err) = unsafe {
             bt.install_protocol_interface(Some(handle), &LoadFile2::GUID, load_file_2_interface)
         } {
-            let _ = unsafe {
+            let rollback = unsafe {
                 bt.uninstall_protocol_interface(handle, &LoadFile::GUID, load_file_interface)
             };
+            if rollback.is_err() {
+                let _ = Box::leak(protocol);
+                return Err(Status::COMPROMISED_DATA.into());
+            }
             return Err(err);
         }
 
@@ -220,6 +224,23 @@ pub(super) struct RegisteredPreloadedLoadFile {
 }
 
 impl RegisteredPreloadedLoadFile {
+    pub(super) fn uninstall(mut self, bt: &BootServices, handle: Handle) -> uefi::Result<()> {
+        let first = unsafe {
+            bt.uninstall_protocol_interface(
+                handle, &LoadFile::GUID, self.protocol.load_file_ptr().cast::<c_void>(),
+            )
+        };
+        let second = unsafe {
+            bt.uninstall_protocol_interface(
+                handle, &LoadFile2::GUID, self.protocol.load_file_2_ptr().cast::<c_void>(),
+            )
+        };
+        if first.is_err() || second.is_err() {
+            self.leak();
+        }
+        first.and(second)
+    }
+
     pub(super) fn leak(self) {
         let _ = Box::leak(self.protocol);
     }
@@ -273,6 +294,7 @@ impl LinuxInitrdLoadFile2Protocol {
             if removed.is_err() {
                 // Firmware still owns this pointer; freeing it would leave a dangling protocol.
                 let _ = Box::leak(protocol);
+                return Err(Status::COMPROMISED_DATA.into());
             }
             return Err(err);
         }
