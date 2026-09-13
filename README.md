@@ -122,10 +122,13 @@ are visible in the serial log, use:
 .\scripts\Test-NextBootQemu.ps1 -DiskNumber N -ExpectedImageName your-image.iso -Headless
 ```
 
-The headless mode uses a 90-second timeout by default and terminates only its
-temporary QEMU process; `-snapshot` still prevents guest writes to the selected
-physical drive. It proves the local UEFI/menu path, not the motherboard's
-firmware behavior or a completed OS boot.
+The headless mode uses a 90-second timeout by default, hides QEMU's Windows
+console window, and terminates only its temporary QEMU process. `-snapshot`
+still prevents guest writes to the selected physical drive. When the default
+synthetic fixed disks are attached, success requires the scanner to list only
+the selected NextBoot medium; those unrelated disks are intentionally ignored.
+This proves the local UEFI/menu path, not the motherboard's firmware behavior
+or a completed OS boot.
 
 Flashing writes a whole-disk image and erases the selected target device. Do
 not copy the `.img.xz`, `.img.zip`, or extracted `.img` file into an existing

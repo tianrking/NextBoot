@@ -55,7 +55,10 @@ function Get-MissingPreflightMarkers([string] $LogText, [int] $AttachedDiskCount
         'Phase 3: Displaying boot menu'
     )
     if ($AttachedDiskCount -gt 0) {
-        $requiredMarkers += "Found $($AttachedDiskCount + 1) storage device(s)"
+        # The temporary fixed disks deliberately exercise the scanner's
+        # fail-closed rule. A correct boot-media filter ignores those unrelated
+        # disks and reports only the selected NextBoot medium.
+        $requiredMarkers += 'Found 1 storage device(s)'
     }
     if (-not [string]::IsNullOrWhiteSpace($ImageName)) {
         $requiredMarkers += "/ISO/$ImageName"
@@ -135,7 +138,7 @@ if ($Headless) {
     $headlessArgumentLine = (($arguments | ForEach-Object {
         '"' + $_.Replace('"', '\"') + '"'
     }) -join ' ')
-    $process = Start-Process -FilePath $QemuPath -ArgumentList $headlessArgumentLine -PassThru
+    $process = Start-Process -FilePath $QemuPath -ArgumentList $headlessArgumentLine -WindowStyle Hidden -PassThru
     $deadline = [DateTime]::UtcNow.AddSeconds($PreflightTimeoutSeconds)
     $menuObserved = $false
     while (-not $process.HasExited -and [DateTime]::UtcNow -lt $deadline) {

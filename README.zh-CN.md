@@ -88,7 +88,7 @@ QEMU 读取目标卡，但关闭时丢弃虚拟机写入；串口日志会写入
 .\scripts\Test-NextBootQemu.ps1 -DiskNumber N -ExpectedImageName your-image.iso -Headless
 ```
 
-无界面模式默认 90 秒超时，只会结束临时 QEMU 进程；`-snapshot` 仍保证虚拟机不会写入所选实体磁盘。它验证本机的 UEFI/菜单路径，不能替代主板固件或完成系统启动的真机验证。
+无界面模式默认 90 秒超时，会隐藏 QEMU 的 Windows 控制台窗口，并且只会结束临时 QEMU 进程；`-snapshot` 仍保证虚拟机不会写入所选实体磁盘。默认附加的临时固定盘用于测试扫描过滤，成功时扫描器应只列出所选 NextBoot 介质并忽略这些无关磁盘。它验证本机的 UEFI/菜单路径，不能替代主板固件或完成系统启动的真机验证。
 
 烧录会写入整块磁盘，并清空目标设备上的原有数据。不要把 `.img.xz`、`.img.zip` 或解压后的 `.img` 当普通文件复制到已有 U 盘分区里；必须使用烧录工具的整盘写入模式。如果 Rufus 询问写入模式，选择 DD/raw image mode。对于容量大于发布镜像且不超过 128GiB 的设备，NextBoot 可以在首次启动时扩展 `NEXTDATA`。
 
