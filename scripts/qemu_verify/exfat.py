@@ -32,6 +32,10 @@ class ExFatVolume:
         require(self.boot[3:11] == b"EXFAT   ", f"{partition.name}: missing exFAT marker")
         require(self.boot[510:512] == b"\x55\xaa", f"{partition.name}: missing exFAT boot signature")
         require(
+            self.boot[120:510] == b"\xf4" * (510 - 120),
+            f"{partition.name}: exFAT BootCode must be HLT-filled when no boot code is present",
+        )
+        require(
             self.main_boot_region == self.backup_boot_region,
             f"{partition.name}: exFAT backup boot region mismatch",
         )

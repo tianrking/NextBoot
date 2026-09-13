@@ -171,6 +171,10 @@ def exfat_boot_regions(sector_size, part_start_lba, part_sectors, fat_offset, fa
     boot_sector[110] = 1
     boot_sector[111] = 0x80
     boot_sector[112] = percent_in_use
+    # Microsoft exFAT requires a formatter that supplies no boot program to
+    # initialize BootCode (bytes 120..509) with the x86 HLT instruction.
+    # Windows rejects a zero-filled BootCode region as an invalid volume.
+    boot_sector[120:510] = b"\xf4" * (510 - 120)
     boot_sector[510:512] = b"\x55\xaa"
 
     main_region = bytearray(12 * sector_size)
