@@ -1,6 +1,7 @@
 use super::block_io::{alloc_buffer_for_block, UefiBlockIo};
 use super::model::IsoFile;
 use super::{block_io_info, handle_list_contains, IsoScanner};
+use crate::source_disk::{parent_device_path_bytes, parse_last_hard_drive_device_path};
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use nextboot_fs::exfat::ExFat;
@@ -39,13 +40,8 @@ impl<'a> IsoScanner<'a> {
             // BlockIO.  Once that happens, scanning every BlockIO device also
             // walks the host's internal SSDs.  Keep the raw recovery path on
             // the physical disk that loaded this EFI application.
-            if let Some(expected) = self.preferred_source_disk {
-                let Some(candidate) = self.resolve_source_disk_identity(handle) else {
-                    continue;
-                };
-                if !same_physical_disk(expected, candidate) {
-                    continue;
-                }
+            if !self.raw_scan_candidate_is_boot_media(handle) {
+                continue;
             }
 
             let block_io = match self.bt.open_protocol_exclusive::<BlockIO>(handle) {
@@ -218,6 +214,38 @@ impl<'a> IsoScanner<'a> {
     }
 }
 
+impl<'a> IsoScanner<'a> {
+    /// Accept raw fallback volumes only from the physical device that loaded
+    /// the EFI application.  A GUID/signature comparison is the strongest
+    /// option.  When firmware cannot expose that information, comparing the
+    /// parent device path still permits ESP/data sibling handles while refusing
+    /// unrelated internal disks.  Unknown paths are deliberately rejected.
+    fn raw_scan_candidate_is_boot_media(&self, candidate: Handle) -> bool {
+        if let Some(expected) = self.preferred_source_disk {
+            let Some(candidate_identity) = self.resolve_source_disk_identity(candidate) else {
+                return false;
+            };
+            return same_physical_disk(expected, candidate_identity);
+        }
+
+        let Some(boot_device) = self.boot_device else {
+            // IsoScanner::new retains its library behavior for callers that
+            // intentionally have no LoadedImage device context.
+            return true;
+        };
+        if boot_device.as_ptr() == candidate.as_ptr() {
+            return true;
+        }
+        let Some(boot_path) = self.handle_device_path_bytes(boot_device) else {
+            return false;
+        };
+        let Some(candidate_path) = self.handle_device_path_bytes(candidate) else {
+            return false;
+        };
+        same_parent_device_path(&boot_path, &candidate_path)
+    }
+}
+
 fn same_physical_disk(
     left: crate::source_disk::SourceDiskIdentity,
     right: crate::source_disk::SourceDiskIdentity,
@@ -228,10 +256,26 @@ fn same_physical_disk(
         && left.block_size == right.block_size
 }
 
+fn same_parent_device_path(left: &[u8], right: &[u8]) -> bool {
+    parent_device_path_or_self(left)
+        .zip(parent_device_path_or_self(right))
+        .is_some_and(|(left_parent, right_parent)| left_parent == right_parent)
+}
+
+fn parent_device_path_or_self(path: &[u8]) -> Option<Vec<u8>> {
+    match parse_last_hard_drive_device_path(path) {
+        Some(hard_drive) => parent_device_path_bytes(path, &hard_drive),
+        None if path.len() >= 4 => Some(path.to_vec()),
+        None => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::same_physical_disk;
+    use super::{same_parent_device_path, same_physical_disk};
     use crate::source_disk::{PartitionFormat, SourceDiskIdentity};
+    use alloc::vec;
+    use alloc::vec::Vec;
 
     fn disk(partition_number: u16, disk_size: u64) -> SourceDiskIdentity {
         SourceDiskIdentity {
@@ -252,6 +296,55 @@ mod tests {
         assert!(!same_physical_disk(
             disk(1, 128 * 1024),
             disk(1, 256 * 1024)
+        ));
+    }
+
+    fn partition_path(parent_marker: u8, partition_number: u32) -> Vec<u8> {
+        let mut path = vec![0x02, 0x01, 0x0c, 0x00, parent_marker, 0, 0, 0, 0, 0, 0, 0];
+        path.extend_from_slice(&[0x04, 0x01, 42, 0]);
+        path.extend_from_slice(&partition_number.to_le_bytes());
+        path.extend_from_slice(&2048u64.to_le_bytes());
+        path.extend_from_slice(&4096u64.to_le_bytes());
+        path.extend_from_slice(&[0x11; 16]);
+        path.extend_from_slice(&[0x02, 0x02]);
+        path.extend_from_slice(&[0x7f, 0xff, 0x04, 0x00]);
+        path
+    }
+
+    fn physical_path(parent_marker: u8) -> Vec<u8> {
+        vec![
+            0x02,
+            0x01,
+            0x0c,
+            0x00,
+            parent_marker,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0x7f,
+            0xff,
+            0x04,
+            0x00,
+        ]
+    }
+
+    #[test]
+    fn device_path_fallback_accepts_sibling_partitions_only() {
+        assert!(same_parent_device_path(
+            &partition_path(7, 1),
+            &partition_path(7, 2)
+        ));
+        assert!(!same_parent_device_path(
+            &partition_path(7, 1),
+            &partition_path(8, 2)
+        ));
+        assert!(same_parent_device_path(
+            &partition_path(7, 1),
+            &physical_path(7)
         ));
     }
 }

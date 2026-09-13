@@ -43,6 +43,10 @@ pub struct IsoScanner<'a> {
     /// exposes only the ESP as a filesystem volume, so raw fallback scanning
     /// must stay on this disk instead of recursively walking internal disks.
     preferred_source_disk: Option<SourceDiskIdentity>,
+    /// LoadedImage's device handle.  It is retained as a conservative fallback
+    /// when a firmware's device path is too incomplete to derive a stable disk
+    /// identity for the boot medium.
+    boot_device: Option<Handle>,
 }
 
 impl<'a> IsoScanner<'a> {
@@ -51,14 +55,17 @@ impl<'a> IsoScanner<'a> {
         Self {
             bt,
             preferred_source_disk: None,
+            boot_device: None,
         }
     }
 
     /// Prefer the physical disk containing the loaded EFI application.
-    /// If firmware device paths are incomplete, retain the existing all-media
-    /// fallback rather than failing to scan any volume.
+    /// If firmware device paths are incomplete, raw recovery remains limited
+    /// to handles with the same parent device path; it never broadens into
+    /// arbitrary internal disks.
     pub fn from_boot_device(bt: &'a BootServices, boot_device: Option<Handle>) -> Self {
         let mut scanner = Self::new(bt);
+        scanner.boot_device = boot_device;
         scanner.preferred_source_disk =
             boot_device.and_then(|handle| scanner.resolve_source_disk_identity(handle));
         scanner

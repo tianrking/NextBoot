@@ -4,7 +4,7 @@
 
 [English](README.md)
 
-**发布状态：** `v0.1.0-rc.13` 是预发布版本。它增加了 Windows 原生挂载与写入/读回检查，并附带
+**发布状态：** `v0.1.0-rc.14` 是预发布版本。它增加了 Windows 原生挂载与写入/读回检查，并附带
 Windows 专用写入器，写入后会读取完整范围并比对 SHA-256。若 `NEXTDATA` 显示为 RAW，说明写入没有正确完成；不要
 格式化它，应使用下方的校验写入器重新写入。这不等同于完成安装或真实硬件认证；使用前请查看[发布验收清单](docs/release-readiness.md)。
 
@@ -16,7 +16,7 @@ Windows 专用写入器，写入后会读取完整范围并比对 SHA-256。若 
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#架构)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#兼容性覆盖)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#功能覆盖)
-[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.13)
+[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.14)
 
 NextBoot 是一个用 Rust 编写的 UEFI 启动介质项目，面向 U 盘、USB SSD、SD 卡，以及固定磁盘风格的 SSD/NVMe 部署。发布物是一个压缩后的 raw 磁盘镜像：用户用常见烧录工具写入整块设备，打开可见的 `NEXTDATA` 分区，把 ISO/WIM/VHD/VHDX/IMG/EFI 文件拖到 `/ISO`，然后从主板或电脑固件的 UEFI 启动菜单选择这块设备。
 
@@ -25,16 +25,16 @@ Windows 下经过校验的路径使用发布包内的 PowerShell 写入器；其
 ## 快速开始
 
 1. 从最新 GitHub Release 下载通用镜像：
-   `nextboot-v0.1.0-rc.13-universal-uefi.img.xz`。
+   `nextboot-v0.1.0-rc.14-universal-uefi.img.xz`。
    如果你的烧录工具只接受 raw `.img` 文件，下载
-   `nextboot-v0.1.0-rc.13-universal-uefi.img.zip` 并解压。
-2. Windows 下请下载 `nextboot-v0.1.0-rc.13-windows-writer.ps1`，以**管理员身份**打开
+   `nextboot-v0.1.0-rc.14-universal-uefi.img.zip` 并解压。
+2. Windows 下请下载 `nextboot-v0.1.0-rc.14-windows-writer.ps1`，以**管理员身份**打开
    PowerShell，先运行 `Get-Disk` 确认目标磁盘编号，再执行：
 
    ```powershell
-   Unblock-File .\nextboot-v0.1.0-rc.13-windows-writer.ps1
-   .\nextboot-v0.1.0-rc.13-windows-writer.ps1 `
-     -ImagePath .\nextboot-v0.1.0-rc.13-universal-uefi.img -DiskNumber N
+   Unblock-File .\nextboot-v0.1.0-rc.14-windows-writer.ps1
+   .\nextboot-v0.1.0-rc.14-windows-writer.ps1 `
+     -ImagePath .\nextboot-v0.1.0-rc.14-universal-uefi.img -DiskNumber N
    ```
 
    写入器会再要求输入一次磁盘编号，写完整块镜像后读取完整范围并比对 SHA-256，并拒绝 Windows 系统盘和启动盘。
@@ -42,8 +42,8 @@ Windows 下经过校验的路径使用发布包内的 PowerShell 写入器；其
    加载器仍与发布镜像相同，可执行只读检查：
 
    ```powershell
-   .\nextboot-v0.1.0-rc.13-windows-writer.ps1 `
-     -ImagePath .\nextboot-v0.1.0-rc.13-universal-uefi.img -DiskNumber N `
+   .\nextboot-v0.1.0-rc.14-windows-writer.ps1 `
+     -ImagePath .\nextboot-v0.1.0-rc.14-universal-uefi.img -DiskNumber N `
      -VerifyOnly -VerifyBootPartitionOnly
    ```
 
@@ -52,8 +52,8 @@ Windows 下经过校验的路径使用发布包内的 PowerShell 写入器；其
    如需一次只读检查同时确认“当前 EFI 启动器就是所选发布镜像”以及“待启动 ISO 已在卡上”，可加上 ISO 文件名。例如 SD 卡是磁盘 2，且 Omarchy 已复制到 `D:\ISO`：
 
    ```powershell
-   .\nextboot-v0.1.0-rc.13-windows-writer.ps1 `
-     -ImagePath .\nextboot-v0.1.0-rc.13-universal-uefi.img -DiskNumber 2 `
+   .\nextboot-v0.1.0-rc.14-windows-writer.ps1 `
+     -ImagePath .\nextboot-v0.1.0-rc.14-universal-uefi.img -DiskNumber 2 `
      -VerifyOnly -VerifyBootPartitionOnly -ExpectedIsoName omarchy-4.0.3.iso
    ```
 
@@ -86,12 +86,12 @@ QEMU 读取目标卡，但关闭时丢弃虚拟机写入；串口日志会写入
 面向用户的发布物是一份通用镜像：
 
 ```text
-nextboot-v0.1.0-rc.13-universal-uefi.img.xz
-nextboot-v0.1.0-rc.13-universal-uefi.img.zip
-nextboot-v0.1.0-rc.13-windows-writer.ps1
+nextboot-v0.1.0-rc.14-universal-uefi.img.xz
+nextboot-v0.1.0-rc.14-universal-uefi.img.zip
+nextboot-v0.1.0-rc.14-windows-writer.ps1
 ```
 
-最新发布：<https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.13>
+最新发布：<https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.14>
 
 它包含：
 
