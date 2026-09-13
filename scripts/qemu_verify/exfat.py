@@ -66,6 +66,9 @@ class ExFatVolume:
 
         require(self.bytes_per_sector == image.sector_size, f"{partition.name}: exFAT sector size mismatch")
         require(self.num_fats == 1, f"{partition.name}: expected one exFAT FAT")
+        require(self.fat_offset >= 128, f"{partition.name}: exFAT FAT must use conservative alignment")
+        require(self.cluster_heap_offset % self.sectors_per_cluster == 0,
+                f"{partition.name}: exFAT cluster heap must align to a cluster")
         require(self.partition_offset == partition.start_lba, f"{partition.name}: exFAT partition offset mismatch")
         require(self.volume_length <= partition.block_count, f"{partition.name}: exFAT volume exceeds partition")
         self.require_system_root_entries()
@@ -169,6 +172,8 @@ class ExFatVolume:
         chain = self.cluster_chain(upcase_cluster)
         data = b"".join(self.read_cluster(cluster) for cluster in chain)[:upcase_size]
         require(len(data) == upcase_size, f"{self.partition.name}: truncated exFAT upcase table")
+        require(upcase_size == 5836 and u32(upcase, 4) == 0xE619D30D,
+                f"{self.partition.name}: expected Microsoft recommended exFAT upcase table")
         self.upcase_table = decode_upcase(data, u32(upcase, 4))
 
     def parse_entry_set(self, group: bytes) -> FileRecord | None:

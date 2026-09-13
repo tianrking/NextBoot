@@ -195,14 +195,19 @@ def exfat_geometry(part_sectors):
             raise SystemExit("growable exFAT sectors per cluster must be a power of two")
     else:
         sectors_per_cluster = max(1, 4096 // sector_size)
-    fat_offset = boot_region_sectors
+    # Follow the conservative alignment layout used by mature exFAT
+    # formatters: FAT begins at sector 128 and the cluster heap begins on a
+    # cluster boundary. This avoids relying on Windows accepting a merely
+    # spec-permitted but unusual unaligned heap.
+    fat_offset = max(128, boot_region_sectors)
     fat_length = 1
     if growable_exfat:
         max_part_sectors = growable_exfat_max_mib * 1024 * 1024 // sector_size
         max_clusters = max(16, max_part_sectors // sectors_per_cluster)
         fat_length = math.ceil((max_clusters + 2) * 4 / sector_size)
     while True:
-        cluster_heap_offset = fat_offset + fat_length
+        cluster_heap_offset = math.ceil((fat_offset + fat_length) / sectors_per_cluster) * sectors_per_cluster
+        fat_length = cluster_heap_offset - fat_offset
         if part_sectors <= cluster_heap_offset:
             raise SystemExit("partition is too small for exFAT")
         cluster_count = (part_sectors - cluster_heap_offset) // sectors_per_cluster

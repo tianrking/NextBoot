@@ -2,6 +2,7 @@ import math
 import os
 import struct
 import time
+from pathlib import Path
 
 EXFAT_CLUSTER_FREE = 0x00000000
 EXFAT_CLUSTER_EOC = 0xFFFFFFFF
@@ -58,23 +59,13 @@ def exfat_upcase_unit(codepoint):
 
 
 def exfat_upcase_table():
-    # Identity-run compression is specified in exFAT section 7.2.5. Besides
-    # saving space, it avoids a 16-bit checksum-length bug in exfatprogs 1.2.2
-    # when presented with a full 131072-byte uncompressed table.
-    mappings = [exfat_upcase_unit(unit) for unit in range(0x10000)]
-    table = bytearray()
-    index = 0
-    while index < len(mappings):
-        end = index
-        while end < len(mappings) and mappings[end] == end and end - index < 0xFFFF:
-            end += 1
-        if end - index >= 3:
-            table.extend(struct.pack("<HH", 0xFFFF, end - index))
-            index = end
-        else:
-            table.extend(struct.pack("<H", mappings[index]))
-            index += 1
-    return bytes(table)
+    # Microsoft exFAT 1.00 recommended compressed up-case table (TableChecksum
+    # E619D30D). Keeping the exact published table avoids Unicode-version
+    # differences between image-build hosts and Windows mount implementations.
+    table = Path(__file__).with_name("exfat_upcase.bin").read_bytes()
+    if len(table) != 5836 or exfat_table_checksum(table) != 0xE619D30D:
+        raise SystemExit("invalid bundled exFAT up-case table")
+    return table
 
 
 def exfat_allocation_bitmap(cluster_count, allocated_clusters):
@@ -215,7 +206,7 @@ def write_exfat_volume(f, part, deps):
             cluster_heap_offset + (cluster - 2) * sectors_per_cluster
         ) * sector_size
 
-    def allocate_chain(count):
+    def allocate_chain(count, fat_chain=True):
         nonlocal next_cluster
         if count == 0:
             return []
@@ -224,9 +215,10 @@ def write_exfat_volume(f, part, deps):
         chain = list(range(next_cluster, next_cluster + count))
         next_cluster += count
         allocated_clusters.update(chain)
-        for current, nxt in zip(chain, chain[1:]):
-            set_fat(current, nxt)
-        set_fat(chain[-1], EXFAT_CLUSTER_EOC)
+        if fat_chain:
+            for current, nxt in zip(chain, chain[1:]):
+                set_fat(current, nxt)
+            set_fat(chain[-1], EXFAT_CLUSTER_EOC)
         return chain
 
     def write_cluster(cluster, data):
@@ -245,7 +237,7 @@ def write_exfat_volume(f, part, deps):
     def copy_file(source):
         size = os.path.getsize(source)
         clusters_needed = math.ceil(size / cluster_size) if size else 0
-        chain = allocate_chain(clusters_needed)
+        chain = allocate_chain(clusters_needed, fat_chain=False)
         with open(source, "rb") as src:
             for cluster in chain:
                 write_cluster(cluster, src.read(cluster_size))
@@ -254,7 +246,7 @@ def write_exfat_volume(f, part, deps):
     def copy_bytes(data):
         size = len(data)
         clusters_needed = math.ceil(size / cluster_size) if size else 0
-        chain = allocate_chain(clusters_needed)
+        chain = allocate_chain(clusters_needed, fat_chain=False)
         write_chain(chain, data)
         return (chain[0] if chain else 0, size)
 
@@ -286,6 +278,10 @@ def write_exfat_volume(f, part, deps):
             self.directories = {}
             self.files = []
 
+    # Root directory is a FAT chain and belongs immediately after the two
+    # system files, matching the layout emitted by mature exFAT formatters.
+    root_chain = allocate_chain(1)
+    root_cluster = root_chain[0]
     root = TreeDirectory()
 
     def ensure_tree_directory(path):
@@ -346,9 +342,12 @@ def write_exfat_volume(f, part, deps):
             else:
                 file_cluster, file_size = copy_bytes(data or b"")
             entry_sets.append(exfat_entry_set(name, 0x0020, file_cluster, file_size, True))
-        return write_directory(entry_sets)
+        content = b"".join(entry_sets)
+        if len(content) + 32 > cluster_size:
+            raise SystemExit("exFAT root directory does not fit the reserved cluster")
+        write_chain(root_chain, content)
 
-    root_cluster, _root_size = write_root_directory(root)
+    write_root_directory(root)
 
     bitmap = exfat_allocation_bitmap(cluster_count, allocated_clusters)
     write_chain(bitmap_chain, bitmap)
