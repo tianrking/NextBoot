@@ -34,6 +34,10 @@ jobs:
       - name: Parse Windows physical-media QEMU preflight
         shell: pwsh
         run: |
+          if (!(Test-Path scripts/Test-NextBootQemu.ps1)) {
+            Write-Host 'This historical release tag predates the physical-media QEMU preflight script.'
+            exit 0
+          }
           $tokens = $null
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile(
