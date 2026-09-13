@@ -4,10 +4,12 @@
 
 [简体中文](README.zh-CN.md)
 
-**Release status:** `v0.1.0-rc.7` is a QEMU-evidence prerelease. It repairs
-the Windows exFAT mount defect present in rc.1 through rc.6: reflash rc.7
-if any earlier release shows `NEXTDATA` as RAW; do not format that broken partition. It is not a completed-installation
-or physical-hardware certification; see the [release acceptance ledger](docs/release-readiness.md)
+**Release status:** `v0.1.0-rc.8` is a prerelease. It adds a Windows-native
+mount and write/read check for the generated raw image, plus a Windows writer
+that verifies every byte after writing. If `NEXTDATA` appears as RAW, the write
+did not complete correctly: do not format it; write the image again with the
+verified writer below. This is not completed-installation or physical-hardware
+certification; see the [release acceptance ledger](docs/release-readiness.md)
 before choosing an image for use.
 
 [![CI](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml)
@@ -18,7 +20,7 @@ before choosing an image for use.
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#architecture)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#compatibility-coverage)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#feature-coverage)
-[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.7)
+[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.8)
 
 NextBoot is a Rust UEFI boot medium for USB sticks, USB SSDs, SD cards, and
 fixed-disk style SSD/NVMe deployments. The release artifact is a compressed raw
@@ -26,20 +28,33 @@ disk image: users flash it with a normal image writer, open the visible
 `NEXTDATA` partition, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and
 choose the device from the firmware UEFI boot menu.
 
-No NextBoot-specific installer, script, or command line is required for end
-users.
+The verified Windows path uses the included PowerShell writer. Other raw-image
+writers remain usable when their write result is checked before adding boot images.
 
 ## Quick Start
 
 1. Download the universal image from the latest GitHub release:
-   `nextboot-v0.1.0-rc.7-universal-uefi.img.xz`.
+   `nextboot-v0.1.0-rc.8-universal-uefi.img.xz`.
    If your flashing tool only accepts raw `.img` files, download
-   `nextboot-v0.1.0-rc.7-universal-uefi.img.zip` and extract it.
-2. Use a raw-image flasher such as balenaEtcher, Raspberry Pi Imager, Rufus,
-   Win32 Disk Imager, or GNOME Disks.
-3. Select the NextBoot image, select an 8GB-or-larger USB stick, USB SSD, SD
-   card, or external SSD, then flash/write it.
-4. Open the visible `NEXTDATA` partition.
+   `nextboot-v0.1.0-rc.8-universal-uefi.img.zip` and extract it.
+2. On Windows, download `nextboot-v0.1.0-rc.8-windows-writer.ps1`, open
+   **Administrator PowerShell**, run `Get-Disk` to identify the target disk,
+   then run:
+
+   ```powershell
+   Unblock-File .\nextboot-v0.1.0-rc.8-windows-writer.ps1
+   .\nextboot-v0.1.0-rc.8-windows-writer.ps1 `
+     -ImagePath .\nextboot-v0.1.0-rc.8-universal-uefi.img -DiskNumber N
+   ```
+
+   The writer asks for the disk number one more time, writes the whole image,
+   and compares every written byte. It refuses the Windows system and boot disks.
+3. On macOS or Linux, or if choosing another Windows raw-image flasher, select
+   the extracted image and an 8GB-or-larger USB stick, USB SSD, SD card, or
+   external SSD, then flash/write it.
+4. Open the visible `NEXTDATA` partition. Windows must report its filesystem as
+   exFAT and it must contain `ISO`. If it is RAW, do not format it; re-write the
+   image with the verified Windows writer.
 5. Drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`.
 6. Boot the device from the firmware UEFI boot menu, then pick an image from
    the NextBoot menu.
@@ -55,11 +70,12 @@ than 128 GiB, NextBoot can expand `NEXTDATA` on first boot.
 The customer-facing release is a single universal image:
 
 ```text
-nextboot-v0.1.0-rc.7-universal-uefi.img.xz
-nextboot-v0.1.0-rc.7-universal-uefi.img.zip
+nextboot-v0.1.0-rc.8-universal-uefi.img.xz
+nextboot-v0.1.0-rc.8-universal-uefi.img.zip
+nextboot-v0.1.0-rc.8-windows-writer.ps1
 ```
 
-Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.7>
+Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.8>
 
 It contains:
 
@@ -68,7 +84,8 @@ It contains:
 | GPT | Standard partition table suitable for removable and fixed media |
 | ESP | 32MiB FAT ESP with `BOOTX64.EFI`, `BOOTIA32.EFI`, and `BOOTAA64.EFI` |
 | Data | Growable exFAT `NEXTDATA` partition with `/ISO` already created |
-| Flashing tools | balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk Imager, GNOME Disks, and other raw writers |
+| Windows writer | Included PowerShell writer: full byte-for-byte post-write verification |
+| Other flashing tools | balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk Imager, GNOME Disks, and other raw writers |
 | Flashing hosts | Windows, macOS, and Linux |
 | Boot target | x86_64, IA32, and AArch64 UEFI firmware |
 | Workflow | Users drag boot images into `/ISO` and boot from UEFI |
@@ -327,6 +344,7 @@ crates/
 
 scripts/
   create-release-media.sh   Customer-burnable image builder
+  Write-NextBootMedia.ps1   Windows writer with full post-write verification
   flash.sh                  Developer direct-to-device writer
   run-qemu.sh               Single QEMU scenario runner
   qemu-smoke-matrix.sh      Compatibility smoke matrix

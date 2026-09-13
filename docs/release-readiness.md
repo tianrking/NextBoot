@@ -1,6 +1,6 @@
 # Release readiness / 发布验收
 
-Status: **v0.1.0-rc.7 QEMU-evidence prerelease**. Updated 2026-09-13. This is not a stable or physical-hardware certification.
+Status: **v0.1.0-rc.8 prerelease candidate**. Updated 2026-09-13. Its release gate uses a same-size 7GB image mounted by the native Windows exFAT driver and a full-range write verification through a fixed VHD wrapper. This is not a stable or physical-hardware certification.
 
 NextBoot targets UEFI multi-image installation and recovery media. The first
 reliability target is x86_64 with Secure Boot disabled. IA32 and AArch64 builds
@@ -16,12 +16,12 @@ this product scope. Public Secure Boot distribution is a later milestone.
 The inspected v0.0.3 public image contains the fallback EFI loaders and an empty
 `/ISO` directory, but omits the compatibility runtime used by earlier real-ISO
 tests. It is a development baseline, not the verified complete product described
-by the target user flow. The changes below are published in `v0.1.0-rc.7` as a QEMU-evidence
-prerelease. They must not be attributed to the older v0.0.3 download, and the
+by the target user flow. The changes below are prepared for `v0.1.0-rc.8` and
+must not be attributed to the older v0.0.3 download, and the
 new tag must not be interpreted as completed-installation or physical-hardware
 certification.
 
-v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资源。`v0.1.0-rc.7`
+v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资源。`v0.1.0-rc.8`
 以带 QEMU 证据的预发布形式发布这些修复；不能把它当作完成安装或真实硬件认证。
 
 ## Acceptance ledger
@@ -29,7 +29,7 @@ v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资�
 | Area | Evidence completed | Remaining acceptance |
 | --- | --- | --- |
 | Media contents | Builder includes SHA256-pinned runtime, notices and provenance; all 50 files verified in actual exFAT media | Final multi-architecture release artifact verification |
-| Windows exFAT mount | A physical SD-card report exposed rc.1 through rc.6 as RAW in Windows. rc.3 aligns Allocation Bitmap `DataLength`, FAT-chain length, and `ClusterCount`; rc.6 initializes BootCode; rc.7 adopts the Microsoft recommended upcase table and a conservatively aligned formatter layout, with the root directory placed after system metadata and NoFatChain files excluded from FAT chains | Mount rc.7 on Windows physical removable media before stable promotion |
+| Windows exFAT mount and write | A physical SD-card report showed RAW. RC.8 blocks publication until Windows natively mounts a generated 7GB image as exFAT, finds `/ISO`, writes and reads a probe file, then invokes the Windows writer's full-range comparison through the mounted fixed VHD. The writer is attached to the release so users can verify an actual physical write instead of trusting a flasher completion message. | Run the attached writer on Windows physical removable media and record its pass result before stable promotion |
 | Growth | Host geometry tests, unchanged/rejected-shrink image hashes, QEMU firmware expansion and post-growth exFAT verification; firmware updates Allocation Bitmap `DataLength` before publishing the new boot geometry | Real device capacity and host remount checks |
 | Partition discovery | Both GPT entry orders and invalid/ambiguous inventory tests; Linux CI; native Windows selection rejects system/boot disks and identifies a GPT ESP plus NEXTDATA by stable volume GUID | Physical Linux/macOS update checks and physical Windows USB update |
 | Update data preservation | Journaled backup/replacement/recovery and conflict rejection; actual EFI + 50-file runtime migration/no-op/rollback; Linux FAT/exFAT post-update filesystem checks; native Windows disposable-VHD update/no-op/rollback/remount check passed in CI at d4a2b93 | Physical host update and power-interruption testing, backup retention management |

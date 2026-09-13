@@ -38,7 +38,7 @@ jobs:
           $env:PYTHON = 'python'
           & $bash -lc 'TARGET=x86_64-unknown-uefi ./scripts/build.sh release'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $bash -lc './scripts/create-release-media.sh --skip-build --size 256 --growable-max-size 131072 --output target/release-media/windows-mount-qa.img'
+          & $bash -lc './scripts/create-release-media.sh --skip-build --size 7000 --growable-max-size 131072 --output target/release-media/windows-mount-qa.img'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/check-windows-release-mount.py --image target/release-media/windows-mount-qa.img
 
@@ -90,6 +90,7 @@ jobs:
             --sector-size 512 \
             --data-fs exfat \
             --output "target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img"
+          cp scripts/Write-NextBootMedia.ps1 "target/release-media/nextboot-${{ steps.version.outputs.version }}-windows-writer.ps1"
 
       - name: Package matching sources and license materials
         run: python3 scripts/package-release-sources.py --version "${{ steps.version.outputs.version }}"
@@ -113,6 +114,7 @@ jobs:
             nextboot-${{ steps.version.outputs.version }}-universal-uefi.img \
             nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.xz \
             nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.zip \
+            nextboot-${{ steps.version.outputs.version }}-windows-writer.ps1 \
             nextboot-${{ steps.version.outputs.version }}-source.tar.gz \
             ventoy-*-source.tar.gz \
             > "SHA256SUMS-${{ steps.version.outputs.version }}.txt"
@@ -122,6 +124,7 @@ jobs:
         run: |
           test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.xz"
           test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.zip"
+          test -f "target/release-media/nextboot-${{ steps.version.outputs.version }}-windows-writer.ps1"
           test -s "target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt"
           ls -lh target/release-media/*.img.xz target/release-media/*.img.zip target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt
 
@@ -173,6 +176,8 @@ jobs:
           body: |
             Download the universal release image and flash it as a whole-disk image to an 8GB-or-larger USB stick, USB SSD, SD card, or external SSD.
 
+            On Windows, the attached `nextboot-*-windows-writer.ps1` is the verified path: download the `.img.zip`, extract the `.img`, open an Administrator PowerShell, run `Unblock-File .\nextboot-*-windows-writer.ps1`, then run `./nextboot-*-windows-writer.ps1 -ImagePath .\nextboot-*-universal-uefi.img -DiskNumber N`. It writes the whole image and compares every written byte before reporting success. Use `Get-Disk` to identify `N`; it refuses the system and boot disks. A normal image flasher remains supported, but do not use a device that Windows reports as RAW after flashing.
+
             Recommended GUI flow: use balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk Imager, GNOME Disks, or another raw-image flasher. Select the NextBoot image, select the target device, and flash/write it.
 
             balenaEtcher and Raspberry Pi Imager can commonly flash compressed images directly. Rufus and Win32 Disk Imager expect a raw `.img`; if your flasher does not accept `.img.xz`, download the `.img.zip`, extract it, then select the extracted `.img`. If Rufus asks for a mode, choose DD/raw image mode.
@@ -183,12 +188,13 @@ jobs:
 
             After flashing, open `NEXTDATA`, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and boot from the firmware UEFI boot menu. On media larger than the release image, NextBoot can expand `NEXTDATA` on first boot.
 
-            Validation scope: a tag containing a prerelease suffix is a release candidate. Its documented Linux evidence is a QEMU/OVMF boot-marker check using generated GPT/exFAT NVMe media. It does not certify a completed operating-system installation, physical-device behavior, Windows/WinPE official media, Secure Boot, or Linux distributions not explicitly listed in the repository evidence.
+            Validation scope: a tag containing a prerelease suffix is a release candidate. Before publication, this workflow builds a same-size 7GB raw image on a Windows runner, mounts it with the native Windows exFAT driver, confirms `NEXTDATA` and `/ISO`, performs a file write/read, and runs the writer's full-range byte comparison through a fixed VHD wrapper. Linux QEMU/OVMF boot-marker checks cover the documented boot paths. This does not certify a completed operating-system installation, physical-device behavior, Windows/WinPE official media, Secure Boot, or Linux distributions not explicitly listed in the repository evidence.
 
             The compatibility runtime is included under `/ventoy`. Preserve this directory. Runtime provenance and original license notices are included on the media. Matching NextBoot and pinned Ventoy source archives are attached to this release; external components retain their respective licenses.
           files: |
             target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.xz
             target/release-media/nextboot-${{ steps.version.outputs.version }}-universal-uefi.img.zip
+            target/release-media/nextboot-${{ steps.version.outputs.version }}-windows-writer.ps1
             target/release-media/SHA256SUMS-${{ steps.version.outputs.version }}.txt
             target/release-media/nextboot-${{ steps.version.outputs.version }}-source.tar.gz
             target/release-media/ventoy-*-source.tar.gz

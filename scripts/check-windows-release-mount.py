@@ -80,6 +80,9 @@ def main() -> None:
     if not raw.is_file():
         raise ValueError(f"missing image: {raw}")
     vhd = raw.with_suffix(raw.suffix + ".windows-mount-test.vhd")
+    writer = Path(__file__).with_name("Write-NextBootMedia.ps1").resolve()
+    if not writer.is_file():
+        raise ValueError(f"missing Windows verified-writer script: {writer}")
     wrap_fixed_vhd(raw, vhd)
     attached = False
     try:
@@ -101,6 +104,11 @@ def main() -> None:
             "Write-Output ('passed: NEXTDATA=' + $root + ' filesystem=' + $volume.FileSystem)"
         )
         print(powershell(script, vhd))
+        writer_script = (
+            f"$disk=Get-DiskImage -ImagePath '{vhd}' | Get-Disk; "
+            f"& '{writer}' -ImagePath '{raw}' -DiskNumber $disk.Number -VerifyOnly"
+        )
+        print(powershell(writer_script, vhd))
     finally:
         if attached:
             powershell(

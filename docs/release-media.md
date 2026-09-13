@@ -3,21 +3,30 @@
 This describes the current development builder. The inspected v0.0.3 public
 image does not contain the runtime added below. See [release readiness](release-readiness.md).
 
-NextBoot does not need an end-user installer or project-specific flasher. The
-release artifact is a raw media image that normal image writers can flash.
+The release artifact is a raw media image. On Windows, the matching
+`nextboot-*-windows-writer.ps1` release asset is the preferred writer because it
+writes the full image and compares every written byte before reporting success.
 
 ## User Flow
 
 1. Download `nextboot-universal-uefi.img.xz`.
-2. Flash it to an 8GB-or-larger USB stick, USB SSD, SD card, or external SSD
-   with balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk Imager, GNOME
-   Disks, or another raw-image writer.
-3. If the chosen flasher does not accept `.img.xz`, download
+2. On Windows, download the matching `nextboot-*-windows-writer.ps1`, open an
+   Administrator PowerShell, run `Unblock-File .\nextboot-*-windows-writer.ps1`,
+   find the target number with `Get-Disk`, and run
+   `./nextboot-*-windows-writer.ps1 -ImagePath .\nextboot-*.img -DiskNumber N`.
+   The writer asks for the disk number again before erasing it, refuses system
+   and boot disks, then compares every byte it wrote.
+3. On macOS or Linux, use balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk
+   Imager, GNOME Disks, or another raw-image writer on an 8GB-or-larger USB
+   stick, USB SSD, SD card, or external SSD.
+4. If the chosen flasher does not accept `.img.xz`, download
    `nextboot-universal-uefi.img.zip`, extract it, and select
    the extracted `.img`.
-4. Open the new `NEXTDATA` partition.
-5. Drag ISO, WIM, VHD, VHDX, IMG, or EFI files into `/ISO`.
-6. Reboot and choose the device from the firmware UEFI boot menu.
+5. Open the new `NEXTDATA` partition. It must be exFAT and contain `ISO`. If
+   Windows reports RAW, do not format it: re-write the image with the verified
+   Windows writer.
+6. Drag ISO, WIM, VHD, VHDX, IMG, or EFI files into `/ISO`.
+7. Reboot and choose the device from the firmware UEFI boot menu.
 
 Flashing must write the whole device. Copying the image file into an existing
 USB volume will not work.
