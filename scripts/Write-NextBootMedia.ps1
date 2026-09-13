@@ -51,7 +51,7 @@ function Test-ByteRange([System.IO.FileStream] $Source, [System.IO.FileStream] $
             $Stream.Position = 0
             $processed = [Int64]0
             while ($processed -lt $RangeLength) {
-                $count = [int][Math]::Min($chunkSize, $RangeLength - $processed)
+                $count = [int][Math]::Min([Int64]$chunkSize, $RangeLength - $processed)
                 Read-Exact $Stream $buffer $count
                 $hash.AppendData($buffer, 0, $count)
                 $processed += $count
@@ -157,7 +157,7 @@ try {
     $buffer = [byte[]]::new(4MB)
     $written = [Int64]0
     while ($written -lt $imageLength) {
-        $count = [int][Math]::Min($buffer.Length, $imageLength - $written)
+        $count = [int][Math]::Min([Int64]$buffer.Length, $imageLength - $written)
         Read-Exact $source $buffer $count
         Write-Exact $target $buffer $count
         $written += $count
