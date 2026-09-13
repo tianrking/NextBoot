@@ -206,10 +206,15 @@ jobs:
           The compatibility runtime is included under `/ventoy`; preserve this directory. Matching NextBoot and pinned Ventoy source archives are attached. External components retain their respective licenses.
           EOF
 
+          prerelease_args=()
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease_args=(--prerelease)
+          fi
+
           if gh release view "$VERSION" >/dev/null 2>&1; then
-            gh release edit "$VERSION" --title "NextBoot $VERSION" --prerelease --notes-file "$notes"
+            gh release edit "$VERSION" --title "NextBoot $VERSION" "${prerelease_args[@]}" --notes-file "$notes"
           else
-            gh release create "$VERSION" --title "NextBoot $VERSION" --prerelease --notes-file "$notes"
+            gh release create "$VERSION" --title "NextBoot $VERSION" "${prerelease_args[@]}" --notes-file "$notes"
           fi
 
           assets=(
