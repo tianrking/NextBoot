@@ -49,7 +49,9 @@ CASES = (
     IsoCase(
         name="debian-13.6-netinst",
         filename="debian-13.6.0-amd64-netinst.iso",
-        url="https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.6.0-amd64-netinst.iso",
+        # Debian's current/ directory replaces point releases.  The archive URL
+        # preserves this checksum-pinned release for reproducible CI.
+        url="https://cdimage.debian.org/cdimage/archive/13.6.0/amd64/iso-cd/debian-13.6.0-amd64-netinst.iso",
         sha256="65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7",
         disk_size_mib=1536,
         memory_mib=1536,
