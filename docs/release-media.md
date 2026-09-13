@@ -1,7 +1,9 @@
 # Release Media
 
-This describes the current development builder. The inspected v0.0.3 public
-image does not contain the runtime added below. See [release readiness](release-readiness.md).
+This describes the current development builder and the `v0.1.0-rc.13` release
+candidate. The inspected `v0.0.3` public image is a historical comparison only;
+it does not contain the runtime added below and is not the current download.
+See [release readiness](release-readiness.md) for the evidence boundary.
 
 The release artifact is a raw media image. On Windows, the matching
 `nextboot-*-windows-writer.ps1` release asset is the preferred writer because it
