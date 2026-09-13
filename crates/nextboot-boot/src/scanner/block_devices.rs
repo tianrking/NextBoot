@@ -34,6 +34,20 @@ impl<'a> IsoScanner<'a> {
                 continue;
             }
 
+            // Several real UEFI implementations expose the FAT ESP through
+            // SimpleFileSystem but leave the exFAT data partition as raw
+            // BlockIO.  Once that happens, scanning every BlockIO device also
+            // walks the host's internal SSDs.  Keep the raw recovery path on
+            // the physical disk that loaded this EFI application.
+            if let Some(expected) = self.preferred_source_disk {
+                let Some(candidate) = self.resolve_source_disk_identity(handle) else {
+                    continue;
+                };
+                if !same_physical_disk(expected, candidate) {
+                    continue;
+                }
+            }
+
             let block_io = match self.bt.open_protocol_exclusive::<BlockIO>(handle) {
                 Ok(block_io) => block_io,
                 Err(_) => continue,
@@ -201,5 +215,43 @@ impl<'a> IsoScanner<'a> {
         }
 
         Ok(files)
+    }
+}
+
+fn same_physical_disk(
+    left: crate::source_disk::SourceDiskIdentity,
+    right: crate::source_disk::SourceDiskIdentity,
+) -> bool {
+    left.disk_guid == right.disk_guid
+        && left.disk_signature == right.disk_signature
+        && left.disk_size == right.disk_size
+        && left.block_size == right.block_size
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_physical_disk;
+    use crate::source_disk::{PartitionFormat, SourceDiskIdentity};
+
+    fn disk(partition_number: u16, disk_size: u64) -> SourceDiskIdentity {
+        SourceDiskIdentity {
+            disk_guid: [7; 16],
+            disk_signature: [3; 4],
+            disk_size,
+            block_size: 512,
+            partition_number,
+            partition_start_lba: u64::from(partition_number) * 2048,
+            partition_size_blocks: 4096,
+            partition_format: PartitionFormat::Gpt,
+        }
+    }
+
+    #[test]
+    fn compares_parent_disk_not_loaded_partition() {
+        assert!(same_physical_disk(disk(1, 128 * 1024), disk(2, 128 * 1024)));
+        assert!(!same_physical_disk(
+            disk(1, 128 * 1024),
+            disk(1, 256 * 1024)
+        ));
     }
 }

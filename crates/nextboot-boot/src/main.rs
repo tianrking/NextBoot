@@ -110,7 +110,10 @@ fn main_flow(image: Handle, st: &mut SystemTable<Boot>) -> uefi::Result<()> {
 
     // Phase 2: 扫描 ISO 文件
     info!("Phase 2: Scanning for ISO files across all visible data volumes...");
-    let scanner = IsoScanner::new(st.boot_services());
+    let boot_device = init::get_boot_device(st.boot_services(), image)
+        .ok()
+        .flatten();
+    let scanner = IsoScanner::from_boot_device(st.boot_services(), boot_device);
     let iso_files = scanner.scan("/")?;
 
     if iso_files.is_empty() {

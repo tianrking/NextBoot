@@ -19,6 +19,7 @@ mod uefi_paths;
 mod vlnk_filesystems;
 mod vlnk_links;
 
+use crate::source_disk::SourceDiskIdentity;
 use crate::ventoy_config::VentoyConfig;
 use alloc::vec::Vec;
 use common::{
@@ -38,12 +39,29 @@ pub use model::{IsoBootInfo, IsoCache, WimCompression};
 /// ISO 扫描器
 pub struct IsoScanner<'a> {
     bt: &'a BootServices,
+    /// The physical disk that loaded NextBoot.  Firmware on some machines
+    /// exposes only the ESP as a filesystem volume, so raw fallback scanning
+    /// must stay on this disk instead of recursively walking internal disks.
+    preferred_source_disk: Option<SourceDiskIdentity>,
 }
 
 impl<'a> IsoScanner<'a> {
     /// 创建新的扫描器
     pub fn new(bt: &'a BootServices) -> Self {
-        Self { bt }
+        Self {
+            bt,
+            preferred_source_disk: None,
+        }
+    }
+
+    /// Prefer the physical disk containing the loaded EFI application.
+    /// If firmware device paths are incomplete, retain the existing all-media
+    /// fallback rather than failing to scan any volume.
+    pub fn from_boot_device(bt: &'a BootServices, boot_device: Option<Handle>) -> Self {
+        let mut scanner = Self::new(bt);
+        scanner.preferred_source_disk =
+            boot_device.and_then(|handle| scanner.resolve_source_disk_identity(handle));
+        scanner
     }
 
     /// 扫描指定目录下的 ISO 文件
