@@ -1,8 +1,8 @@
 # Release readiness / 发布验收
 
-Status: **v0.1.0-rc.14 prerelease**. Updated 2026-09-13. The published release gate mounted a same-size 7GB image through the native Windows exFAT driver, verified writing and reading on that mounted volume, and performed full-range write verification through a fixed VHD wrapper. This is not a stable or physical-hardware certification.
+Status: **v0.1.0-rc.15 prerelease**. Updated 2026-09-13. The published release gate mounted a same-size 7GB image through the native Windows exFAT driver, verified writing and reading on that mounted volume, and performed full-range write verification through a fixed VHD wrapper. This is not a stable or physical-hardware certification.
 
-Physical Intel UEFI evidence on 2026-09-13 confirmed first-boot GPT/exFAT growth on removable SD media, then exposed a raw fallback scan that continued into internal disks when firmware supplied no SimpleFileSystem handles for NEXTDATA. RC.14 keeps the disk-identity filter and adds a conservative parent-device-path fallback. If firmware still cannot associate that path, it permits only a GPT device bearing both `NEXBOOT_EFI` and `NEXBOOT_DATA` release partition names; unknown internal disks are skipped. Physical menu and ISO handoff remain required before stable promotion.
+Physical Intel UEFI evidence on 2026-09-13 confirmed first-boot GPT/exFAT growth on removable SD media, then exposed a raw fallback scan that continued into internal disks when firmware supplied no SimpleFileSystem handles for NEXTDATA. RC.15 keeps the disk-identity filter and conservative parent-device-path fallback. If firmware still cannot associate that path, it permits only a GPT device bearing the release `NEXBOOT` partition name or both `NEXBOOT_EFI` and `NEXBOOT_DATA` names; unknown internal disks are skipped. Physical menu and ISO handoff remain required before stable promotion.
 
 NextBoot targets UEFI multi-image installation and recovery media. The first
 reliability target is x86_64 with Secure Boot disabled. IA32 and AArch64 builds
@@ -19,10 +19,10 @@ The inspected v0.0.3 public image contains the fallback EFI loaders and an empty
 `/ISO` directory, but omits the compatibility runtime used by earlier real-ISO
 tests. It is a development baseline, not the verified complete product described
 by the target user flow. The current downloadable candidate is
-`v0.1.0-rc.14`; it must not be interpreted as completed-installation or
+`v0.1.0-rc.15`; it must not be interpreted as completed-installation or
 physical-hardware certification.
 
-v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资源。`v0.1.0-rc.14`
+v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资源。`v0.1.0-rc.15`
 以带 QEMU 证据的预发布形式发布这些修复；不能把它当作完成安装或真实硬件认证。
 
 ## Acceptance ledger

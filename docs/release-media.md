@@ -1,14 +1,16 @@
 # Release Media
 
-This describes the current development builder and the `v0.1.0-rc.14` release
+This describes the current development builder and the `v0.1.0-rc.15` release
 candidate. The inspected `v0.0.3` public image is a historical comparison only;
 it does not contain the runtime added below and is not the current download.
 See [release readiness](release-readiness.md) for the evidence boundary.
 
 The release artifact is a raw media image. On Windows, the matching
 `nextboot-*-windows-writer.ps1` release asset is the preferred writer because it
-writes the full image and compares full-range SHA-256 digests before reporting
-success.
+writes the full image and, by default, compares full-range SHA-256 digests
+before reporting success. `-SkipFullVerification` is an explicit fast-test
+option: it still checks the exFAT boot record and immutable EFI partition, but
+does not prove every data-sector byte was read back correctly.
 
 ## User Flow
 
@@ -19,7 +21,8 @@ success.
    `./nextboot-*-windows-writer.ps1 -ImagePath .\nextboot-*.img -DiskNumber N`.
    The writer asks for the disk number again before erasing it, refuses system
    and boot disks, then reads the full written range and compares SHA-256
-   digests.
+   digests. For an immediate physical boot experiment only, append
+   `-SkipFullVerification`; use the default before relying on the medium.
 3. On macOS or Linux, use balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk
    Imager, GNOME Disks, or another raw-image writer on an 8GB-or-larger USB
    stick, USB SSD, SD card, or external SSD.

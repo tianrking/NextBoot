@@ -203,7 +203,7 @@ jobs:
           cat > "$notes" <<'EOF'
           Download the universal release image and flash it as a whole-disk image to an 8GB-or-larger USB stick, USB SSD, SD card, or external SSD.
 
-          On Windows, download the `.img.zip`, extract the `.img`, then use the attached `nextboot-*-windows-writer.ps1` from Administrator PowerShell. It writes the whole image and verifies the full written range before reporting success. A normal raw-image flasher remains supported, but do not use a device that Windows reports as RAW after flashing.
+          On Windows, download the `.img.zip`, extract the `.img`, then use the attached `nextboot-*-windows-writer.ps1` from Administrator PowerShell. By default it writes the whole image and verifies the full written range before reporting success. `-SkipFullVerification` is available for a time-sensitive boot experiment; it still verifies the exFAT boot record and immutable EFI partition but skips the full readback. A normal raw-image flasher remains supported, but do not use a device that Windows reports as RAW after flashing.
 
           balenaEtcher and Raspberry Pi Imager can commonly flash compressed images directly. Rufus and Win32 Disk Imager expect a raw `.img`; if Rufus asks for a mode, choose DD/raw image mode. Flashing erases the selected target device.
 

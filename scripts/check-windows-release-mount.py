@@ -32,6 +32,20 @@ def powershell(script: str, image: Path) -> str:
     ])
 
 
+def powershell_failure(script: str) -> str:
+    """Run a negative writer case and return all diagnostic output."""
+    prefix = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); "
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", prefix + script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if result.returncode == 0:
+        raise AssertionError(f"expected PowerShell failure: {script}")
+    return result.stdout + result.stderr
+
+
 def be32(buffer: bytearray, offset: int, value: int) -> None:
     struct.pack_into(">I", buffer, offset, value)
 
@@ -93,6 +107,15 @@ def main() -> None:
             f"& '{writer}' -ImagePath '{raw}' -TargetPath '{verification}' -VerifyOnly"
         )
         print(powershell(writer_script, vhd))
+        invalid_fast_mode = powershell_failure(
+            f"& '{writer}' -ImagePath '{raw}' -TargetPath '{verification}' "
+            "-VerifyOnly -SkipFullVerification"
+        )
+        if "SkipFullVerification is available only when writing a physical DiskNumber" not in invalid_fast_mode:
+            raise AssertionError(
+                "writer did not reject fast mode outside a physical write:\n"
+                + invalid_fast_mode
+            )
         # Firmware growth and user ISO copies change NEXTDATA, so the full raw
         # digest correctly ceases to match.  Change only a disposable byte in
         # the data partition and prove that the immutable ESP verifier still

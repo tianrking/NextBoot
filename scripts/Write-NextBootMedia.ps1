@@ -21,6 +21,12 @@ param(
     # identity with the exact file the operator plans to boot.
     [string] $ExpectedIsoName,
 
+    # Skip the lengthy full-disk SHA-256 readback after a physical write. The
+    # writer still verifies the new exFAT boot record and the immutable EFI
+    # System Partition. Use only when an immediate boot test is more useful
+    # than end-to-end media verification.
+    [switch] $SkipFullVerification,
+
     [switch] $ConfirmErase
 )
 
@@ -173,6 +179,9 @@ $wasOffline = $true
 $offlineManaged = $false
 try {
     if ($VerifyBootPartitionOnly -and -not $VerifyOnly) { throw 'VerifyBootPartitionOnly requires VerifyOnly.' }
+    if ($SkipFullVerification -and ($VerifyOnly -or $TargetPath)) {
+        throw 'SkipFullVerification is available only when writing a physical DiskNumber.'
+    }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedIsoName) -and (-not $VerifyOnly -or -not $VerifyBootPartitionOnly)) {
         throw 'ExpectedIsoName requires -VerifyOnly -VerifyBootPartitionOnly on a physical disk.'
     }
@@ -256,6 +265,11 @@ try {
     Write-Progress -Activity 'Writing NextBoot media' -Completed
     Test-NextBootBootRecords $source $target
     Test-NextBootBootPartition $source $target
+    if ($SkipFullVerification) {
+        Write-Warning 'The full raw-image readback was skipped by request. The exFAT boot record and immutable NextBoot EFI partition were verified.'
+        Write-Output "Wrote Disk ${DiskNumber} with boot-record and EFI-partition verification. Safely remove it, then open NEXTDATA and copy boot images into ISO."
+        return
+    }
     Test-ByteRange $source $target $imageLength
     Write-Output "Wrote and verified Disk $DiskNumber. Safely remove it, then open NEXTDATA and copy boot images into ISO."
 }
