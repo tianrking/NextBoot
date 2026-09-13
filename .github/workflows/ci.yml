@@ -37,6 +37,26 @@ jobs:
       - name: Update and recover disposable native Windows volumes
         run: python scripts/check-windows-media-volume.py
 
+  windows-release-mount:
+    name: Native Windows Release Mount
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and mount a release-media fixture through Windows exFAT
+        shell: pwsh
+        run: |
+          $bash = 'C:\Program Files\Git\bin\bash.exe'
+          $env:PYTHON = 'python'
+          & $bash -lc 'TARGET=x86_64-unknown-uefi ./scripts/build.sh release'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $bash -lc './scripts/create-release-media.sh --skip-build --size 256 --growable-max-size 131072 --output target/release-media/windows-mount-qa.img'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/check-windows-release-mount.py --image target/release-media/windows-mount-qa.img
+
   health:
     name: Health Gate
     runs-on: ubuntu-24.04
