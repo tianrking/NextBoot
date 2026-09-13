@@ -142,7 +142,8 @@ if ($Headless) {
         Start-Sleep -Milliseconds 500
         if (Test-Path -LiteralPath $serialLog) {
             $currentLog = Get-Content -LiteralPath $serialLog -Raw
-            if ((Get-MissingPreflightMarkers $currentLog $SyntheticInternalDiskCount $ExpectedImageName).Count -eq 0) {
+            $currentMissingMarkers = @(Get-MissingPreflightMarkers $currentLog $SyntheticInternalDiskCount $ExpectedImageName)
+            if ($currentMissingMarkers.Count -eq 0) {
                 $menuObserved = $true
                 Stop-Process -Id $process.Id -Force
                 $process.WaitForExit()
@@ -157,7 +158,7 @@ if ($Headless) {
         }
         if (Test-Path -LiteralPath $serialLog) {
             $currentLog = Get-Content -LiteralPath $serialLog -Raw
-            $missing = Get-MissingPreflightMarkers $currentLog $SyntheticInternalDiskCount $ExpectedImageName
+            $missing = @(Get-MissingPreflightMarkers $currentLog $SyntheticInternalDiskCount $ExpectedImageName)
             throw "Headless QEMU preflight did not reach the expected NextBoot menu state within $PreflightTimeoutSeconds seconds. Missing log markers: $($missing -join '; ')"
         }
         throw "Headless QEMU preflight did not create a serial log within $PreflightTimeoutSeconds seconds."
@@ -174,7 +175,7 @@ if (Test-Path -LiteralPath $serialLog) {
     $logText = Get-Content -LiteralPath $serialLog -Raw
     Get-Content -LiteralPath $serialLog -Tail 120
 
-    $missingMarkers = Get-MissingPreflightMarkers $logText $SyntheticInternalDiskCount $ExpectedImageName
+    $missingMarkers = @(Get-MissingPreflightMarkers $logText $SyntheticInternalDiskCount $ExpectedImageName)
     if ($missingMarkers.Count -gt 0) {
         throw "QEMU preflight did not reach the expected NextBoot menu state. Missing log markers: $($missingMarkers -join '; ')"
     }
