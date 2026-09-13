@@ -31,21 +31,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Parse Windows physical-media QEMU preflight
+      - name: Parse Windows physical-media scripts
         shell: pwsh
         run: |
-          if (!(Test-Path scripts/Test-NextBootQemu.ps1)) {
-            Write-Host 'This historical release tag predates the physical-media QEMU preflight script.'
+          $scripts = @(
+            'scripts/Test-NextBootQemu.ps1',
+            'scripts/Write-NextBootMedia.ps1',
+            'scripts/Record-NextBootHardwareEvidence.ps1'
+          ) | Where-Object { Test-Path $_ }
+          if ($scripts.Count -eq 0) {
+            Write-Host 'This historical release tag predates the Windows physical-media scripts.'
             exit 0
           }
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path scripts/Test-NextBootQemu.ps1), [ref]$tokens, [ref]$errors
-          ) | Out-Null
-          if ($errors.Count) {
-            $errors | Format-List | Out-String | Write-Error
-            exit 1
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+            Write-Host "Parsed $script"
           }
       - name: Build and mount a release-media fixture through Windows exFAT
         shell: pwsh

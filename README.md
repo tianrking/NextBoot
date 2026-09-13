@@ -64,6 +64,20 @@ the release image with the read-only check below:
 This compares only the EFI System Partition, which is unaffected by data
 partition growth or the ISO files users add.
 
+To verify both the exact release EFI loader and the ISO you intend to boot in
+one read-only check, add the ISO file name. For example, with an SD card at
+disk 2 and Omarchy copied to `D:\ISO`:
+
+```powershell
+.\nextboot-v0.1.0-rc.13-windows-writer.ps1 `
+  -ImagePath .\nextboot-v0.1.0-rc.13-universal-uefi.img -DiskNumber 2 `
+  -VerifyOnly -VerifyBootPartitionOnly -ExpectedIsoName omarchy-4.0.3.iso
+```
+
+This does not write or reformat the device. It confirms the immutable EFI
+partition matches the selected release image, then requires a mounted exFAT
+`NEXTDATA` volume containing `ISO\omarchy-4.0.3.iso`.
+
 3. On macOS or Linux, or if choosing another Windows raw-image flasher, select
    the extracted image and an 8GB-or-larger USB stick, USB SSD, SD card, or
    external SSD, then flash/write it.

@@ -48,6 +48,17 @@ Windows 下经过校验的路径使用发布包内的 PowerShell 写入器；其
    ```
 
    此检查只比对不会被扩容或用户 ISO 改动的 EFI System Partition。
+
+   如需一次只读检查同时确认“当前 EFI 启动器就是所选发布镜像”以及“待启动 ISO 已在卡上”，可加上 ISO 文件名。例如 SD 卡是磁盘 2，且 Omarchy 已复制到 `D:\ISO`：
+
+   ```powershell
+   .\nextboot-v0.1.0-rc.13-windows-writer.ps1 `
+     -ImagePath .\nextboot-v0.1.0-rc.13-universal-uefi.img -DiskNumber 2 `
+     -VerifyOnly -VerifyBootPartitionOnly -ExpectedIsoName omarchy-4.0.3.iso
+   ```
+
+   该命令不会写入或格式化设备：它先确认不可变 EFI 分区与指定发布镜像一致，再确认已挂载的 exFAT `NEXTDATA` 分区内存在 `ISO\omarchy-4.0.3.iso`。
+
 3. macOS、Linux，或选择其他 Windows raw 镜像工具时，选择已解压的镜像及一个 8GB 或更大的 U 盘、USB SSD、SD 卡或外置 SSD，执行整盘写入。
 4. 写入后打开可见的 `NEXTDATA` 分区。Windows 必须将它显示为 exFAT，且内部应有 `ISO`。若显示 RAW，不要格式化；用 Windows 校验写入器重新写入镜像。
 5. 把 ISO/WIM/VHD/VHDX/IMG/EFI 文件拖入 `/ISO`。

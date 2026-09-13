@@ -16,6 +16,11 @@ param(
     # full-image comparison intentionally no longer does.
     [switch] $VerifyBootPartitionOnly,
 
+    # During a read-only physical-media check, also prove that a named image is
+    # on the mounted NEXTDATA data partition. This combines release-loader
+    # identity with the exact file the operator plans to boot.
+    [string] $ExpectedIsoName,
+
     [switch] $ConfirmErase
 )
 
@@ -124,6 +129,39 @@ function Test-NextBootBootPartition([System.IO.FileStream] $Source, [System.IO.F
     Test-ByteRange $Source $Target $esp.Length $esp.StartOffset 'NextBoot EFI boot partition'
 }
 
+function Test-ExpectedIsoOnPhysicalDisk([int] $Number, [string] $Name) {
+    if ([string]::IsNullOrWhiteSpace($Name)) { return }
+    if ($Name.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0 -or $Name.Contains('\') -or $Name.Contains('/')) {
+        throw 'ExpectedIsoName must be a file name only, without a path.'
+    }
+
+    $dataPartition = Get-Partition -DiskNumber $Number -ErrorAction Stop |
+        ForEach-Object {
+            $partition = $_
+            $volume = Get-Volume -Partition $partition -ErrorAction SilentlyContinue
+            if ($null -ne $volume -and $volume.FileSystemLabel -eq 'NEXTDATA') {
+                [pscustomobject]@{ Partition = $partition; Volume = $volume }
+            }
+        } |
+        Select-Object -First 1
+    if ($null -eq $dataPartition) {
+        throw "Disk $Number has no mounted NEXTDATA volume. Reconnect the media or assign its data partition a drive letter."
+    }
+    if ($dataPartition.Volume.FileSystem -ne 'exFAT') {
+        throw "Disk $Number NEXTDATA is $($dataPartition.Volume.FileSystem), expected exFAT. Do not format it; re-write the selected image."
+    }
+    $letter = [string]$dataPartition.Volume.DriveLetter
+    if ([string]::IsNullOrWhiteSpace($letter) -or $letter -eq [char]0) {
+        throw "Disk $Number NEXTDATA has no drive letter. Assign one before checking $Name."
+    }
+    $isoPath = Join-Path "${letter}:\ISO" $Name
+    $iso = Get-Item -LiteralPath $isoPath -ErrorAction SilentlyContinue
+    if ($null -eq $iso -or $iso.PSIsContainer) {
+        throw "Expected image was not found on Disk ${Number}: $isoPath"
+    }
+    Write-Output "Verified Disk ${Number}: NEXTDATA is exFAT and contains ISO\$Name ($($iso.Length) bytes)."
+}
+
 $image = Get-Item -LiteralPath $ImagePath -ErrorAction Stop
 if ($image.PSIsContainer) { throw 'ImagePath must name an extracted raw .img file, not a directory.' }
 $imageLength = [Int64]$image.Length
@@ -135,7 +173,11 @@ $wasOffline = $true
 $offlineManaged = $false
 try {
     if ($VerifyBootPartitionOnly -and -not $VerifyOnly) { throw 'VerifyBootPartitionOnly requires VerifyOnly.' }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedIsoName) -and (-not $VerifyOnly -or -not $VerifyBootPartitionOnly)) {
+        throw 'ExpectedIsoName requires -VerifyOnly -VerifyBootPartitionOnly on a physical disk.'
+    }
     if ($TargetPath) {
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedIsoName)) { throw 'ExpectedIsoName is only available with a physical DiskNumber.' }
         if ($DiskNumber -ge 0) { throw 'Specify either TargetPath or DiskNumber, not both.' }
         $targetItem = Get-Item -LiteralPath $TargetPath -ErrorAction Stop
         if ($targetItem.PSIsContainer) { throw 'TargetPath must name a raw-image file, not a directory.' }
@@ -163,6 +205,7 @@ try {
         $target = [System.IO.File]::Open($physicalPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
         if ($VerifyBootPartitionOnly) {
             Test-NextBootBootPartition $source $target
+            Test-ExpectedIsoOnPhysicalDisk $DiskNumber $ExpectedIsoName
             Write-Output "Verified Disk ${DiskNumber}: its immutable NextBoot EFI boot partition matches $($image.Name)."
             return
         }
