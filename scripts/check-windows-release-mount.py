@@ -93,6 +93,25 @@ def main() -> None:
             f"& '{writer}' -ImagePath '{raw}' -TargetPath '{verification}' -VerifyOnly"
         )
         print(powershell(writer_script, vhd))
+        # Firmware growth and user ISO copies change NEXTDATA, so the full raw
+        # digest correctly ceases to match.  Change only a disposable byte in
+        # the data partition and prove that the immutable ESP verifier still
+        # identifies the exact release loader.
+        with verification.open("r+b") as stream:
+            stream.seek(64 * 1024 * 1024)
+            original = stream.read(1)
+            if len(original) != 1:
+                raise AssertionError("verification image is unexpectedly smaller than 64 MiB")
+            stream.seek(64 * 1024 * 1024)
+            stream.write(bytes([original[0] ^ 0x01]))
+        esp_writer_script = (
+            f"& '{writer}' -ImagePath '{raw}' -TargetPath '{verification}' "
+            "-VerifyOnly -VerifyBootPartitionOnly"
+        )
+        output = powershell(esp_writer_script, vhd)
+        if "immutable NextBoot EFI boot partition matches" not in output:
+            raise AssertionError(f"immutable EFI verification did not report success: {output}")
+        print(output)
         wrap_fixed_vhd(raw, vhd)
         powershell(f"Mount-DiskImage -ImagePath '{vhd}' | Out-Null", vhd)
         attached = True
