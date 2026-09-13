@@ -88,6 +88,14 @@ def main() -> None:
     try:
         powershell(f"Mount-DiskImage -ImagePath '{vhd}' | Out-Null", vhd)
         attached = True
+        # Verify raw bytes before opening the filesystem: Windows legitimately
+        # updates exFAT volume-state metadata when it mounts and writes the
+        # probe file below.
+        writer_script = (
+            f"$disk=Get-DiskImage -ImagePath '{vhd}' | Get-Disk; "
+            f"& '{writer}' -ImagePath '{raw}' -DiskNumber $disk.Number -VerifyOnly"
+        )
+        print(powershell(writer_script, vhd))
         script = (
             f"$disk=Get-DiskImage -ImagePath '{vhd}' | Get-Disk; "
             "$volume=Get-Partition -DiskNumber $disk.Number | Get-Volume | "
@@ -104,11 +112,6 @@ def main() -> None:
             "Write-Output ('passed: NEXTDATA=' + $root + ' filesystem=' + $volume.FileSystem)"
         )
         print(powershell(script, vhd))
-        writer_script = (
-            f"$disk=Get-DiskImage -ImagePath '{vhd}' | Get-Disk; "
-            f"& '{writer}' -ImagePath '{raw}' -DiskNumber $disk.Number -VerifyOnly"
-        )
-        print(powershell(writer_script, vhd))
     finally:
         if attached:
             powershell(
