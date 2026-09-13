@@ -31,9 +31,11 @@ pub(super) fn discover_partition_candidates(
     discover_mbr_partitions(shared, first_block)
 }
 
-/// Check the stable GPT names written by the NextBoot release builder.  This
-/// is deliberately a narrow recovery predicate: it is used only when firmware
-/// cannot connect a raw BlockIO handle back to LoadedImage's boot device.
+/// Check the stable GPT names written by the NextBoot release builder. This
+/// accepts the unified `NEXBOOT` layout and the split
+/// `NEXBOOT_EFI`/`NEXBOOT_DATA` layout. It is deliberately a narrow recovery
+/// predicate: it is used only when firmware cannot connect a raw BlockIO
+/// handle back to LoadedImage's boot device.
 /// Parsing the GPT header and its small entry table is bounded and avoids
 /// walking arbitrary filesystems on internal disks.
 pub(super) fn has_nextboot_release_layout(
@@ -98,6 +100,7 @@ pub(super) fn has_nextboot_release_layout(
     };
     let mut data = false;
     let mut efi = false;
+    let mut unified = false;
     for offset in (0..entry_bytes_len).step_by(entry_size) {
         let Some(entry) = entries.get(offset..offset + entry_size) else {
             return false;
@@ -110,7 +113,8 @@ pub(super) fn has_nextboot_release_layout(
         }
         data |= gpt_name_equals(entry, "NEXBOOT_DATA");
         efi |= gpt_name_equals(entry, "NEXBOOT_EFI");
-        if data && efi {
+        unified |= gpt_name_equals(entry, "NEXBOOT");
+        if unified || (data && efi) {
             return true;
         }
     }
