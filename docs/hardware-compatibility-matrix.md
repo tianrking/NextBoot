@@ -110,7 +110,7 @@ Set-Location C:\Users\tianr\Downloads\NextBoot
   -Bus usb `
   -ImageType iso `
   -Firmware 'machine model and UEFI version' `
-  -ImagePath 'E:\nextboot-v0.1.0-rc.15-universal-uefi.img' `
+  -ImagePath 'E:\nextboot-v0.1.0-rc.16-universal-uefi.img' `
   -Notes 'NextBoot listed Omarchy and reached the recorded OS marker'
 ```
 

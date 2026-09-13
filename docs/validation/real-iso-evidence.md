@@ -4,7 +4,7 @@ Updated 2026-09-13. All results below are x86_64 QEMU/OVMF boot checks using the
 actual release-media builder with the pinned compatibility runtime. The current
 five-image run used commit `aeceeac0094114ff6e57f2945a5f1f4396108f99`, which
 contains the boot-media scanner recovery fix later packaged unchanged in
-`v0.1.0-rc.15`. These results do not establish completed installation or
+`v0.1.0-rc.16`. These results do not establish completed installation or
 physical-device compatibility.
 
 ## Verified checkpoints

@@ -19,6 +19,14 @@ param(
     [ValidateRange(16, 4096)]
     [int] $SyntheticInternalDiskSizeMiB = 128,
 
+    # Run without a GUI and stop QEMU as soon as the serial log proves that
+    # NextBoot reached its menu. This avoids booting the selected ISO merely
+    # to perform a local preflight.
+    [switch] $Headless,
+
+    [ValidateRange(5, 600)]
+    [int] $PreflightTimeoutSeconds = 90,
+
     [string] $QemuPath = 'C:\Program Files\qemu\qemu-system-x86_64.exe',
 
     [string] $OvmfCodePath = 'C:\Program Files\qemu\share\edk2-x86_64-code.fd',
@@ -37,6 +45,22 @@ function Require-Administrator {
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw 'Run PowerShell as Administrator so QEMU can read the selected PhysicalDrive.'
     }
+}
+
+function Get-MissingPreflightMarkers([string] $LogText, [int] $AttachedDiskCount, [string] $ImageName) {
+    $requiredMarkers = @(
+        'NextBoot v',
+        'Phase 1: Detecting storage devices',
+        'Phase 2: Scanning for ISO files',
+        'Phase 3: Displaying boot menu'
+    )
+    if ($AttachedDiskCount -gt 0) {
+        $requiredMarkers += "Found $($AttachedDiskCount + 1) storage device(s)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ImageName)) {
+        $requiredMarkers += "/ISO/$ImageName"
+    }
+    return @($requiredMarkers | Where-Object { -not $LogText.Contains($_) })
 }
 
 Require-Administrator
@@ -74,7 +98,7 @@ $arguments = @(
     # QEMU keeps all guest writes in a temporary overlay. The selected
     # PhysicalDrive is never modified by this test.
     '-snapshot',
-    '-display', 'gtk',
+    '-display', $(if ($Headless) { 'none' } else { 'gtk' }),
     '-serial', "file:$serialLog"
 )
 
@@ -95,31 +119,62 @@ for ($index = 1; $index -le $SyntheticInternalDiskCount; $index++) {
 }
 
 Write-Host "Starting read-only QEMU snapshot test for Disk $DiskNumber ($($disk.FriendlyName), $([math]::Floor($disk.Size / 1GB)) GB)."
-Write-Host 'Close the QEMU window to finish. Guest writes are discarded because -snapshot is enabled.'
+if ($Headless) {
+    Write-Host "Headless preflight will stop automatically after the menu markers are observed (timeout: $PreflightTimeoutSeconds seconds)."
+}
+else {
+    Write-Host 'Close the QEMU window to finish. Guest writes are discarded because -snapshot is enabled.'
+}
 if ($SyntheticInternalDiskCount -gt 0) {
     Write-Host "Attached $SyntheticInternalDiskCount temporary fixed disks to exercise the boot-media scan filter."
 }
-& $QemuPath @arguments
-$exitCode = $LASTEXITCODE
+if ($Headless) {
+    # Start-Process accepts one command-line string. Quote every QEMU
+    # argument so paths such as `file=C:\Program Files\...` stay a single
+    # argument for QEMU's option parser.
+    $headlessArgumentLine = (($arguments | ForEach-Object {
+        '"' + $_.Replace('"', '\"') + '"'
+    }) -join ' ')
+    $process = Start-Process -FilePath $QemuPath -ArgumentList $headlessArgumentLine -PassThru
+    $deadline = [DateTime]::UtcNow.AddSeconds($PreflightTimeoutSeconds)
+    $menuObserved = $false
+    while (-not $process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        if (Test-Path -LiteralPath $serialLog) {
+            $currentLog = Get-Content -LiteralPath $serialLog -Raw
+            if ((Get-MissingPreflightMarkers $currentLog $SyntheticInternalDiskCount $ExpectedImageName).Count -eq 0) {
+                $menuObserved = $true
+                Stop-Process -Id $process.Id -Force
+                $process.WaitForExit()
+                break
+            }
+        }
+    }
+    if (-not $menuObserved) {
+        if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force
+            $process.WaitForExit()
+        }
+        if (Test-Path -LiteralPath $serialLog) {
+            $currentLog = Get-Content -LiteralPath $serialLog -Raw
+            $missing = Get-MissingPreflightMarkers $currentLog $SyntheticInternalDiskCount $ExpectedImageName
+            throw "Headless QEMU preflight did not reach the expected NextBoot menu state within $PreflightTimeoutSeconds seconds. Missing log markers: $($missing -join '; ')"
+        }
+        throw "Headless QEMU preflight did not create a serial log within $PreflightTimeoutSeconds seconds."
+    }
+    $exitCode = 0
+}
+else {
+    & $QemuPath @arguments
+    $exitCode = $LASTEXITCODE
+}
 
 if (Test-Path -LiteralPath $serialLog) {
     Write-Host "Serial log: $serialLog"
     $logText = Get-Content -LiteralPath $serialLog -Raw
     Get-Content -LiteralPath $serialLog -Tail 120
 
-    $requiredMarkers = @(
-        'NextBoot v',
-        'Phase 1: Detecting storage devices',
-        'Phase 2: Scanning for ISO files',
-        'Phase 3: Displaying boot menu'
-    )
-    if ($SyntheticInternalDiskCount -gt 0) {
-        $requiredMarkers += "Found $($SyntheticInternalDiskCount + 1) storage device(s)"
-    }
-    if ($ExpectedImageName) {
-        $requiredMarkers += "/ISO/$ExpectedImageName"
-    }
-    $missingMarkers = @($requiredMarkers | Where-Object { -not $logText.Contains($_) })
+    $missingMarkers = Get-MissingPreflightMarkers $logText $SyntheticInternalDiskCount $ExpectedImageName
     if ($missingMarkers.Count -gt 0) {
         throw "QEMU preflight did not reach the expected NextBoot menu state. Missing log markers: $($missingMarkers -join '; ')"
     }

@@ -4,7 +4,7 @@
 
 [English](README.md)
 
-**发布状态：** `v0.1.0-rc.15` 是预发布版本。它增加了 Windows 原生挂载与写入/读回检查，并附带
+**发布状态：** `v0.1.0-rc.16` 是预发布版本。它增加了 Windows 原生挂载与写入/读回检查，并附带
 Windows 专用写入器，写入后会读取完整范围并比对 SHA-256。若 `NEXTDATA` 显示为 RAW，说明写入没有正确完成；不要
 格式化它，应使用下方的校验写入器重新写入。这不等同于完成安装或真实硬件认证；使用前请查看[发布验收清单](docs/release-readiness.md)。
 
@@ -16,7 +16,7 @@ Windows 专用写入器，写入后会读取完整范围并比对 SHA-256。若 
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#架构)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#兼容性覆盖)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#功能覆盖)
-[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.15)
+[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.16)
 
 NextBoot 是一个用 Rust 编写的 UEFI 启动介质项目，面向 U 盘、USB SSD、SD 卡，以及固定磁盘风格的 SSD/NVMe 部署。发布物是一个压缩后的 raw 磁盘镜像：用户用常见烧录工具写入整块设备，打开可见的 `NEXTDATA` 分区，把 ISO/WIM/VHD/VHDX/IMG/EFI 文件拖到 `/ISO`，然后从主板或电脑固件的 UEFI 启动菜单选择这块设备。
 
@@ -25,16 +25,16 @@ Windows 下经过校验的路径使用发布包内的 PowerShell 写入器；其
 ## 快速开始
 
 1. 从最新 GitHub Release 下载通用镜像：
-   `nextboot-v0.1.0-rc.15-universal-uefi.img.xz`。
+   `nextboot-v0.1.0-rc.16-universal-uefi.img.xz`。
    如果你的烧录工具只接受 raw `.img` 文件，下载
-   `nextboot-v0.1.0-rc.15-universal-uefi.img.zip` 并解压。
-2. Windows 下请下载 `nextboot-v0.1.0-rc.15-windows-writer.ps1`，以**管理员身份**打开
+   `nextboot-v0.1.0-rc.16-universal-uefi.img.zip` 并解压。
+2. Windows 下请下载 `nextboot-v0.1.0-rc.16-windows-writer.ps1`，以**管理员身份**打开
    PowerShell，先运行 `Get-Disk` 确认目标磁盘编号，再执行：
 
    ```powershell
-   Unblock-File .\nextboot-v0.1.0-rc.15-windows-writer.ps1
-   .\nextboot-v0.1.0-rc.15-windows-writer.ps1 `
-     -ImagePath .\nextboot-v0.1.0-rc.15-universal-uefi.img -DiskNumber N
+   Unblock-File .\nextboot-v0.1.0-rc.16-windows-writer.ps1
+   .\nextboot-v0.1.0-rc.16-windows-writer.ps1 `
+     -ImagePath .\nextboot-v0.1.0-rc.16-universal-uefi.img -DiskNumber N
    ```
 
    写入器会再要求输入一次磁盘编号，写完整块镜像后读取完整范围并比对 SHA-256，并拒绝 Windows 系统盘和启动盘。这是推荐的默认方式，能发现镜像任意位置的写入损坏。
@@ -45,8 +45,8 @@ Windows 下经过校验的路径使用发布包内的 PowerShell 写入器；其
    加载器仍与发布镜像相同，可执行只读检查：
 
    ```powershell
-   .\nextboot-v0.1.0-rc.15-windows-writer.ps1 `
-     -ImagePath .\nextboot-v0.1.0-rc.15-universal-uefi.img -DiskNumber N `
+   .\nextboot-v0.1.0-rc.16-windows-writer.ps1 `
+     -ImagePath .\nextboot-v0.1.0-rc.16-universal-uefi.img -DiskNumber N `
      -VerifyOnly -VerifyBootPartitionOnly
    ```
 
@@ -55,8 +55,8 @@ Windows 下经过校验的路径使用发布包内的 PowerShell 写入器；其
    如需一次只读检查同时确认“当前 EFI 启动器就是所选发布镜像”以及“待启动 ISO 已在卡上”，可加上 ISO 文件名。例如 SD 卡是磁盘 2，且 Omarchy 已复制到 `D:\ISO`：
 
    ```powershell
-   .\nextboot-v0.1.0-rc.15-windows-writer.ps1 `
-     -ImagePath .\nextboot-v0.1.0-rc.15-universal-uefi.img -DiskNumber 2 `
+   .\nextboot-v0.1.0-rc.16-windows-writer.ps1 `
+     -ImagePath .\nextboot-v0.1.0-rc.16-universal-uefi.img -DiskNumber 2 `
      -VerifyOnly -VerifyBootPartitionOnly -ExpectedIsoName omarchy-4.0.3.iso
    ```
 
@@ -82,6 +82,14 @@ QEMU 读取目标卡，但关闭时丢弃虚拟机写入；串口日志会写入
 默认还会附加两块临时固定盘，复现常见的“SD 卡加内部磁盘”拓扑，以覆盖启动介质扫描过滤逻辑。
 启动日志和菜单会显示发布 tag 或本地 Git 构建标识，因此可将真机照片准确对应到写入的 EFI 二进制文件。
 
+如需不打开窗口、在菜单和指定 ISO 出现在串口日志后自动退出的预检，可执行：
+
+```powershell
+.\scripts\Test-NextBootQemu.ps1 -DiskNumber N -ExpectedImageName your-image.iso -Headless
+```
+
+无界面模式默认 90 秒超时，只会结束临时 QEMU 进程；`-snapshot` 仍保证虚拟机不会写入所选实体磁盘。它验证本机的 UEFI/菜单路径，不能替代主板固件或完成系统启动的真机验证。
+
 烧录会写入整块磁盘，并清空目标设备上的原有数据。不要把 `.img.xz`、`.img.zip` 或解压后的 `.img` 当普通文件复制到已有 U 盘分区里；必须使用烧录工具的整盘写入模式。如果 Rufus 询问写入模式，选择 DD/raw image mode。对于容量大于发布镜像且不超过 128GiB 的设备，NextBoot 可以在首次启动时扩展 `NEXTDATA`。
 
 ## 发布形态
@@ -89,12 +97,12 @@ QEMU 读取目标卡，但关闭时丢弃虚拟机写入；串口日志会写入
 面向用户的发布物是一份通用镜像：
 
 ```text
-nextboot-v0.1.0-rc.15-universal-uefi.img.xz
-nextboot-v0.1.0-rc.15-universal-uefi.img.zip
-nextboot-v0.1.0-rc.15-windows-writer.ps1
+nextboot-v0.1.0-rc.16-universal-uefi.img.xz
+nextboot-v0.1.0-rc.16-universal-uefi.img.zip
+nextboot-v0.1.0-rc.16-windows-writer.ps1
 ```
 
-最新发布：<https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.15>
+最新发布：<https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.16>
 
 它包含：
 

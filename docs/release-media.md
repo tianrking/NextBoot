@@ -1,6 +1,6 @@
 # Release Media
 
-This describes the current development builder and the `v0.1.0-rc.15` release
+This describes the current development builder and the `v0.1.0-rc.16` release
 candidate. The inspected `v0.0.3` public image is a historical comparison only;
 it does not contain the runtime added below and is not the current download.
 See [release readiness](release-readiness.md) for the evidence boundary.
