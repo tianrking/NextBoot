@@ -167,6 +167,14 @@ try {
             Write-Warning "Disk $DiskNumber is removable media; Windows does not support taking it offline. Continuing with exclusive raw-image verification."
         }
     }
+
+    # A mounted volume can keep the removable device busy even after its drive
+    # letter is removed.  Clear the selected non-system disk after the explicit
+    # erase confirmation, so Windows releases its partition/volume handles
+    # before the raw PhysicalDrive stream is opened.  The NextBoot GPT and both
+    # partitions are restored immediately by the image write below.
+    Clear-Disk -Number $DiskNumber -RemoveData -RemoveOEM -Confirm:$false -ErrorAction Stop
+    Start-Sleep -Milliseconds 250
     $target = [System.IO.File]::Open($physicalPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
     $buffer = [byte[]]::new(4MB)
     $written = [Int64]0
