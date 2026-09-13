@@ -1,6 +1,6 @@
 # Release readiness / 发布验收
 
-Status: **v0.1.0-rc.2 QEMU-evidence prerelease**. Updated 2026-09-13. This is not a stable or physical-hardware certification.
+Status: **v0.1.0-rc.3 QEMU-evidence prerelease**. Updated 2026-09-13. This is not a stable or physical-hardware certification.
 
 NextBoot targets UEFI multi-image installation and recovery media. The first
 reliability target is x86_64 with Secure Boot disabled. IA32 and AArch64 builds
@@ -16,12 +16,12 @@ this product scope. Public Secure Boot distribution is a later milestone.
 The inspected v0.0.3 public image contains the fallback EFI loaders and an empty
 `/ISO` directory, but omits the compatibility runtime used by earlier real-ISO
 tests. It is a development baseline, not the verified complete product described
-by the target user flow. The changes below are published in `v0.1.0-rc.2` as a QEMU-evidence
+by the target user flow. The changes below are published in `v0.1.0-rc.3` as a QEMU-evidence
 prerelease. They must not be attributed to the older v0.0.3 download, and the
 new tag must not be interpreted as completed-installation or physical-hardware
 certification.
 
-v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资源。`v0.1.0-rc.2`
+v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资源。`v0.1.0-rc.3`
 以带 QEMU 证据的预发布形式发布这些修复；不能把它当作完成安装或真实硬件认证。
 
 ## Acceptance ledger
@@ -29,8 +29,8 @@ v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资�
 | Area | Evidence completed | Remaining acceptance |
 | --- | --- | --- |
 | Media contents | Builder includes SHA256-pinned runtime, notices and provenance; all 50 files verified in actual exFAT media | Final multi-architecture release artifact verification |
-| Windows exFAT mount | A physical SD-card report exposed rc.1 as RAW in Windows; rc.2 writes the Allocation Bitmap DataLength as `ceil(ClusterCount / 8)` and the builder plus growth check enforce that invariant | Mount rc.2 on Windows physical removable media before stable promotion |
-| Growth | Host geometry tests, unchanged/rejected-shrink image hashes, QEMU 256 → 512 MiB growth, second boot no-op, runtime preservation | Real device capacity and host remount checks |
+| Windows exFAT mount | A physical SD-card report exposed rc.1 and rc.2 as RAW in Windows. rc.3 makes Allocation Bitmap `DataLength`, its FAT-chain length, and `ClusterCount` agree; generated-image verification rejects a mismatch | Mount rc.3 on Windows physical removable media before stable promotion |
+| Growth | Host geometry tests, unchanged/rejected-shrink image hashes, QEMU firmware expansion and post-growth exFAT verification; firmware updates Allocation Bitmap `DataLength` before publishing the new boot geometry | Real device capacity and host remount checks |
 | Partition discovery | Both GPT entry orders and invalid/ambiguous inventory tests; Linux CI; native Windows selection rejects system/boot disks and identifies a GPT ESP plus NEXTDATA by stable volume GUID | Physical Linux/macOS update checks and physical Windows USB update |
 | Update data preservation | Journaled backup/replacement/recovery and conflict rejection; actual EFI + 50-file runtime migration/no-op/rollback; Linux FAT/exFAT post-update filesystem checks; native Windows disposable-VHD update/no-op/rollback/remount check passed in CI at d4a2b93 | Physical host update and power-interruption testing, backup retention management |
 | Build inputs | Rust 1.98.1 and Cargo.lock pinned, --locked builds/tests | Final release CI and build provenance |

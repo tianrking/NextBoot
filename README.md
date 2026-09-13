@@ -4,9 +4,9 @@
 
 [简体中文](README.zh-CN.md)
 
-**Release status:** `v0.1.0-rc.2` is a QEMU-evidence prerelease. It repairs
-a Windows exFAT mount defect in rc.1: reflash the new image if rc.1 shows
-`NEXTDATA` as RAW; do not format that broken partition. It is not a completed-installation
+**Release status:** `v0.1.0-rc.3` is a QEMU-evidence prerelease. It repairs
+the Windows exFAT mount defect present in rc.1 and rc.2: reflash the new image
+if either older release shows `NEXTDATA` as RAW; do not format that broken partition. It is not a completed-installation
 or physical-hardware certification; see the [release acceptance ledger](docs/release-readiness.md)
 before choosing an image for use.
 
@@ -18,7 +18,7 @@ before choosing an image for use.
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#architecture)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#compatibility-coverage)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#feature-coverage)
-[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.2)
+[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.3)
 
 NextBoot is a Rust UEFI boot medium for USB sticks, USB SSDs, SD cards, and
 fixed-disk style SSD/NVMe deployments. The release artifact is a compressed raw
@@ -32,9 +32,9 @@ users.
 ## Quick Start
 
 1. Download the universal image from the latest GitHub release:
-   `nextboot-v0.1.0-rc.2-universal-uefi.img.xz`.
+   `nextboot-v0.1.0-rc.3-universal-uefi.img.xz`.
    If your flashing tool only accepts raw `.img` files, download
-   `nextboot-v0.1.0-rc.2-universal-uefi.img.zip` and extract it.
+   `nextboot-v0.1.0-rc.3-universal-uefi.img.zip` and extract it.
 2. Use a raw-image flasher such as balenaEtcher, Raspberry Pi Imager, Rufus,
    Win32 Disk Imager, or GNOME Disks.
 3. Select the NextBoot image, select an 8GB-or-larger USB stick, USB SSD, SD
@@ -47,19 +47,19 @@ users.
 Flashing writes a whole-disk image and erases the selected target device. Do
 not copy the `.img.xz`, `.img.zip`, or extracted `.img` file into an existing
 USB drive; use the flasher's whole-device write mode. If Rufus asks for a mode,
-choose DD/raw image mode. On media larger than the release image, NextBoot can
-expand `NEXTDATA` on first boot.
+choose DD/raw image mode. On media larger than the release image and no greater
+than 128 GiB, NextBoot can expand `NEXTDATA` on first boot.
 
 ## Release Shape
 
 The customer-facing release is a single universal image:
 
 ```text
-nextboot-v0.1.0-rc.2-universal-uefi.img.xz
-nextboot-v0.1.0-rc.2-universal-uefi.img.zip
+nextboot-v0.1.0-rc.3-universal-uefi.img.xz
+nextboot-v0.1.0-rc.3-universal-uefi.img.zip
 ```
 
-Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.2>
+Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.3>
 
 It contains:
 

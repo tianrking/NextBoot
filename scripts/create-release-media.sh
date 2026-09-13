@@ -10,7 +10,11 @@ MODE="release"
 SIZE_MB="7000"
 SECTOR_SIZE="512"
 DATA_FS="exfat"
-GROWABLE_MAX_SIZE_MB="16777216"
+# 128 GiB is enough for the supported removable-media target while retaining a
+# single 128 KiB allocation-bitmap cluster.  exFAT requires the bitmap's FAT
+# chain to agree with its DataLength; do not reserve a longer chain for a
+# future size.
+GROWABLE_MAX_SIZE_MB="131072"
 OUTPUT=""
 EFI_OVERRIDE=""
 VENTOY_ASSETS_DIR=""
@@ -36,7 +40,7 @@ Options:
   --size MB             raw disk image size in MiB (default: 7000, fits 8GB media)
   --sector-size BYTES   logical sector size: 512 or 4096 (default: 512)
   --data-fs FS          data partition filesystem: exfat or fat32 (default: exfat)
-  --growable-max-size MB maximum target media size for growable exFAT (default: 16777216)
+  --growable-max-size MB maximum target media size for growable exFAT (default: 131072)
   --image PATH          preseed an image into /ISO; repeatable
   --output PATH         output .img path
   --efi PATH            use an explicit EFI binary instead of target/TARGET/MODE

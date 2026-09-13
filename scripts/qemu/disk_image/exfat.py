@@ -264,16 +264,13 @@ def write_exfat_volume(f, part, deps):
     set_fat(0, 0xFFFFFFF8)
     set_fat(1, EXFAT_CLUSTER_EOC)
 
-    # The allocation bitmap directory entry describes the current volume, not
-    # the number of entries that happen to fit in the preallocated FAT.  A
-    # larger value is tolerated by the in-tree reader but Windows rejects the
-    # volume as RAW.  Keep the file's physical cluster reservation large enough
-    # for the first-boot growth target, while publishing the exact current
-    # ClusterCount-derived length in the root directory.
-    bitmap_cluster_capacity = max(cluster_count, fat_length * sector_size // 4 - 2)
-    bitmap_storage_size = math.ceil(bitmap_cluster_capacity / 8)
+    # The bitmap's FAT chain must contain exactly the clusters its DataLength
+    # needs.  Reserving extra clusters in that chain makes Windows reject the
+    # volume as RAW, even when the root directory advertises the current bitmap
+    # length.  A 128 KiB initial bitmap cluster covers the configured 128 GiB
+    # first-boot growth ceiling without lengthening this chain.
     bitmap_size = math.ceil(cluster_count / 8)
-    bitmap_chain = allocate_chain(math.ceil(bitmap_storage_size / cluster_size))
+    bitmap_chain = allocate_chain(math.ceil(bitmap_size / cluster_size))
     bitmap_first_cluster = bitmap_chain[0]
     upcase_table = exfat_upcase_table()
     upcase_chain = allocate_chain(math.ceil(len(upcase_table) / cluster_size))

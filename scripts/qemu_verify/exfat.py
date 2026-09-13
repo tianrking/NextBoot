@@ -150,6 +150,12 @@ class ExFatVolume:
             bitmap_size == ceil_div(self.cluster_count, 8),
             f"{self.partition.name}: exFAT bitmap length does not match ClusterCount",
         )
+        bitmap_chain = self.cluster_chain(bitmap_cluster)
+        bitmap_clusters = ceil_div(bitmap_size, self.sectors_per_cluster * self.image.sector_size)
+        require(
+            len(bitmap_chain) == bitmap_clusters,
+            f"{self.partition.name}: exFAT bitmap FAT chain does not match DataLength",
+        )
 
         upcase = next(entry for entry in entries if entry[0] == 0x82)
         upcase_cluster = u32(upcase, 20)

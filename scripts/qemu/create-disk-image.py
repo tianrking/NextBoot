@@ -107,7 +107,7 @@ def mib_to_sectors(mib):
     return mib * 1024 * 1024 // sector_size
 
 growable_exfat = os.environ.get("NEXTBOOT_GROWABLE_EXFAT") == "1"
-growable_exfat_max_mib = int(os.environ.get("NEXTBOOT_GROWABLE_EXFAT_MAX_MIB", "16777216"))
+growable_exfat_max_mib = int(os.environ.get("NEXTBOOT_GROWABLE_EXFAT_MAX_MIB", "131072"))
 growable_exfat_cluster_size = int(os.environ.get("NEXTBOOT_GROWABLE_EXFAT_CLUSTER_SIZE", "131072"))
 
 extra_files = []
