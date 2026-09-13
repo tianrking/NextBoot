@@ -53,6 +53,18 @@ Windows 下经过校验的路径使用发布包内的 PowerShell 写入器；其
 5. 把 ISO/WIM/VHD/VHDX/IMG/EFI 文件拖入 `/ISO`。
 6. 重启，从固件的 UEFI 启动菜单选择这块设备，然后在 NextBoot 菜单里选择要启动的镜像。
 
+### Windows 本机 UEFI 预检
+
+在重启真机前，可使用 QEMU 以临时快照方式启动已写好的实体介质：
+
+```powershell
+.\scripts\Test-NextBootQemu.ps1 -DiskNumber N
+```
+
+该脚本要求管理员 PowerShell，以及默认安装到 `C:\Program Files\qemu` 的 QEMU for Windows。
+QEMU 读取目标卡，但关闭时丢弃虚拟机写入；串口日志会写入
+`target\qemu-physical\DiskN.serial.log`。这用于预检 UEFI、菜单和镜像交接，仍须在目标主板固件上完成一次最终启动确认。
+
 烧录会写入整块磁盘，并清空目标设备上的原有数据。不要把 `.img.xz`、`.img.zip` 或解压后的 `.img` 当普通文件复制到已有 U 盘分区里；必须使用烧录工具的整盘写入模式。如果 Rufus 询问写入模式，选择 DD/raw image mode。对于容量大于发布镜像且不超过 128GiB 的设备，NextBoot 可以在首次启动时扩展 `NEXTDATA`。
 
 ## 发布形态
