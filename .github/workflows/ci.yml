@@ -46,16 +46,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Parse Windows physical-media QEMU preflight
+      - name: Parse Windows PowerShell scripts
         shell: pwsh
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path scripts/Test-NextBootQemu.ps1), [ref]$tokens, [ref]$errors
-          ) | Out-Null
-          if ($errors.Count) {
-            $errors | Format-List | Out-String | Write-Error
+          $parseErrors = [System.Collections.Generic.List[object]]::new()
+          Get-ChildItem scripts -Filter '*.ps1' -File | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count) {
+              foreach ($error in $errors) {
+                $parseErrors.Add([pscustomobject]@{ Script = $_.Name; Error = $error })
+              }
+            }
+          }
+          if ($parseErrors.Count) {
+            $parseErrors | Format-List | Out-String | Write-Error
             exit 1
           }
       - name: Build and mount a release-media fixture through Windows exFAT
