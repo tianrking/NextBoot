@@ -176,7 +176,7 @@ jobs:
           body: |
             Download the universal release image and flash it as a whole-disk image to an 8GB-or-larger USB stick, USB SSD, SD card, or external SSD.
 
-            On Windows, the attached `nextboot-*-windows-writer.ps1` is the verified path: download the `.img.zip`, extract the `.img`, open an Administrator PowerShell, run `Unblock-File .\nextboot-*-windows-writer.ps1`, then run `./nextboot-*-windows-writer.ps1 -ImagePath .\nextboot-*-universal-uefi.img -DiskNumber N`. It writes the whole image and compares every written byte before reporting success. Use `Get-Disk` to identify `N`; it refuses the system and boot disks. A normal image flasher remains supported, but do not use a device that Windows reports as RAW after flashing.
+            On Windows, the attached `nextboot-*-windows-writer.ps1` is the verified path: download the `.img.zip`, extract the `.img`, open an Administrator PowerShell, run `Unblock-File .\nextboot-*-windows-writer.ps1`, then run `./nextboot-*-windows-writer.ps1 -ImagePath .\nextboot-*-universal-uefi.img -DiskNumber N`. It writes the whole image, reads the full written range, and compares SHA-256 digests before reporting success. Use `Get-Disk` to identify `N`; it refuses the system and boot disks. A normal image flasher remains supported, but do not use a device that Windows reports as RAW after flashing.
 
             Recommended GUI flow: use balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk Imager, GNOME Disks, or another raw-image flasher. Select the NextBoot image, select the target device, and flash/write it.
 

@@ -5,7 +5,7 @@
 [English](README.md)
 
 **发布状态：** `v0.1.0-rc.8` 是预发布版本。它增加了 Windows 原生挂载与写入/读回检查，并附带
-Windows 专用写入器，写入后会逐字节回读校验。若 `NEXTDATA` 显示为 RAW，说明写入没有正确完成；不要
+Windows 专用写入器，写入后会读取完整范围并比对 SHA-256。若 `NEXTDATA` 显示为 RAW，说明写入没有正确完成；不要
 格式化它，应使用下方的校验写入器重新写入。这不等同于完成安装或真实硬件认证；使用前请查看[发布验收清单](docs/release-readiness.md)。
 
 [![CI](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml)
@@ -37,7 +37,7 @@ Windows 下经过校验的路径使用发布包内的 PowerShell 写入器；其
      -ImagePath .\nextboot-v0.1.0-rc.8-universal-uefi.img -DiskNumber N
    ```
 
-   写入器会再要求输入一次磁盘编号，写完整块镜像后逐字节回读校验，并拒绝 Windows 系统盘和启动盘。
+   写入器会再要求输入一次磁盘编号，写完整块镜像后读取完整范围并比对 SHA-256，并拒绝 Windows 系统盘和启动盘。
 3. macOS、Linux，或选择其他 Windows raw 镜像工具时，选择已解压的镜像及一个 8GB 或更大的 U 盘、USB SSD、SD 卡或外置 SSD，执行整盘写入。
 4. 写入后打开可见的 `NEXTDATA` 分区。Windows 必须将它显示为 exFAT，且内部应有 `ISO`。若显示 RAW，不要格式化；用 Windows 校验写入器重新写入镜像。
 5. 把 ISO/WIM/VHD/VHDX/IMG/EFI 文件拖入 `/ISO`。
@@ -64,7 +64,7 @@ nextboot-v0.1.0-rc.8-windows-writer.ps1
 | GPT | 标准 GPT 分区表，适合可移动设备和固定磁盘设备 |
 | ESP | 32MiB FAT EFI 系统分区，包含 `BOOTX64.EFI`、`BOOTIA32.EFI`、`BOOTAA64.EFI` |
 | Data | 可增长的 exFAT `NEXTDATA` 分区，预置 `/ISO` 目录 |
-| Windows 写入器 | 附带 PowerShell 写入器，整段逐字节写后校验 |
+| Windows 写入器 | 附带 PowerShell 写入器，完整范围 SHA-256 写后校验 |
 | 其他烧录工具 | balenaEtcher、Raspberry Pi Imager、Rufus、Win32 Disk Imager、GNOME Disks 和其他 raw 写入工具 |
 | 烧录主机 | Windows、macOS、Linux |
 | 启动目标 | x86_64、IA32、AArch64 UEFI 固件 |

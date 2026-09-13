@@ -43,25 +43,33 @@ function Write-Exact([System.IO.FileStream] $Stream, [byte[]] $Buffer, [int] $Co
 }
 
 function Test-ByteRange([System.IO.FileStream] $Source, [System.IO.FileStream] $Target, [Int64] $Length) {
-    $chunkSize = 4MB
-    $sourceBuffer = [byte[]]::new($chunkSize)
-    $targetBuffer = [byte[]]::new($chunkSize)
-    $Source.Position = 0
-    $Target.Position = 0
-    $processed = [Int64]0
-    while ($processed -lt $Length) {
-        $count = [int][Math]::Min($chunkSize, $Length - $processed)
-        Read-Exact $Source $sourceBuffer $count
-        Read-Exact $Target $targetBuffer $count
-        for ($index = 0; $index -lt $count; $index++) {
-            if ($sourceBuffer[$index] -ne $targetBuffer[$index]) {
-        throw "Verification failed at byte $($processed + $index). The target does not match the selected image."
+    function Get-RangeDigest([System.IO.FileStream] $Stream, [Int64] $RangeLength) {
+        $chunkSize = 4MB
+        $buffer = [byte[]]::new($chunkSize)
+        $hash = [Security.Cryptography.IncrementalHash]::CreateHash('SHA256')
+        try {
+            $Stream.Position = 0
+            $processed = [Int64]0
+            while ($processed -lt $RangeLength) {
+                $count = [int][Math]::Min($chunkSize, $RangeLength - $processed)
+                Read-Exact $Stream $buffer $count
+                $hash.AppendData($buffer, 0, $count)
+                $processed += $count
+                Write-Progress -Activity 'Verifying NextBoot media' -Status "$([Math]::Floor($processed / 1MB)) MiB / $([Math]::Floor($RangeLength / 1MB)) MiB" -PercentComplete ([int](50 * $processed / $RangeLength))
             }
+            return [Convert]::ToHexString($hash.GetHashAndReset())
         }
-        $processed += $count
-        Write-Progress -Activity 'Verifying NextBoot media' -Status "$([Math]::Floor($processed / 1MB)) MiB / $([Math]::Floor($Length / 1MB)) MiB" -PercentComplete ([int](100 * $processed / $Length))
+        finally {
+            $hash.Dispose()
+        }
     }
+
+    $sourceDigest = Get-RangeDigest $Source $Length
+    $targetDigest = Get-RangeDigest $Target $Length
     Write-Progress -Activity 'Verifying NextBoot media' -Completed
+    if ($sourceDigest -ne $targetDigest) {
+        throw "Verification failed: full-range SHA-256 differs ($sourceDigest != $targetDigest)."
+    }
 }
 
 function Get-NextBootDataStart([System.IO.FileStream] $Source) {

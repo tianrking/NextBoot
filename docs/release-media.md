@@ -5,7 +5,8 @@ image does not contain the runtime added below. See [release readiness](release-
 
 The release artifact is a raw media image. On Windows, the matching
 `nextboot-*-windows-writer.ps1` release asset is the preferred writer because it
-writes the full image and compares every written byte before reporting success.
+writes the full image and compares full-range SHA-256 digests before reporting
+success.
 
 ## User Flow
 
@@ -15,7 +16,8 @@ writes the full image and compares every written byte before reporting success.
    find the target number with `Get-Disk`, and run
    `./nextboot-*-windows-writer.ps1 -ImagePath .\nextboot-*.img -DiskNumber N`.
    The writer asks for the disk number again before erasing it, refuses system
-   and boot disks, then compares every byte it wrote.
+   and boot disks, then reads the full written range and compares SHA-256
+   digests.
 3. On macOS or Linux, use balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk
    Imager, GNOME Disks, or another raw-image writer on an 8GB-or-larger USB
    stick, USB SSD, SD card, or external SSD.

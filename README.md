@@ -47,8 +47,9 @@ writers remain usable when their write result is checked before adding boot imag
      -ImagePath .\nextboot-v0.1.0-rc.8-universal-uefi.img -DiskNumber N
    ```
 
-   The writer asks for the disk number one more time, writes the whole image,
-   and compares every written byte. It refuses the Windows system and boot disks.
+The writer asks for the disk number one more time, writes the whole image,
+then reads the full written range and compares SHA-256 digests. It refuses the
+Windows system and boot disks.
 3. On macOS or Linux, or if choosing another Windows raw-image flasher, select
    the extracted image and an 8GB-or-larger USB stick, USB SSD, SD card, or
    external SSD, then flash/write it.
@@ -84,7 +85,7 @@ It contains:
 | GPT | Standard partition table suitable for removable and fixed media |
 | ESP | 32MiB FAT ESP with `BOOTX64.EFI`, `BOOTIA32.EFI`, and `BOOTAA64.EFI` |
 | Data | Growable exFAT `NEXTDATA` partition with `/ISO` already created |
-| Windows writer | Included PowerShell writer: full byte-for-byte post-write verification |
+| Windows writer | Included PowerShell writer: full-range SHA-256 post-write verification |
 | Other flashing tools | balenaEtcher, Raspberry Pi Imager, Rufus, Win32 Disk Imager, GNOME Disks, and other raw writers |
 | Flashing hosts | Windows, macOS, and Linux |
 | Boot target | x86_64, IA32, and AArch64 UEFI firmware |
