@@ -219,30 +219,21 @@ impl WindowsBootloader {
 
         info!("Setting up virtual Block IO...");
 
-        // TODO: 调用 nextboot-virtio 创建虚拟设备
-        // 需要创建一个 CD-ROM 类型的虚拟设备
-
-        Ok(())
+        // Windows runtime support is implemented by the UEFI BootManager and
+        // its nextboot-virtio device. This legacy helper does not have the
+        // UEFI handles needed to create that device, so it must not report a
+        // successful preparation.
+        Err(WindowsBootError::VirtualDeviceFailed)
     }
 
-    /// 执行启动
+    /// 请求由这个独立库执行 Windows 启动。
     ///
-    /// # 安全性
-    /// 此函数将控制权转交给 Windows Boot Manager
-    pub unsafe fn boot(self) -> ! {
-        info!("Booting Windows...");
-
-        // TODO: 实现 Windows 启动
-        // 流程:
-        // 1. 确保虚拟 Block IO 已注册
-        // 2. 加载 bootmgfw.efi
-        // 3. 设置适当的设备路径
-        // 4. 调用 UEFI LoadImage
-        // 5. 调用 StartImage
-
-        loop {
-            core::hint::spin_loop();
-        }
+    /// Windows ISO 的实际启动由 `nextboot-boot` UEFI runtime 管理虚拟
+    /// Block IO、EFI chain-load 和 WIMBOOT 回退。这个库未持有那些 UEFI
+    /// services，不能安全地转交控制权。
+    pub fn boot(self) -> Result<(), WindowsBootError> {
+        let _ = self;
+        Err(WindowsBootError::StandaloneBootUnavailable)
     }
 
     /// 获取配置
@@ -275,6 +266,8 @@ pub enum WindowsBootError {
     UefiNotAvailable,
     /// 不支持的 Windows 版本
     UnsupportedVersion,
+    /// 独立库没有执行 Windows EFI 链式加载所需的 UEFI boot services
+    StandaloneBootUnavailable,
 }
 
 impl core::fmt::Display for WindowsBootError {
@@ -288,6 +281,37 @@ impl core::fmt::Display for WindowsBootError {
             WindowsBootError::InvalidBootFile => write!(f, "Invalid boot file"),
             WindowsBootError::UefiNotAvailable => write!(f, "UEFI services not available"),
             WindowsBootError::UnsupportedVersion => write!(f, "Unsupported Windows version"),
+            WindowsBootError::StandaloneBootUnavailable => {
+                write!(
+                    f,
+                    "Standalone Windows boot is unavailable; use the UEFI boot runtime"
+                )
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preparation_fails_when_no_virtual_device_can_be_created() {
+        let mut loader = WindowsBootloader::new(WindowsBootConfig::new());
+
+        assert!(matches!(
+            loader.prepare(),
+            Err(WindowsBootError::VirtualDeviceFailed)
+        ));
+    }
+
+    #[test]
+    fn standalone_boot_reports_unavailable_instead_of_spinning() {
+        let loader = WindowsBootloader::new(WindowsBootConfig::new());
+
+        assert!(matches!(
+            loader.boot(),
+            Err(WindowsBootError::StandaloneBootUnavailable)
+        ));
     }
 }

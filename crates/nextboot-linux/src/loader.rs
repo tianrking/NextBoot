@@ -69,33 +69,15 @@ impl LinuxBootloader {
         Ok(())
     }
 
-    /// 执行启动
+    /// 请求由这个独立库执行 Linux 启动。
     ///
-    /// # 安全性
-    /// 此函数不会返回，直接跳转到 Kernel
-    pub unsafe fn boot(self) -> ! {
-        info!("Booting Linux kernel...");
-
-        // TODO: 实现 Linux Kernel 启动协议
-        // 对于 UEFI 启动，有两种方式:
-        // 1. EFI Handover Protocol (较新的内核支持)
-        // 2. LoadImage/StartImage (通过 EFI stub)
-
-        // 使用 EFI Handover Protocol:
-        // 1. 找到内核中的 handover 入口点
-        // 2. 设置 boot_params 结构
-        // 3. 设置 initrd 地址和大小
-        // 4. 设置命令行
-        // 5. 跳转到 handover 入口点
-
-        // 使用 EFI stub:
-        // 1. 将内核作为 EFI 镜像加载
-        // 2. 设置 initrd 和命令行
-        // 3. 调用 StartImage
-
-        loop {
-            core::hint::spin_loop();
-        }
+    /// `nextboot-boot` 的 UEFI 运行时会通过 EFI stub 的
+    /// `LoadImage`/`StartImage` 路径启动内核，并注册 initrd 的
+    /// `LoadFile2` 提供者。这个库本身没有获得 UEFI boot services，
+    /// 因此不能安全地完成该交接。
+    pub fn boot(self) -> Result<(), LinuxBootError> {
+        let _ = self;
+        Err(LinuxBootError::StandaloneBootUnavailable)
     }
 
     /// 获取命令行
@@ -146,6 +128,8 @@ pub enum LinuxBootError {
     UnsupportedDistro,
     /// UEFI 服务不可用
     UefiNotAvailable,
+    /// 独立库没有执行 EFI stub 启动所需的 UEFI boot services
+    StandaloneBootUnavailable,
 }
 
 impl core::fmt::Display for LinuxBootError {
@@ -158,6 +142,31 @@ impl core::fmt::Display for LinuxBootError {
             LinuxBootError::ConfigParseError => write!(f, "Failed to parse config"),
             LinuxBootError::UnsupportedDistro => write!(f, "Unsupported distribution"),
             LinuxBootError::UefiNotAvailable => write!(f, "UEFI services not available"),
+            LinuxBootError::StandaloneBootUnavailable => {
+                write!(
+                    f,
+                    "Standalone Linux boot is unavailable; use the UEFI boot runtime"
+                )
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::LinuxDistro;
+
+    #[test]
+    fn standalone_boot_reports_unavailable_instead_of_spinning() {
+        let loader = LinuxBootloader::new(LinuxBootConfig::for_distro(
+            LinuxDistro::Generic,
+            "/ISO/example.iso",
+        ));
+
+        assert!(matches!(
+            loader.boot(),
+            Err(LinuxBootError::StandaloneBootUnavailable)
+        ));
     }
 }
