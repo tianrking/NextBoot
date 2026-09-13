@@ -1,6 +1,6 @@
 # Release readiness / 发布验收
 
-Status: **v0.1.0-rc.4 QEMU-evidence prerelease**. Updated 2026-09-13. This is not a stable or physical-hardware certification.
+Status: **v0.1.0-rc.5 QEMU-evidence prerelease**. Updated 2026-09-13. This is not a stable or physical-hardware certification.
 
 NextBoot targets UEFI multi-image installation and recovery media. The first
 reliability target is x86_64 with Secure Boot disabled. IA32 and AArch64 builds
@@ -16,12 +16,12 @@ this product scope. Public Secure Boot distribution is a later milestone.
 The inspected v0.0.3 public image contains the fallback EFI loaders and an empty
 `/ISO` directory, but omits the compatibility runtime used by earlier real-ISO
 tests. It is a development baseline, not the verified complete product described
-by the target user flow. The changes below are published in `v0.1.0-rc.4` as a QEMU-evidence
+by the target user flow. The changes below are published in `v0.1.0-rc.5` as a QEMU-evidence
 prerelease. They must not be attributed to the older v0.0.3 download, and the
 new tag must not be interpreted as completed-installation or physical-hardware
 certification.
 
-v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资源。`v0.1.0-rc.4`
+v0.0.3 的发布介质缺少此前真实 ISO 测试所使用的兼容运行资源。`v0.1.0-rc.5`
 以带 QEMU 证据的预发布形式发布这些修复；不能把它当作完成安装或真实硬件认证。
 
 ## Acceptance ledger
