@@ -90,6 +90,35 @@ readiness. It exits non-zero and lists missing required rows until the CSV has
 passing evidence for the SSD, USB, SD, filesystem, and image-type combinations
 above.
 
+## Windows Evidence Collection
+
+For a Windows host, use `scripts/Record-NextBootHardwareEvidence.ps1`. It reads
+the selected physical disk and its mounted volumes, records the current Git
+revision, and writes a Markdown report without modifying the disk. Give the
+result only after the firmware boot attempt has actually happened.
+
+For example, the current SD-card test can be captured as follows after booting
+the expected ISO:
+
+```powershell
+Set-Location C:\Users\tianr\Downloads\NextBoot
+
+.\scripts\Record-NextBootHardwareEvidence.ps1 `
+  -DiskNumber 2 `
+  -Result pass `
+  -Media sd `
+  -Bus usb `
+  -ImageType iso `
+  -Firmware 'machine model and UEFI version' `
+  -ImagePath 'E:\nextboot-v0.1.0-rc.13-universal-uefi.img' `
+  -Notes 'NextBoot listed Omarchy and reached the recorded OS marker'
+```
+
+Add `-AppendCsv` only after reviewing the report. A USB-connected card reader
+normally reports its bus as `usb`; use `-Media sd` only when the tested medium
+is actually an SD card. The report path is printed at the end and can be added
+to the matrix as reviewable evidence.
+
 Run `./scripts/hardware-matrix-report.py` after appending rows to refresh
 `docs/hardware/hardware-matrix-status.md`. CI runs
 `./scripts/hardware-matrix-report.py --check` through the project health gate,
