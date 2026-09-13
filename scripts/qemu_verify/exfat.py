@@ -146,7 +146,10 @@ class ExFatVolume:
         bitmap_cluster = u32(bitmap, 20)
         bitmap_size = u64(bitmap, 24)
         require(bitmap_cluster >= 2, f"{self.partition.name}: invalid exFAT bitmap cluster")
-        require(bitmap_size >= ceil_div(self.cluster_count, 8), f"{self.partition.name}: exFAT bitmap is too small")
+        require(
+            bitmap_size == ceil_div(self.cluster_count, 8),
+            f"{self.partition.name}: exFAT bitmap length does not match ClusterCount",
+        )
 
         upcase = next(entry for entry in entries if entry[0] == 0x82)
         upcase_cluster = u32(upcase, 20)

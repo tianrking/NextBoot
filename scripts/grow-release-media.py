@@ -128,7 +128,73 @@ def update_exfat_boot_checksum(region: bytearray, sector_size: int) -> None:
     )
 
 
-def plan_exfat_boot(handle, sector_size: int, data: GptPartition, new_blocks: int) -> tuple[int, bytearray]:
+def exfat_cluster_offset(data: GptPartition, sector_size: int, cluster_heap_offset: int,
+                         sectors_per_cluster: int, cluster: int) -> int:
+    require(cluster >= 2, "invalid exFAT cluster number")
+    return data.start_lba * sector_size + (
+        cluster_heap_offset + (cluster - 2) * sectors_per_cluster
+    ) * sector_size
+
+
+def plan_exfat_bitmap_length(handle, sector_size: int, data: GptPartition, boot: bytes,
+                             old_cluster_count: int, new_cluster_count: int) -> tuple[int, bytes]:
+    fat_offset = u32(boot, 80)
+    cluster_heap_offset = u32(boot, 88)
+    sectors_per_cluster = 1 << boot[109]
+    root_cluster = u32(boot, 96)
+    cluster_size = sectors_per_cluster * sector_size
+    fat_base = data.start_lba * sector_size + fat_offset * sector_size
+    fat_length = u32(boot, 84)
+
+    def fat_next(cluster: int) -> int:
+        require(cluster * 4 + 4 <= fat_length * sector_size, "exFAT FAT entry is outside FAT")
+        return u32(read_at(handle, fat_base + cluster * 4, 4), 0)
+
+    def chain(first_cluster: int) -> list[int]:
+        result = []
+        current = first_cluster
+        while True:
+            require(current >= 2 and current < old_cluster_count + 2, "invalid exFAT cluster chain")
+            require(current not in result, "cyclic exFAT cluster chain")
+            result.append(current)
+            following = fat_next(current)
+            if following >= 0xFFFF_FFF8:
+                return result
+            current = following
+
+    bitmap_entry_offset = None
+    bitmap_first_cluster = None
+    for cluster in chain(root_cluster):
+        base = exfat_cluster_offset(data, sector_size, cluster_heap_offset, sectors_per_cluster, cluster)
+        directory = read_at(handle, base, cluster_size)
+        for offset in range(0, cluster_size, 32):
+            entry_type = directory[offset]
+            if entry_type == 0:
+                break
+            if entry_type == 0x81:
+                require(bitmap_entry_offset is None, "multiple exFAT allocation bitmaps")
+                bitmap_entry_offset = base + offset
+                bitmap_first_cluster = u32(directory, offset + 20)
+        if bitmap_entry_offset is not None:
+            break
+
+    require(bitmap_entry_offset is not None and bitmap_first_cluster is not None,
+            "missing exFAT allocation bitmap")
+    old_size = u64(read_at(handle, bitmap_entry_offset, 32), 24)
+    exact_old_size = ceil_div(old_cluster_count, 8)
+    # Older release candidates wrote a capacity-sized bitmap length.  It is
+    # safe to grow them too, but new media always uses the exact length.
+    require(old_size >= exact_old_size, "exFAT allocation bitmap is too small")
+    new_size = ceil_div(new_cluster_count, 8)
+    storage_capacity = len(chain(bitmap_first_cluster)) * cluster_size
+    require(new_size <= storage_capacity, "exFAT allocation bitmap cannot cover grown volume")
+    entry = bytearray(read_at(handle, bitmap_entry_offset, 32))
+    put_u64(entry, 24, new_size)
+    return bitmap_entry_offset, bytes(entry)
+
+
+def plan_exfat_boot(handle, sector_size: int, data: GptPartition,
+                    new_blocks: int) -> tuple[int, bytearray, tuple[int, bytes]]:
     boot_offset = data.start_lba * sector_size
     boot_region = bytearray(read_at(handle, boot_offset, EXFAT_BOOT_REGION_SECTORS * sector_size))
     boot = boot_region[:sector_size]
@@ -143,6 +209,7 @@ def plan_exfat_boot(handle, sector_size: int, data: GptPartition, new_blocks: in
 
     fat_cluster_capacity = fat_length * sector_size // 4 - 2
     old_blocks = u64(boot, 72)
+    old_cluster_count = u32(boot, 92)
     require(new_blocks >= old_blocks, "refusing to shrink existing exFAT volume")
     require(old_blocks > cluster_heap_offset, "invalid existing exFAT volume length")
     capacity = min(fat_cluster_capacity, 0xFFFF_FFFD)
@@ -157,7 +224,10 @@ def plan_exfat_boot(handle, sector_size: int, data: GptPartition, new_blocks: in
     put_u32(boot, 92, new_cluster_count)
     boot_region[:sector_size] = boot
     update_exfat_boot_checksum(boot_region, sector_size)
-    return grown_blocks, boot_region
+    bitmap_update = plan_exfat_bitmap_length(
+        handle, sector_size, data, boot, old_cluster_count, new_cluster_count
+    )
+    return grown_blocks, boot_region, bitmap_update
 
 
 def grow(path: str, sector_size: int, media_size_bytes: int | None = None) -> str:
@@ -197,7 +267,9 @@ def grow(path: str, sector_size: int, media_size_bytes: int | None = None) -> st
         new_last_usable = backup_entries_lba - 1
         require(new_last_usable > data.start_lba, "no room for expanded data partition")
         available_blocks = new_last_usable - data.start_lba + 1
-        grown_blocks, boot_region = plan_exfat_boot(handle, sector_size, data, available_blocks)
+        grown_blocks, boot_region, bitmap_update = plan_exfat_boot(
+            handle, sector_size, data, available_blocks
+        )
         new_data_end = data.start_lba + grown_blocks - 1
         require(new_data_end >= data.end_lba, "refusing to shrink existing data partition")
         if new_data_end == data.end_lba and u64(header, 32) == last_lba:
@@ -209,6 +281,7 @@ def grow(path: str, sector_size: int, media_size_bytes: int | None = None) -> st
 
         # Every geometry check above is complete before the first write.
         boot_offset = data.start_lba * sector_size
+        write_at(handle, bitmap_update[0], bitmap_update[1])
         write_at(handle, boot_offset, boot_region)
         write_at(handle, boot_offset + 12 * sector_size, boot_region)
 
