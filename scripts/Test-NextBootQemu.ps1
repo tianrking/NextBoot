@@ -7,6 +7,10 @@ param(
     [ValidateRange(512, 65536)]
     [int] $MemoryMiB = 4096,
 
+    # When supplied, require this exact /ISO file to appear in the NextBoot
+    # menu log before the preflight is considered successful.
+    [string] $ExpectedImageName,
+
     [string] $QemuPath = 'C:\Program Files\qemu\qemu-system-x86_64.exe',
 
     [string] $OvmfCodePath = 'C:\Program Files\qemu\share\edk2-x86_64-code.fd',
@@ -73,7 +77,29 @@ $exitCode = $LASTEXITCODE
 
 if (Test-Path -LiteralPath $serialLog) {
     Write-Host "Serial log: $serialLog"
+    $logText = Get-Content -LiteralPath $serialLog -Raw
     Get-Content -LiteralPath $serialLog -Tail 120
+
+    $requiredMarkers = @(
+        'NextBoot v',
+        'Phase 1: Detecting storage devices',
+        'Phase 2: Scanning for ISO files',
+        'Phase 3: Displaying boot menu'
+    )
+    if ($ExpectedImageName) {
+        $requiredMarkers += "/ISO/$ExpectedImageName"
+    }
+    $missingMarkers = @($requiredMarkers | Where-Object { -not $logText.Contains($_) })
+    if ($missingMarkers.Count -gt 0) {
+        throw "QEMU preflight did not reach the expected NextBoot menu state. Missing log markers: $($missingMarkers -join '; ')"
+    }
+    Write-Host 'QEMU preflight passed: UEFI boot, storage scan, and NextBoot menu were observed.'
+    if ($ExpectedImageName) {
+        Write-Host "QEMU preflight passed: expected image /ISO/$ExpectedImageName was listed."
+    }
+}
+else {
+    throw 'QEMU did not create a serial log; the preflight result is not valid.'
 }
 if ($exitCode -ne 0) {
     throw "QEMU exited with code $exitCode. Review the serial log above."
