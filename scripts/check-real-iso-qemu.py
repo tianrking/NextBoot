@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from runtime_assets import prepare
+from command_utils import shell_argument
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -311,7 +312,7 @@ def main() -> int:
     if os.name == "nt":
         # Git Bash accepts this portable spelling and does not depend on the
         # Microsoft Store's optional python3 app-execution alias.
-        env["PYTHON"] = Path(sys.executable).as_posix()
+        env["PYTHON"] = shell_argument(sys.executable)
     TARGET_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
