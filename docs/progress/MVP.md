@@ -2,7 +2,12 @@
 
 ## Version: 0.1.0
 
-### Status: HARDENING — release readiness is not yet established
+### Status: HARDENING — a release candidate exists; broad hardware readiness is not yet established
+
+The current published release candidate and its automated evidence are listed
+in [release readiness](../release-readiness.md). A release artifact does not
+certify physical media, firmware, Secure Boot, or every operating-system image;
+those claims require the matching rows in the hardware and ISO evidence matrices.
 
 ## 2026-09-12: Reliable release work
 

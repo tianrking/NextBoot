@@ -221,10 +221,14 @@ qemu-system-x86_64 \
 
 ### 实机测试矩阵
 
-| 主板品牌 | UEFI 版本 | 4K 支持 | 状态 |
+下表是待覆盖的固件类别，不是兼容性声明。截至 2026-09-13，硬件矩阵
+还没有已记录的真机通过行；发布结论必须以
+[硬件矩阵状态](hardware/hardware-matrix-status.md)和每次测试的原始证据为准。
+
+| 固件厂商类别 | UEFI 版本 | 4K 扇区测试 | 当前证据 |
 |---------|----------|---------|------|
-| Dell | 2.x | Yes | TODO |
-| Lenovo | 2.x | Yes | TODO |
-| HP | 2.x | Yes | TODO |
-| ASUS | 2.x | Yes | TODO |
-| MSI | 2.x | Yes | TODO |
+| Dell | 2.x | Required | 未验证 |
+| Lenovo | 2.x | Required | 未验证 |
+| HP | 2.x | Required | 未验证 |
+| ASUS | 2.x | Required | 未验证 |
+| MSI | 2.x | Required | 未验证 |
