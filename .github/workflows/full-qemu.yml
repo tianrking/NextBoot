@@ -17,7 +17,8 @@ on:
 
 concurrency:
   group: full-qemu-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve complete matrix evidence for every queued main commit.
+  cancel-in-progress: false
 
 permissions:
   contents: read

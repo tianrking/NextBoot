@@ -22,7 +22,10 @@ on:
 
 concurrency:
   group: real-iso-qemu-${{ github.ref }}
-  cancel-in-progress: true
+  # Real-media boots can take several minutes. Keep an already-running
+  # validation as evidence for its commit instead of discarding it when a
+  # follow-up change lands on main.
+  cancel-in-progress: false
 
 permissions:
   contents: read
