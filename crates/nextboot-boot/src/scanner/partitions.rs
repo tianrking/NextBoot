@@ -31,6 +31,112 @@ pub(super) fn discover_partition_candidates(
     discover_mbr_partitions(shared, first_block)
 }
 
+/// Check the stable GPT names written by the NextBoot release builder.  This
+/// is deliberately a narrow recovery predicate: it is used only when firmware
+/// cannot connect a raw BlockIO handle back to LoadedImage's boot device.
+/// Parsing the GPT header and its small entry table is bounded and avoids
+/// walking arbitrary filesystems on internal disks.
+pub(super) fn has_nextboot_release_layout(
+    shared: nextboot_fs::SharedBlockIo,
+    first_block: &[u8],
+) -> bool {
+    if !helpers::has_mbr_signature(first_block) {
+        return false;
+    }
+    let has_protective = (0..4).any(|index| {
+        first_block
+            .get(MBR_PARTITION_TABLE_OFFSET + index * MBR_PARTITION_ENTRY_SIZE + 4)
+            .copied()
+            .unwrap_or(0)
+            == 0xee
+    });
+    if !has_protective {
+        return false;
+    }
+    let Some(header_block) = read_one_block(&shared, GPT_HEADER_LBA) else {
+        return false;
+    };
+    let header = header_block.as_slice();
+    if header.get(0..8) != Some(GPT_SIGNATURE) {
+        return false;
+    }
+    let Some(header_size) = helpers::read_le_u32(header, 12) else {
+        return false;
+    };
+    if header_size < GPT_HEADER_MIN_SIZE
+        || usize::try_from(header_size)
+            .ok()
+            .map_or(true, |len| len > header.len())
+    {
+        return false;
+    }
+    let (Some(entry_lba), Some(entry_count), Some(entry_size)) = (
+        helpers::read_le_u64(header, GPT_PARTITION_ENTRY_LBA_OFFSET),
+        helpers::read_le_u32(header, GPT_NUM_PARTITION_ENTRIES_OFFSET),
+        helpers::read_le_u32(header, GPT_PARTITION_ENTRY_SIZE_OFFSET),
+    ) else {
+        return false;
+    };
+    let Ok(entry_size) = usize::try_from(entry_size) else {
+        return false;
+    };
+    if !(GPT_MIN_PARTITION_ENTRY_SIZE..=GPT_MAX_PARTITION_ENTRY_SIZE).contains(&entry_size) {
+        return false;
+    }
+    let entry_count = usize::try_from(entry_count)
+        .ok()
+        .unwrap_or(0)
+        .min(GPT_MAX_PARTITION_ENTRIES);
+    let Some(entry_bytes_len) = entry_count.checked_mul(entry_size) else {
+        return false;
+    };
+    if entry_bytes_len == 0 || entry_bytes_len > GPT_MAX_PARTITION_ENTRY_ARRAY_BYTES {
+        return false;
+    }
+    let Some(entries) = helpers::read_block_range(&shared, entry_lba, entry_bytes_len) else {
+        return false;
+    };
+    let mut data = false;
+    let mut efi = false;
+    for offset in (0..entry_bytes_len).step_by(entry_size) {
+        let Some(entry) = entries.get(offset..offset + entry_size) else {
+            return false;
+        };
+        if entry
+            .get(0..16)
+            .is_none_or(|kind| kind.iter().all(|byte| *byte == 0))
+        {
+            continue;
+        }
+        data |= gpt_name_equals(entry, "NEXBOOT_DATA");
+        efi |= gpt_name_equals(entry, "NEXBOOT_EFI");
+        if data && efi {
+            return true;
+        }
+    }
+    false
+}
+
+fn gpt_name_equals(entry: &[u8], expected: &str) -> bool {
+    let Some(name) = entry.get(56..128) else {
+        return false;
+    };
+    let expected = expected.as_bytes();
+    if expected
+        .len()
+        .checked_mul(2)
+        .is_none_or(|len| len > name.len())
+    {
+        return false;
+    }
+    for (index, byte) in expected.iter().copied().enumerate() {
+        if name.get(index * 2) != Some(&byte) || name.get(index * 2 + 1) != Some(&0) {
+            return false;
+        }
+    }
+    name.get(expected.len() * 2..expected.len() * 2 + 2) == Some(&[0, 0])
+}
+
 fn discover_gpt_partitions(
     shared: nextboot_fs::SharedBlockIo,
     first_block: &[u8],

@@ -47,6 +47,9 @@ pub struct IsoScanner<'a> {
     /// when a firmware's device path is too incomplete to derive a stable disk
     /// identity for the boot medium.
     boot_device: Option<Handle>,
+    /// Parent BlockIO handle of the loaded ESP where firmware exposes one.
+    /// This is the most direct raw-scan allowlist entry for the boot medium.
+    boot_source_block_handle: Option<Handle>,
 }
 
 impl<'a> IsoScanner<'a> {
@@ -56,6 +59,7 @@ impl<'a> IsoScanner<'a> {
             bt,
             preferred_source_disk: None,
             boot_device: None,
+            boot_source_block_handle: None,
         }
     }
 
@@ -66,6 +70,8 @@ impl<'a> IsoScanner<'a> {
     pub fn from_boot_device(bt: &'a BootServices, boot_device: Option<Handle>) -> Self {
         let mut scanner = Self::new(bt);
         scanner.boot_device = boot_device;
+        scanner.boot_source_block_handle =
+            boot_device.and_then(|handle| scanner.resolve_source_block_handle(handle));
         scanner.preferred_source_disk =
             boot_device.and_then(|handle| scanner.resolve_source_disk_identity(handle));
         scanner

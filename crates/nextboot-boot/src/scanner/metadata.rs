@@ -131,11 +131,7 @@ impl<'a> IsoScanner<'a> {
         let hard_drive = volume_device_path
             .as_deref()
             .and_then(parse_last_hard_drive_device_path);
-        let parent_handle = match (volume_device_path.as_deref(), hard_drive.as_ref()) {
-            (Some(path), Some(info)) => self.locate_parent_block_io(path, info)?,
-            (_, None) => volume_handle,
-            _ => return None,
-        };
+        let parent_handle = self.resolve_source_block_handle(volume_handle)?;
 
         let block_io = self
             .bt
@@ -161,6 +157,21 @@ impl<'a> IsoScanner<'a> {
             .ok()?;
 
         build_source_disk_identity(&first_block, disk_size, block_size, hard_drive)
+    }
+
+    /// Return the physical/parent BlockIO handle for a partition handle.  This
+    /// is intentionally separate from source identity: some firmware supplies
+    /// a usable parent handle but incomplete disk metadata.
+    pub(super) fn resolve_source_block_handle(&self, volume_handle: Handle) -> Option<Handle> {
+        let volume_device_path = self.handle_device_path_bytes(volume_handle);
+        let hard_drive = volume_device_path
+            .as_deref()
+            .and_then(parse_last_hard_drive_device_path);
+        match (volume_device_path.as_deref(), hard_drive.as_ref()) {
+            (Some(path), Some(info)) => self.locate_parent_block_io(path, info),
+            (_, None) => Some(volume_handle),
+            _ => None,
+        }
     }
 
     fn locate_parent_block_io(

@@ -1,5 +1,6 @@
 use super::block_io::{alloc_buffer_for_block, UefiBlockIo};
 use super::model::IsoFile;
+use super::partitions::has_nextboot_release_layout;
 use super::{block_io_info, handle_list_contains, IsoScanner};
 use crate::source_disk::{parent_device_path_bytes, parse_last_hard_drive_device_path};
 use alloc::rc::Rc;
@@ -40,10 +41,6 @@ impl<'a> IsoScanner<'a> {
             // BlockIO.  Once that happens, scanning every BlockIO device also
             // walks the host's internal SSDs.  Keep the raw recovery path on
             // the physical disk that loaded this EFI application.
-            if !self.raw_scan_candidate_is_boot_media(handle) {
-                continue;
-            }
-
             let block_io = match self.bt.open_protocol_exclusive::<BlockIO>(handle) {
                 Ok(block_io) => block_io,
                 Err(_) => continue,
@@ -66,6 +63,11 @@ impl<'a> IsoScanner<'a> {
                 Err(_) => continue,
             };
             if shared.read_blocks(0, &mut boot_sector).is_err() {
+                continue;
+            }
+            if !self.raw_scan_candidate_is_boot_media(handle)
+                && !has_nextboot_release_layout(shared.clone(), &boot_sector)
+            {
                 continue;
             }
 
@@ -221,11 +223,23 @@ impl<'a> IsoScanner<'a> {
     /// parent device path still permits ESP/data sibling handles while refusing
     /// unrelated internal disks.  Unknown paths are deliberately rejected.
     fn raw_scan_candidate_is_boot_media(&self, candidate: Handle) -> bool {
+        if self
+            .boot_source_block_handle
+            .is_some_and(|boot_source| boot_source.as_ptr() == candidate.as_ptr())
+        {
+            return true;
+        }
         if let Some(expected) = self.preferred_source_disk {
-            let Some(candidate_identity) = self.resolve_source_disk_identity(candidate) else {
-                return false;
-            };
-            return same_physical_disk(expected, candidate_identity);
+            if self
+                .resolve_source_disk_identity(candidate)
+                .is_some_and(|candidate_identity| same_physical_disk(expected, candidate_identity))
+            {
+                return true;
+            }
+            // A partition child and its parent can expose different BlockIO
+            // metadata on 4K-native firmware.  Do not confuse that incomplete
+            // identity with an unrelated disk: resolve the same relationship
+            // from their device paths below before rejecting the candidate.
         }
 
         let Some(boot_device) = self.boot_device else {

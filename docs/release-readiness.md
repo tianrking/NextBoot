@@ -2,7 +2,7 @@
 
 Status: **v0.1.0-rc.14 prerelease**. Updated 2026-09-13. The published release gate mounted a same-size 7GB image through the native Windows exFAT driver, verified writing and reading on that mounted volume, and performed full-range write verification through a fixed VHD wrapper. This is not a stable or physical-hardware certification.
 
-Physical Intel UEFI evidence on 2026-09-13 confirmed first-boot GPT/exFAT growth on removable SD media, then exposed a raw fallback scan that continued into internal disks when firmware supplied no SimpleFileSystem handles for NEXTDATA. RC.14 keeps the disk-identity filter and adds a conservative parent-device-path fallback: if a firmware omits a stable identity, only sibling handles under the boot device are considered and unknown devices are skipped. Physical menu and ISO handoff remain required before stable promotion.
+Physical Intel UEFI evidence on 2026-09-13 confirmed first-boot GPT/exFAT growth on removable SD media, then exposed a raw fallback scan that continued into internal disks when firmware supplied no SimpleFileSystem handles for NEXTDATA. RC.14 keeps the disk-identity filter and adds a conservative parent-device-path fallback. If firmware still cannot associate that path, it permits only a GPT device bearing both `NEXBOOT_EFI` and `NEXBOOT_DATA` release partition names; unknown internal disks are skipped. Physical menu and ISO handoff remain required before stable promotion.
 
 NextBoot targets UEFI multi-image installation and recovery media. The first
 reliability target is x86_64 with Secure Boot disabled. IA32 and AArch64 builds
