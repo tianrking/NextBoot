@@ -1,6 +1,6 @@
 use super::console::{output_text, wait_for_key_or_timeout};
 use super::truncate_chars;
-use crate::{scanner, ventoy_config, VERSION};
+use crate::{scanner, ventoy_config, BUILD_ID, VERSION};
 use alloc::format;
 use alloc::string::String;
 use nextboot_menu::Input;
@@ -183,7 +183,10 @@ fn display_plugin_choice_menu(
     let stdout = st.stdout();
 
     stdout.reset(false)?;
-    output_text(stdout, &format!("\r\n  NextBoot v{}\r\n", VERSION))?;
+    output_text(
+        stdout,
+        &format!("\r\n  NextBoot v{} ({})\r\n", VERSION, BUILD_ID),
+    )?;
     output_text(stdout, "  ════════════════════════════════════════\r\n\r\n")?;
     output_text(stdout, &format!("  {}\r\n\r\n", title))?;
 

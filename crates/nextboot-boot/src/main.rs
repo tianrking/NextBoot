@@ -37,6 +37,18 @@ use ui::{format_size, show_error, show_menu, show_message, wait_for_key};
 /// 应用版本
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Human-readable identifier compiled into this particular EFI binary.
+///
+/// A semantic package version alone is not enough to diagnose removable
+/// media: multiple release candidates and local builds can legitimately be
+/// `0.1.0`.  The release builder supplies a tag and developer builds supply a
+/// short Git revision, so a firmware photo and serial log can identify the
+/// exact binary that was started.
+pub(crate) const BUILD_ID: &str = match option_env!("NEXTBOOT_BUILD_ID") {
+    Some(value) => value,
+    None => "unlabeled",
+};
+
 /// UEFI 入口点
 #[entry]
 fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
@@ -46,7 +58,7 @@ fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
         return Status::ABORTED;
     }
 
-    info!("NextBoot v{} starting...", VERSION);
+    info!("NextBoot v{} ({}) starting...", VERSION, BUILD_ID);
     info!("UEFI Revision: {:?}", st.uefi_revision());
 
     // 获取 Boot Services

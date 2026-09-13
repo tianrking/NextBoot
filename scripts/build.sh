@@ -20,6 +20,14 @@ RUSTC_BIN="${RUSTC:-}"
 CARGO_BIN="${CARGO:-}"
 ALL_TARGETS=(x86_64-unknown-uefi i686-unknown-uefi aarch64-unknown-uefi)
 
+# Stamp every EFI binary with an identifier visible in the firmware log and
+# menu.  A release workflow supplies its immutable tag; local builds fall
+# back to the current Git revision without making Git a build dependency.
+if [ -z "${NEXTBOOT_BUILD_ID:-}" ]; then
+    NEXTBOOT_BUILD_ID="$(git describe --tags --always --dirty 2>/dev/null || printf 'local')"
+fi
+export NEXTBOOT_BUILD_ID
+
 if [ "${TARGET}" = "all" ]; then
     for nextboot_target in "${ALL_TARGETS[@]}"; do
         echo ""
@@ -178,6 +186,7 @@ echo -e "${YELLOW}Target: ${TARGET}${NC}"
 echo -e "${YELLOW}Toolchain: ${TOOLCHAIN}${NC}"
 echo -e "${YELLOW}Rustc: ${RUSTC_BIN}${NC}"
 echo -e "${YELLOW}Cargo: ${CARGO_BIN}${NC}"
+echo -e "${YELLOW}Build ID: ${NEXTBOOT_BUILD_ID}${NC}"
 echo -e "${YELLOW}Running cargo ${CARGO_ARGS[*]}...${NC}"
 
 RUSTC="${RUSTC_BIN}" "${CARGO_BIN}" "${CARGO_ARGS[@]}"

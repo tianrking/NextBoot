@@ -91,6 +91,8 @@ discovery, and the requested image listing; it fails if those log markers do
 not appear. By default it also attaches two temporary fixed disks, reproducing
 the common SD-card-plus-internal-disks topology that exercises the boot-media
 scan filter. It does not replace a final boot on the target motherboard firmware.
+The startup log and menu include the release tag or local Git build ID, so a
+firmware photo can be matched to the exact EFI binary that was written.
 
 Flashing writes a whole-disk image and erases the selected target device. Do
 not copy the `.img.xz`, `.img.zip`, or extracted `.img` file into an existing

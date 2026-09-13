@@ -2,7 +2,7 @@ use super::auth::{authorize_boot_password, authorize_iso};
 use super::console::{output_text, wait_for_key_or_timeout};
 use super::plugin_choices::{configure_ventoy_plugin_choices, force_ventoy_memdisk_mode};
 use super::{format_size, truncate_chars};
-use crate::{scanner, VERSION};
+use crate::{scanner, BUILD_ID, VERSION};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -161,7 +161,10 @@ fn display_menu(
     let stdout = st.stdout();
 
     stdout.reset(false)?;
-    output_text(stdout, &format!("\r\n  {} v{}\r\n", config.title, VERSION))?;
+    output_text(
+        stdout,
+        &format!("\r\n  {} v{} ({})\r\n", config.title, VERSION, BUILD_ID),
+    )?;
     output_text(stdout, "  ════════════════════════════════════════\r\n\r\n")?;
 
     for (i, item) in state.items.iter().enumerate() {
