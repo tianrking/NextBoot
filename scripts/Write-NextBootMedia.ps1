@@ -119,6 +119,7 @@ if ($imageLength -lt 34MB) { throw 'ImagePath is too small to be a NextBoot raw 
 $source = [System.IO.File]::Open($image.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
 $target = $null
 $wasOffline = $true
+$offlineManaged = $false
 try {
     if ($TargetPath) {
         if ($DiskNumber -ge 0) { throw 'Specify either TargetPath or DiskNumber, not both.' }
@@ -152,7 +153,20 @@ try {
         if ($answer -ne [string]$DiskNumber) { throw 'Cancelled. No data was written.' }
     }
 
-    if (-not $wasOffline) { Set-Disk -Number $DiskNumber -IsOffline $true }
+    # Windows does not allow `Set-Disk -IsOffline` for removable USB/SD media.
+    # Keeping that operation for fixed disks prevents mounted volumes from
+    # changing beneath the raw writer, while removable media is opened
+    # directly after the same explicit target-size and system-disk checks.
+    if (-not $wasOffline) {
+        try {
+            Set-Disk -Number $DiskNumber -IsOffline $true -ErrorAction Stop
+            $offlineManaged = $true
+        }
+        catch {
+            if ($_.Exception.Message -notmatch 'Removable media cannot be set to offline|Not Supported') { throw }
+            Write-Warning "Disk $DiskNumber is removable media; Windows does not support taking it offline. Continuing with exclusive raw-image verification."
+        }
+    }
     $target = [System.IO.File]::Open($physicalPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
     $buffer = [byte[]]::new(4MB)
     $written = [Int64]0
@@ -172,8 +186,8 @@ try {
 finally {
     if ($null -ne $target) { $target.Dispose() }
     $source.Dispose()
-    if (-not $wasOffline) {
+    if ($offlineManaged) {
         Set-Disk -Number $DiskNumber -IsOffline $false -ErrorAction SilentlyContinue
-        Update-HostStorageCache
     }
+    if ($DiskNumber -ge 0) { Update-HostStorageCache }
 }
