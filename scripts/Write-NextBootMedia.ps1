@@ -57,7 +57,7 @@ function Test-ByteRange([System.IO.FileStream] $Source, [System.IO.FileStream] $
                 $processed += $count
                 Write-Progress -Activity 'Verifying NextBoot media' -Status "$([Math]::Floor($processed / 1MB)) MiB / $([Math]::Floor($RangeLength / 1MB)) MiB" -PercentComplete ([int](50 * $processed / $RangeLength))
             }
-            return [Convert]::ToHexString($hash.GetHashAndReset())
+            return ([BitConverter]::ToString($hash.GetHashAndReset())).Replace('-', '')
         }
         finally {
             $hash.Dispose()
