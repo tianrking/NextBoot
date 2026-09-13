@@ -229,10 +229,12 @@ if ($AppendCsv) {
         notes = $Notes
     }
     if (-not (Test-Path -LiteralPath $CsvPath)) {
-        $record | Export-Csv -LiteralPath $CsvPath -NoTypeInformation -Encoding utf8
+        $csvLines = [string[]]@($record | ConvertTo-Csv -NoTypeInformation)
+        [System.IO.File]::WriteAllLines($CsvPath, $csvLines, [Text.UTF8Encoding]::new($false))
     }
     else {
-        $record | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -LiteralPath $CsvPath -Encoding utf8
+        $csvLine = [string]($record | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1)
+        [System.IO.File]::AppendAllLines($CsvPath, [string[]]@($csvLine), [Text.UTF8Encoding]::new($false))
     }
 }
 
