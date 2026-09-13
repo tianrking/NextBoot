@@ -46,6 +46,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Parse Windows physical-media QEMU preflight
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/Test-NextBootQemu.ps1), [ref]$tokens, [ref]$errors
+          ) | Out-Null
+          if ($errors.Count) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
       - name: Build and mount a release-media fixture through Windows exFAT
         shell: pwsh
         run: |
