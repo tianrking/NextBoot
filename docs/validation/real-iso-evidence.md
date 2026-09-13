@@ -1,6 +1,6 @@
 # Real ISO validation evidence
 
-Updated 2026-09-12. All results below are x86_64 QEMU/OVMF boot checks using the
+Updated 2026-09-13. All results below are x86_64 QEMU/OVMF boot checks using the
 actual release-media builder with the pinned compatibility runtime. They do not
 establish completed installation or physical-device compatibility.
 
@@ -8,11 +8,11 @@ establish completed installation or physical-device compatibility.
 
 | Image | SHA256 | Result | Evidence |
 | --- | --- | --- | --- |
-| Alpine Standard 3.24.1 x86_64 | `f4dd613206676c62949144c8ad75fc64582099f444dd1485bae104a60f51dd26` | Login prompt | [fa310d0 CI job](https://github.com/tianrking/NextBoot/actions/runs/34677266205/job/103509270161) |
-| Debian 13.6.0 netinst amd64 | `65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7` | Installer language selection | [922a10f CI job](https://github.com/tianrking/NextBoot/actions/runs/34680482171/job/103518103228) |
-| Fedora Workstation 44 x86_64 | `1620295f6a00c27c3208f0c00b8ece4eab1ec69b9002152d97488bf26a426ddf` | GNOME Display Manager starts | [6eaab56 CI job](https://github.com/tianrking/NextBoot/actions/runs/34682234508/job/103522866275) |
-| Kali 2026.2 netinst amd64 | `d32f929dacc48134a31461a09f2160d13ad1d26b820cee920446813ca979b39b` | Installer language selection | [fa310d0 CI job](https://github.com/tianrking/NextBoot/actions/runs/34677266205/job/103509270103) |
-| Ubuntu 26.04 Server amd64 | `dec49008a71f6098d0bcfc822021f4d042d5f2db279e4d75bdd981304f1ca5d9` | Installer serial-mode selection | [fa310d0 CI job](https://github.com/tianrking/NextBoot/actions/runs/34677266205/job/103509270144) |
+| Alpine Standard 3.24.1 x86_64 | `f4dd613206676c62949144c8ad75fc64582099f444dd1485bae104a60f51dd26` | Login prompt | [RC.13 current-commit CI job](https://github.com/tianrking/NextBoot/actions/runs/34749459617/job/103703189773) |
+| Debian 13.6.0 netinst amd64 | `65273beed27b2df543b68b65630ba525cfbad8df2b12035732b2dff87d6664e7` | Installer language selection | [RC.13 current-commit CI job](https://github.com/tianrking/NextBoot/actions/runs/34749459617/job/103703189951) |
+| Fedora Workstation 44 x86_64 | `1620295f6a00c27c3208f0c00b8ece4eab1ec69b9002152d97488bf26a426ddf` | GNOME Display Manager starts | [RC.13 current-commit CI job](https://github.com/tianrking/NextBoot/actions/runs/34749459617/job/103703189749) |
+| Kali 2026.2 netinst amd64 | `d32f929dacc48134a31461a09f2160d13ad1d26b820cee920446813ca979b39b` | Installer language selection | [RC.13 current-commit CI job](https://github.com/tianrking/NextBoot/actions/runs/34749459617/job/103703189781) |
+| Ubuntu 26.04 Server amd64 | `dec49008a71f6098d0bcfc822021f4d042d5f2db279e4d75bdd981304f1ca5d9` | Installer serial-mode selection | [RC.13 current-commit CI job](https://github.com/tianrking/NextBoot/actions/runs/34749459617/job/103703189577) |
 
 The earlier Windows-hosted Ubuntu 2 GiB, single-CPU serial run did not meet the installer UI markers.
 A control boot using the same official ISO's kernel/initrd directly also failed
