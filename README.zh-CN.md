@@ -4,10 +4,9 @@
 
 [English](README.md)
 
-**开发状态：尚未认证新的可靠发布版本。** 已核验的 v0.0.3 发布介质缺少此前真实
-ISO 测试使用的兼容运行资源。开发分支已补齐资源并校验实际介质内容，这些修复尚未
-进入 v0.0.3。请先查看[发布验收清单](docs/release-readiness.md)，区分已验证能力、
-待完成项和旧发布包。
+**发布状态：** `v0.1.0-rc.1` 是带有 QEMU 证据的预发布版本。它包含 v0.0.3 缺失的
+兼容运行资源，下面附有重新生成发布介质后的启动证据。它不等同于完成安装或真实硬件
+认证；使用前请查看[发布验收清单](docs/release-readiness.md)，了解已验证范围与待完成项。
 
 [![CI](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml)
 [![Full QEMU Matrix](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml)
@@ -17,7 +16,7 @@ ISO 测试使用的兼容运行资源。开发分支已补齐资源并校验实�
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#架构)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#兼容性覆盖)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#功能覆盖)
-[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.3)
+[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.1)
 
 NextBoot 是一个用 Rust 编写的 UEFI 启动介质项目，面向 U 盘、USB SSD、SD 卡，以及固定磁盘风格的 SSD/NVMe 部署。发布物是一个压缩后的 raw 磁盘镜像：用户用常见烧录工具写入整块设备，打开可见的 `NEXTDATA` 分区，把 ISO/WIM/VHD/VHDX/IMG/EFI 文件拖到 `/ISO`，然后从主板或电脑固件的 UEFI 启动菜单选择这块设备。
 
@@ -26,9 +25,9 @@ NextBoot 是一个用 Rust 编写的 UEFI 启动介质项目，面向 U 盘、US
 ## 快速开始
 
 1. 从最新 GitHub Release 下载通用镜像：
-   `nextboot-v0.0.3-universal-uefi.img.xz`。
+   `nextboot-v0.1.0-rc.1-universal-uefi.img.xz`。
    如果你的烧录工具只接受 raw `.img` 文件，下载
-   `nextboot-v0.0.3-universal-uefi.img.zip` 并解压。
+   `nextboot-v0.1.0-rc.1-universal-uefi.img.zip` 并解压。
 2. 使用 balenaEtcher、Raspberry Pi Imager、Rufus、Win32 Disk Imager、GNOME Disks 或其他 raw 镜像写入工具。
 3. 选择 NextBoot 镜像，选择 8GB 或更大的 U 盘、USB SSD、SD 卡或外置 SSD，然后执行烧录/写入。
 4. 烧录完成后打开可见的 `NEXTDATA` 分区。
@@ -42,11 +41,11 @@ NextBoot 是一个用 Rust 编写的 UEFI 启动介质项目，面向 U 盘、US
 面向用户的发布物是一份通用镜像：
 
 ```text
-nextboot-v0.0.3-universal-uefi.img.xz
-nextboot-v0.0.3-universal-uefi.img.zip
+nextboot-v0.1.0-rc.1-universal-uefi.img.xz
+nextboot-v0.1.0-rc.1-universal-uefi.img.zip
 ```
 
-最新发布：<https://github.com/tianrking/NextBoot/releases/tag/v0.0.3>
+最新发布：<https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.1>
 
 它包含：
 
@@ -96,6 +95,21 @@ nextboot-v0.0.3-universal-uefi.img.zip
 | USB SSD 4K 布局 | QEMU 镜像矩阵覆盖 exFAT、FAT32、NTFS、UDF、ext2/3/4、Btrfs smoke 场景 |
 | SD 风格介质 | 已有 QEMU 镜像/文件系统验证；固件启动行为仍需要真实设备证据 |
 | 真实硬件 | 已有结构化报告工具，公开兼容矩阵还需要补充真实 pass 行 |
+
+## QEMU 发布介质启动证据
+
+下面的截图来自本次发布构建器生成的 GPT/exFAT NVMe 介质，并在 `q35` + OVMF 的
+QEMU 中重新启动。只有当对应证据记录为 `pass` 且串口日志 SHA-256 一致时，才会从
+串口日志渲染图片。启动标记只说明该 ISO 到达了表格中的阶段，不能证明完成安装、完整
+桌面会话、真实硬件、Windows/WinPE 官方镜像、Secure Boot，或该发行版的所有版本。
+
+| ISO 镜像 | 已断言的启动阶段 | QEMU 串口控制台截图 |
+| --- | --- | --- |
+| Alpine Linux 3.24.1 x64 | 登录提示符 | ![Alpine Linux 3.24.1 QEMU 串口截图](docs/assets/qemu/alpine-standard.svg) |
+| Debian 13.6 netinst x64 | 安装器语言选择 | ![Debian 13.6 QEMU 串口截图](docs/assets/qemu/debian-13.6-netinst.svg) |
+| Fedora Workstation 44 x64 | GNOME Display Manager 服务 | ![Fedora 44 QEMU 串口截图](docs/assets/qemu/fedora-44-workstation.svg) |
+| Ubuntu Server 26.04 LTS x64 | 串口安装器模式选择 | ![Ubuntu Server 26.04 QEMU 串口截图](docs/assets/qemu/ubuntu-26.04-server.svg) |
+| Kali Linux 2026.2 netinst x64 | 安装器语言选择 | ![Kali 2026.2 QEMU 串口截图](docs/assets/qemu/kali-2026.2-netinst.svg) |
 
 物理 U 盘、USB SSD 盒、SD 读卡器、主板固件和 Secure Boot 策略的硬件报告工具记录在 [`docs/hardware-compatibility-matrix.md`](docs/hardware-compatibility-matrix.md)。
 

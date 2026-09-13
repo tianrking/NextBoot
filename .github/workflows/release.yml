@@ -144,6 +144,7 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: NextBoot ${{ steps.version.outputs.version }}
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           overwrite_files: true
           body: |
             Download the universal release image and flash it as a whole-disk image to an 8GB-or-larger USB stick, USB SSD, SD card, or external SSD.
@@ -157,6 +158,8 @@ jobs:
             The image contains `EFI/BOOT/BOOTX64.EFI`, `EFI/BOOT/BOOTIA32.EFI`, and `EFI/BOOT/BOOTAA64.EFI` fallback loaders for x86_64, IA32, and AArch64 UEFI firmware. Legacy BIOS is not included, and Secure Boot still requires disabled Secure Boot or an enrolled local key.
 
             After flashing, open `NEXTDATA`, drag ISO/WIM/VHD/VHDX/IMG/EFI files into `/ISO`, and boot from the firmware UEFI boot menu. On media larger than the release image, NextBoot can expand `NEXTDATA` on first boot.
+
+            Validation scope: a tag containing a prerelease suffix is a release candidate. Its documented Linux evidence is a QEMU/OVMF boot-marker check using generated GPT/exFAT NVMe media. It does not certify a completed operating-system installation, physical-device behavior, Windows/WinPE official media, Secure Boot, or Linux distributions not explicitly listed in the repository evidence.
 
             The compatibility runtime is included under `/ventoy`. Preserve this directory. Runtime provenance and original license notices are included on the media. Matching NextBoot and pinned Ventoy source archives are attached to this release; external components retain their respective licenses.
           files: |

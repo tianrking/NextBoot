@@ -4,11 +4,11 @@
 
 [简体中文](README.zh-CN.md)
 
-**Development status:** no new reliable release has been certified. The inspected
-v0.0.3 image omits compatibility resources used by the earlier real-ISO tests.
-The development branch now bundles and verifies those resources; these changes
-are not in v0.0.3. See the [release acceptance ledger](docs/release-readiness.md)
-before interpreting compatibility claims or choosing an image for use.
+**Release status:** `v0.1.0-rc.1` is a QEMU-evidence prerelease. It includes
+the compatibility runtime missing from v0.0.3 and is accompanied by fresh
+release-media boot evidence below. It is not a completed-installation or
+physical-hardware certification; see the [release acceptance ledger](docs/release-readiness.md)
+before choosing an image for use.
 
 [![CI](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/ci.yml)
 [![Full QEMU Matrix](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml/badge.svg)](https://github.com/tianrking/NextBoot/actions/workflows/full-qemu.yml)
@@ -18,7 +18,7 @@ before interpreting compatibility claims or choosing an image for use.
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#architecture)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#compatibility-coverage)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#feature-coverage)
-[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.0.3)
+[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.1)
 
 NextBoot is a Rust UEFI boot medium for USB sticks, USB SSDs, SD cards, and
 fixed-disk style SSD/NVMe deployments. The release artifact is a compressed raw
@@ -32,9 +32,9 @@ users.
 ## Quick Start
 
 1. Download the universal image from the latest GitHub release:
-   `nextboot-v0.0.3-universal-uefi.img.xz`.
+   `nextboot-v0.1.0-rc.1-universal-uefi.img.xz`.
    If your flashing tool only accepts raw `.img` files, download
-   `nextboot-v0.0.3-universal-uefi.img.zip` and extract it.
+   `nextboot-v0.1.0-rc.1-universal-uefi.img.zip` and extract it.
 2. Use a raw-image flasher such as balenaEtcher, Raspberry Pi Imager, Rufus,
    Win32 Disk Imager, or GNOME Disks.
 3. Select the NextBoot image, select an 8GB-or-larger USB stick, USB SSD, SD
@@ -55,11 +55,11 @@ expand `NEXTDATA` on first boot.
 The customer-facing release is a single universal image:
 
 ```text
-nextboot-v0.0.3-universal-uefi.img.xz
-nextboot-v0.0.3-universal-uefi.img.zip
+nextboot-v0.1.0-rc.1-universal-uefi.img.xz
+nextboot-v0.1.0-rc.1-universal-uefi.img.zip
 ```
 
-Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.0.3>
+Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.1>
 
 It contains:
 
@@ -111,6 +111,23 @@ style storage:
 | USB SSD 4K layouts | QEMU image matrix covers exFAT, FAT32, NTFS, UDF, ext2/3/4, and Btrfs smoke cases |
 | SD-style media | QEMU image/filesystem verification exists; firmware boot behavior still needs real-device evidence |
 | Real hardware | Structured report tooling exists, but the public compatibility matrix still needs real pass rows |
+
+## QEMU Release-Media Evidence
+
+The following captures come from the release builder and a fresh `q35` + OVMF
+QEMU run with generated GPT/exFAT NVMe media. Each image is rendered from the
+serial log only after its matching evidence record reports `pass` and its SHA-256
+matches. A boot marker demonstrates that the named ISO reached that milestone;
+it does not demonstrate a completed installation, a desktop session, physical
+hardware, Windows/WinPE media, Secure Boot, or every release of that distribution.
+
+| ISO image | Asserted boot milestone | QEMU serial-console capture |
+| --- | --- | --- |
+| Alpine Linux 3.24.1 x64 | Login prompt | ![Alpine Linux 3.24.1 QEMU serial capture](docs/assets/qemu/alpine-standard.svg) |
+| Debian 13.6 netinst x64 | Installer language screen | ![Debian 13.6 QEMU serial capture](docs/assets/qemu/debian-13.6-netinst.svg) |
+| Fedora Workstation 44 x64 | GNOME Display Manager service | ![Fedora 44 QEMU serial capture](docs/assets/qemu/fedora-44-workstation.svg) |
+| Ubuntu Server 26.04 LTS x64 | Serial installer mode selection | ![Ubuntu Server 26.04 QEMU serial capture](docs/assets/qemu/ubuntu-26.04-server.svg) |
+| Kali Linux 2026.2 netinst x64 | Installer language screen | ![Kali 2026.2 QEMU serial capture](docs/assets/qemu/kali-2026.2-netinst.svg) |
 
 Hardware report tooling is tracked in
 [`docs/hardware-compatibility-matrix.md`](docs/hardware-compatibility-matrix.md)
