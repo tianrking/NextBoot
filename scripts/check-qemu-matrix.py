@@ -32,6 +32,10 @@ REQUIREMENTS: tuple[MatrixRequirement, ...] = (
         ("--bus nvme", "--layout split", "--data-fs exfat", "--sector-size 4096", "--smoke-linux-grub"),
     ),
     MatrixRequirement(
+        "default NVMe 4K split UDF Windows EFI chain-load boot",
+        ("--bus nvme", "--layout split", "--data-fs udf", "--sector-size 4096", "--smoke-windows-iso"),
+    ),
+    MatrixRequirement(
         "default SD 512 split FAT32 image verification",
         ("--bus sd", "--layout split", "--data-fs fat32", "--sector-size 512", "--smoke-efi-iso", "--no-run"),
     ),

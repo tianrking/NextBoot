@@ -43,7 +43,7 @@ def render_report(csv_path: Path, rows: list[dict[str, str]], allow_partial: boo
         "",
         "| Field | Value |",
         "| --- | --- |",
-        f"| Source CSV | `{csv_path}` |",
+        f"| Source CSV | `{csv_path.as_posix()}` |",
         f"| Data rows | {len(rows)} |",
         f"| Required coverage | {coverage_line(len(covered), len(REQUIREMENTS))} |",
         f"| Production hardware claim | {claim} |",

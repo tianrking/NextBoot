@@ -9,6 +9,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from command_utils import python_command
+
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 CHECKER = PROJECT_DIR / "scripts" / "check-hardware-matrix.py"
@@ -75,7 +77,7 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
 
 def run_checker(path: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(CHECKER), "--csv", str(path)],
+        python_command(str(CHECKER), "--csv", str(path)),
         cwd=PROJECT_DIR,
         text=True,
         stdout=subprocess.PIPE,

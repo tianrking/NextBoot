@@ -240,7 +240,8 @@ Release Reliability 的 PR 工作流运行完整 QEMU 矩阵，并使用正式�
 # 结构、脚本、release media、QEMU image、host test、UEFI checks。
 ./scripts/check-project-health.py
 
-# 默认 boot smoke：NVMe 4K exFAT、USB 512 FAT32、SD image verification。
+# 默认 boot smoke：NVMe 4K exFAT、USB 512 FAT32、Linux GRUB、NVMe 4K UDF 上的
+# Windows 形态 EFI 链式引导镜像，以及 SD image verification。
 scripts/qemu-smoke-matrix.sh
 
 # 需要更大兼容集合时运行完整本地矩阵。

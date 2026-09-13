@@ -285,7 +285,8 @@ Useful local checks:
 # Structural, script, release-media, QEMU-image, host-test, and UEFI checks.
 ./scripts/check-project-health.py
 
-# Default boot smoke: NVMe 4K exFAT, USB 512 FAT32, and SD image verification.
+# Default boot smoke: NVMe 4K exFAT, USB 512 FAT32, Linux GRUB, a Windows-shaped
+# EFI chain-load image on NVMe 4K UDF, and SD image verification.
 scripts/qemu-smoke-matrix.sh
 
 # Full local matrix when you need the broader compatibility set.

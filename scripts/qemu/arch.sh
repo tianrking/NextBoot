@@ -13,6 +13,7 @@ configure_qemu_arch() {
                 "/usr/share/qemu/OVMF.fd"
                 "/opt/homebrew/share/qemu/edk2-x86_64-code.fd"
                 "/opt/homebrew/opt/qemu/share/qemu/edk2-x86_64-code.fd"
+                "/c/Program Files/qemu/share/edk2-x86_64-code.fd"
             )
             ;;
         i686-unknown-uefi)
@@ -26,6 +27,7 @@ configure_qemu_arch() {
                 "/usr/share/qemu/edk2-i386-code.fd"
                 "/opt/homebrew/share/qemu/edk2-i386-code.fd"
                 "/opt/homebrew/opt/qemu/share/qemu/edk2-i386-code.fd"
+                "/c/Program Files/qemu/share/edk2-i386-code.fd"
             )
             ;;
         aarch64-unknown-uefi)
@@ -41,6 +43,7 @@ configure_qemu_arch() {
                 "/usr/share/qemu/edk2-aarch64-code.fd"
                 "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
                 "/opt/homebrew/opt/qemu/share/qemu/edk2-aarch64-code.fd"
+                "/c/Program Files/qemu/share/edk2-aarch64-code.fd"
             )
             ;;
         *)

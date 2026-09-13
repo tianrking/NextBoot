@@ -9,6 +9,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from command_utils import shell_command, shell_environment
+
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 TARGET = os.environ.get("TARGET", "x86_64-unknown-uefi")
@@ -407,11 +409,16 @@ CASES = (
 
 
 def run(command: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    if command[0].endswith(".sh"):
+        command = shell_command(*command)
+        env = shell_environment(env)
     return subprocess.run(
         command,
         cwd=PROJECT_DIR,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,

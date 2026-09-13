@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+
+from command_utils import shell_command
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,7 +42,9 @@ def rel(path: Path) -> str:
 
 def run_script_check(script_name: str, label: str) -> CheckResult:
     script = PROJECT_DIR / "scripts" / script_name
-    command = [sys.executable, str(script)] if script.suffix == ".py" else [str(script)]
+    command = [sys.executable, str(script)]
+    if script.suffix == ".sh":
+        command = shell_command(str(script))
     result = subprocess.run(
         command,
         cwd=PROJECT_DIR,

@@ -12,6 +12,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from command_utils import python_command, shell_command, shell_environment
+
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 RELEASE_SCRIPT = PROJECT_DIR / "scripts" / "create-release-media.sh"
@@ -39,7 +41,7 @@ def run_case(
     else:
         output_name = "release-with-image.img" if with_image else "release-empty.img"
     output = workdir / output_name
-    command = [
+    command = shell_command(
         str(RELEASE_SCRIPT),
         "--without-runtime",
         "--skip-build",
@@ -53,7 +55,7 @@ def run_case(
         "exfat",
         "--output",
         str(output),
-    ]
+    )
     if not default_capacity:
         command.extend(["--size", "128"])
         command.extend(["--growable-max-size", "512"])
@@ -72,6 +74,7 @@ def run_case(
     return subprocess.run(
         command,
         cwd=PROJECT_DIR,
+        env=shell_environment(),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -142,7 +145,7 @@ def main() -> int:
 
             verify_raw_copy = subprocess.run(
                 [
-                    str(VERIFY_SCRIPT),
+                    *python_command(str(VERIFY_SCRIPT)),
                     "--disk-image",
                     str(raw_copy),
                     "--sector-size",
@@ -180,7 +183,7 @@ def main() -> int:
 
             grow = subprocess.run(
                 [
-                    str(GROW_SCRIPT),
+                    *python_command(str(GROW_SCRIPT)),
                     "--disk-image",
                     str(workdir / "release-multi-efi.img"),
                     "--sector-size",
@@ -199,7 +202,7 @@ def main() -> int:
 
             verify = subprocess.run(
                 [
-                    str(VERIFY_SCRIPT),
+                    *python_command(str(VERIFY_SCRIPT)),
                     "--disk-image",
                     str(workdir / "release-multi-efi.img"),
                     "--sector-size",

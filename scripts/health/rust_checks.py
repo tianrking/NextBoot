@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from command_utils import shell_command
+
 from health.common import CheckResult, HOST_TEST_PACKAGES, PROJECT_DIR
 
 
@@ -27,6 +29,8 @@ def fallback_toolchain_bin(binary: str) -> Path | None:
     toolchains = Path.home() / ".rustup" / "toolchains"
     for directory in sorted(toolchains.glob(f"{channel}*")):
         candidate = directory / "bin" / binary
+        if os.name == "nt":
+            candidate = candidate.with_suffix(".exe")
         if candidate.exists() and os.access(candidate, os.X_OK):
             return candidate
     return None
@@ -58,6 +62,8 @@ def resolve_cargo(rustc: Path) -> Path | None:
     if env_cargo and usable_binary(env_cargo, ["--version"]):
         return Path(env_cargo)
     sibling = rustc.parent / "cargo"
+    if os.name == "nt":
+        sibling = sibling.with_suffix(".exe")
     if sibling.exists() and os.access(sibling, os.X_OK):
         return sibling
     return fallback_toolchain_bin("cargo")
@@ -112,9 +118,11 @@ def check_host_tests() -> CheckResult:
                 host_target,
             ],
             cwd=PROJECT_DIR,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
+                env=env,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             check=False,
         )
@@ -127,11 +135,27 @@ def check_host_tests() -> CheckResult:
 def check_build(build_target: str) -> CheckResult:
     env = os.environ.copy()
     env["TARGET"] = build_target
+    build_script = PROJECT_DIR / "scripts" / "build.sh"
+    command = [str(build_script), "check"]
+    if os.name == "nt":
+        # build.sh is a Bash script.  Executing it directly with CreateProcess
+        # yields WinError 193 even when the supported Git Bash environment is
+        # installed and the UEFI toolchain itself is healthy.
+        git_bash = Path(os.environ.get("ProgramFiles", r"C:\\Program Files")) / "Git" / "bin" / "bash.exe"
+        if not git_bash.is_file():
+            return CheckResult(
+                f"UEFI build check ({build_target})",
+                False,
+                "Git Bash is required on Windows to execute scripts/build.sh",
+            )
+        command = shell_command(str(build_script), "check")
     result = subprocess.run(
-        [str(PROJECT_DIR / "scripts" / "build.sh"), "check"],
+        command,
         cwd=PROJECT_DIR,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,

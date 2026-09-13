@@ -2,8 +2,8 @@
 
 create_smoke_raw_disk() {
     output="$1"
-    require_command python3 "python3 is required to create the smoke raw disk image"
-    python3 "${SCRIPT_DIR}/qemu/create-disk-image.py" \
+    require_python
+    "$PYTHON_BIN" "${SCRIPT_DIR}/qemu/create-disk-image.py" \
         "$output" 64 512 single exfat "$SMOKE_EFI_FILE" \
         0 0 0 "" "" 0 0 "$EFI_BOOT_NAME" ""
 }
@@ -52,9 +52,9 @@ create_generated_smoke_images() {
             SMOKE_ISO_BASENAME="Daily_Install_GRUB-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}.iso"
         fi
         SMOKE_ISO_FILE="${PROJECT_DIR}/target/${SMOKE_ISO_BASENAME}"
-        require_command python3 "python3 is required to create the smoke ISO"
+        require_python
         warn "Creating ${SMOKE_ISO_PROFILE} UEFI smoke ISO..."
-        python3 "${SCRIPT_DIR}/create-smoke-iso.py" \
+        "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-iso.py" \
             --profile "$SMOKE_ISO_PROFILE" \
             --efi "$SMOKE_EFI_FILE" \
             --boot-file-name "$EFI_BOOT_NAME" \
@@ -74,17 +74,17 @@ create_generated_smoke_images() {
 
     if [ "$SMOKE_FIXED_VHD" -eq 1 ]; then
         SMOKE_VHD_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-fixed.vhd"
-        require_command python3 "python3 is required to create the smoke fixed VHD"
+        require_python
         warn "Wrapping smoke disk image as fixed VHD..."
-        python3 "${SCRIPT_DIR}/create-smoke-vhd.py" --format fixed "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHD_FILE"
+        "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-vhd.py" --format fixed "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHD_FILE"
         IMAGES=("$SMOKE_VHD_FILE" "${IMAGES[@]}")
     fi
 
     if [ "$SMOKE_DYNAMIC_VHD" -eq 1 ]; then
         SMOKE_VHD_FILE="${PROJECT_DIR}/target/nextboot-smoke-${SMOKE_ARCH_TAG}${SMOKE_ARTIFACT_SUFFIX}-dynamic.vhd"
-        require_command python3 "python3 is required to create the smoke dynamic VHD"
+        require_python
         warn "Wrapping smoke disk image as dynamic VHD..."
-        python3 "${SCRIPT_DIR}/create-smoke-vhd.py" --format dynamic "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHD_FILE"
+        "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-vhd.py" --format dynamic "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHD_FILE"
         IMAGES=("$SMOKE_VHD_FILE" "${IMAGES[@]}")
     fi
 
@@ -118,7 +118,7 @@ create_generated_smoke_images() {
                 VHDX_ARGS+=(--partial-parent-mix)
             fi
         fi
-        require_command python3 "python3 is required to create the smoke VHDX"
+        require_python
         warn "Wrapping smoke disk image as VHDX..."
         if [ "$SMOKE_PARENT_VHDX" -eq 1 ]; then
             warn "Wrapping smoke disk image as same-volume VHDX parent..."
@@ -129,9 +129,9 @@ create_generated_smoke_images() {
                 for level in $(seq 1 "$SMOKE_PARENT_CHAIN_DEPTH"); do
                     chain_file="$(parent_chain_file "$level" vhdbase)"
                     if [ "$level" -eq 1 ]; then
-                        python3 "${SCRIPT_DIR}/create-smoke-vhdx.py" "$SMOKE_RAW_IMG_FILE" "$chain_file"
+                        "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-vhdx.py" "$SMOKE_RAW_IMG_FILE" "$chain_file"
                     else
-                        python3 "${SCRIPT_DIR}/create-smoke-vhdx.py" \
+                        "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-vhdx.py" \
                             --sparse --parent-required \
                             --parent-path "$(basename "$previous_parent")" \
                             "$SMOKE_RAW_IMG_FILE" "$chain_file"
@@ -140,11 +140,11 @@ create_generated_smoke_images() {
                     previous_parent="$chain_file"
                 done
             else
-                python3 "${SCRIPT_DIR}/create-smoke-vhdx.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHDX_PARENT_FILE"
+                "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-vhdx.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHDX_PARENT_FILE"
                 SUPPORT_IMAGES=("$SMOKE_VHDX_PARENT_FILE" "${SUPPORT_IMAGES[@]}")
             fi
         fi
-        python3 "${SCRIPT_DIR}/create-smoke-vhdx.py" "${VHDX_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHDX_FILE"
+        "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-vhdx.py" "${VHDX_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VHDX_FILE"
         IMAGES=("$SMOKE_VHDX_FILE" "${IMAGES[@]}")
     fi
 
@@ -189,7 +189,7 @@ create_generated_smoke_images() {
                 )
             fi
         fi
-        require_command python3 "python3 is required to create the smoke VDI"
+        require_python
         warn "Wrapping smoke disk image as VDI..."
         if [ "$SMOKE_PARENT_VDI" -eq 1 ]; then
             warn "Wrapping smoke disk image as same-directory VDI parent..."
@@ -199,11 +199,11 @@ create_generated_smoke_images() {
                 for level in $(seq 1 "$SMOKE_PARENT_CHAIN_DEPTH"); do
                     chain_file="$(parent_chain_file "$level" vdibase)"
                     if [ "$level" -eq 1 ]; then
-                        python3 "${SCRIPT_DIR}/create-smoke-vdi.py" \
+                        "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-vdi.py" \
                             --uuid-seed "$(parent_chain_seed "$level")" \
                             "$SMOKE_RAW_IMG_FILE" "$chain_file"
                     else
-                        python3 "${SCRIPT_DIR}/create-smoke-vdi.py" \
+                        "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-vdi.py" \
                             --format differencing \
                             --sparse-mode unallocated \
                             --link-to-parent \
@@ -214,11 +214,11 @@ create_generated_smoke_images() {
                     SUPPORT_IMAGES=("$chain_file" "${SUPPORT_IMAGES[@]}")
                 done
             else
-                python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_PARENT_FILE"
+                "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-vdi.py" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_PARENT_FILE"
                 SUPPORT_IMAGES=("$SMOKE_VDI_PARENT_FILE" "${SUPPORT_IMAGES[@]}")
             fi
         fi
-        python3 "${SCRIPT_DIR}/create-smoke-vdi.py" "${VDI_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_FILE"
+        "$PYTHON_BIN" "${SCRIPT_DIR}/create-smoke-vdi.py" "${VDI_ARGS[@]}" "$SMOKE_RAW_IMG_FILE" "$SMOKE_VDI_FILE"
         IMAGES=("$SMOKE_VDI_FILE" "${IMAGES[@]}")
     fi
 }

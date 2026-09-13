@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 from hardware_matrix import EXPECTED_COLUMNS
+from command_utils import python_command
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -59,7 +60,7 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
 
 
 def run_report(csv_path: Path, output: Path, check: bool = False) -> subprocess.CompletedProcess[str]:
-    command = [str(REPORTER), "--csv", str(csv_path), "--output", str(output)]
+    command = python_command(str(REPORTER), "--csv", str(csv_path), "--output", str(output))
     if check:
         command.append("--check")
     return subprocess.run(
@@ -111,7 +112,7 @@ def main() -> int:
             require("stale" in stale.stdout, stale.stdout)
 
             synced = subprocess.run(
-                [str(REPORTER), "--check"],
+                python_command(str(REPORTER), "--check"),
                 cwd=PROJECT_DIR,
                 text=True,
                 stdout=subprocess.PIPE,

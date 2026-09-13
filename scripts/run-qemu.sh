@@ -97,6 +97,19 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || die "$2"
 }
 
+# Honour PYTHON so Windows users can point Git Bash at a real interpreter.
+# The Microsoft Store `python3` app-execution alias exists on PATH on many
+# systems but is only a redirector and exits unsuccessfully outside its setup
+# flow.  Checking a trivial Python program prevents a misleading, silent
+# partial QEMU setup in that case.
+PYTHON_BIN="${PYTHON:-python3}"
+
+require_python() {
+    require_command "$PYTHON_BIN" "Python 3 is required. Install Python 3 or set PYTHON to its executable path."
+    "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 || \
+        die "${PYTHON_BIN} cannot run Python 3. Set PYTHON to a working Python 3 executable (the Windows Store python3 alias is not sufficient)."
+}
+
 source "${SCRIPT_DIR}/qemu/usage.sh"
 source "${SCRIPT_DIR}/qemu/options.sh"
 source "${SCRIPT_DIR}/qemu/arch.sh"
@@ -105,10 +118,23 @@ source "${SCRIPT_DIR}/qemu/validate.sh"
 source "${SCRIPT_DIR}/qemu/smoke-images.sh"
 source "${SCRIPT_DIR}/qemu/run-smoke.sh"
 
+require_python
+
 parse_qemu_args "$@"
 
 validate_qemu_args
 configure_qemu_arch
+
+# The official Windows QEMU installer does not always add its directory to the
+# PATH inherited by Git Bash.  Prefer its normal installation path when the
+# selected emulator is otherwise unavailable; callers can still supply QEMU on
+# PATH for custom installations.
+if ! command -v "$QEMU_BINARY" >/dev/null 2>&1; then
+    WINDOWS_QEMU_BINARY="/c/Program Files/qemu/${QEMU_BINARY}.exe"
+    if [ -x "$WINDOWS_QEMU_BINARY" ]; then
+        QEMU_BINARY="$WINDOWS_QEMU_BINARY"
+    fi
+fi
 if [ -n "$SMOKE_ARTIFACT_TAG" ]; then
     case "$SMOKE_ARTIFACT_TAG" in
         *[!A-Za-z0-9_.-]*)
@@ -152,7 +178,7 @@ if [ "$LAYOUT" = "split" ]; then
 fi
 info "Disk image: ${DISK_IMG}"
 
-require_command python3 "python3 is required to create the GPT disk image"
+require_python
 
 warn "Creating ${LAYOUT} GPT test disk image..."
 PY_ARGS=(
@@ -178,7 +204,7 @@ if [ "${#IMAGES[@]}" -gt 0 ] || [ "${#SUPPORT_IMAGES[@]}" -gt 0 ]; then
 fi
 CREATE_DISK_SCRIPT="${SCRIPT_DIR}/qemu/create-disk-image.py"
 [ -f "$CREATE_DISK_SCRIPT" ] || die "QEMU disk creator not found: ${CREATE_DISK_SCRIPT}"
-python3 "$CREATE_DISK_SCRIPT" "${PY_ARGS[@]}"
+"$PYTHON_BIN" "$CREATE_DISK_SCRIPT" "${PY_ARGS[@]}"
 
 info "Disk image created: ${DISK_IMG}"
 
@@ -201,7 +227,7 @@ if [ "$VERIFY_IMAGE" -eq 1 ]; then
             VERIFY_ARGS+=(--image "$image")
         done
     fi
-    python3 "$VERIFY_SCRIPT" "${VERIFY_ARGS[@]}"
+    "$PYTHON_BIN" "$VERIFY_SCRIPT" "${VERIFY_ARGS[@]}"
 fi
 
 QEMU_OPTS+=(
@@ -210,6 +236,22 @@ QEMU_OPTS+=(
     -nographic
     -serial mon:stdio
 )
+
+# On Windows, QEMU does not reliably route stdin from a non-interactive
+# process to the UEFI console.  QMP injects a real emulated key event after
+# the menu marker is observed, so the smoke runner tests the selected boot
+# path instead of stopping at the menu.
+QMP_PORT=""
+if [ "$SMOKE" -eq 1 ] && [ "$SMOKE_BOOT" -eq 1 ]; then
+    QMP_PORT="${NEXTBOOT_QEMU_QMP_PORT:-4444}"
+    case "$QMP_PORT" in
+        ''|*[!0-9]*|0) die "NEXTBOOT_QEMU_QMP_PORT must be a TCP port number" ;;
+    esac
+    if [ "$QMP_PORT" -gt 65535 ]; then
+        die "NEXTBOOT_QEMU_QMP_PORT must be between 1 and 65535"
+    fi
+    QEMU_OPTS+=( -qmp "tcp:127.0.0.1:${QMP_PORT},server=on,wait=off" )
+fi
 
 OVMF_CODE=""
 for path in "${OVMF_PATHS[@]}"; do

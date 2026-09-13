@@ -9,6 +9,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from command_utils import shell_command
+
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 FLASH_SCRIPT = PROJECT_DIR / "scripts" / "flash.sh"
@@ -120,7 +122,7 @@ def expand_args(case: FlashDryRunCase) -> tuple[str, ...]:
 def run_case(case: FlashDryRunCase) -> tuple[bool, str]:
     env = os.environ.copy()
     env["NEXTBOOT_OSTYPE"] = case.ostype
-    command = (
+    command = shell_command(
         str(FLASH_SCRIPT),
         "--dry-run",
         "--no-ventoy-assets",

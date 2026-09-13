@@ -29,7 +29,7 @@ machine boots the image.
 | Arch style | Arch, Manjaro, BlackArch | implemented | GRUB config parsing, Arch kernel/initrd fallback |
 | openSUSE style | openSUSE Leap/Tumbleweed | implemented | GRUB config parsing, loader kernel/initrd fallback |
 | Generic Linux Live | SystemRescue, Alpine, Clonezilla, GParted, Parted Magic | partial | Generic EFI chain-load plus kernel/initrd candidates |
-| Windows installer | Windows 10/11 ISO | implemented | Microsoft EFI chain-load plus WIMBOOT fallback |
+| Windows installer | Windows 10/11 ISO | implemented | Microsoft EFI chain-load plus WIMBOOT fallback; the default QEMU matrix chain-loads the canonical `EFI/Microsoft/Boot/bootmgfw.efi` path in a Windows-shaped synthetic ISO. This is not evidence for an official Windows installer or hardware boot. |
 | WinPE/Recovery | Hiren's, Sergei Strelec, Windows recovery media | partial | WIMBOOT fallback, helper assets, runtime injection |
 | Hypervisor installers | Proxmox VE, ESXi, TrueNAS SCALE | planned | ISO EFI chain-load first, distro-specific fallback later |
 | Router/appliance images | OpenWrt, pfSense, OPNsense, VyOS | planned | ISO EFI chain-load or raw IMG/VHD path |

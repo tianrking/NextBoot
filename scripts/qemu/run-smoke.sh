@@ -166,6 +166,10 @@ run_qemu_smoke() {
         EXPECT_ARGS+=(--expect "No ISO files found")
     fi
     warn "Running QEMU boot smoke for ${SMOKE_TIMEOUT}s..."
-    python3 "$SMOKE_SCRIPT" --timeout "$SMOKE_TIMEOUT" "${EXPECT_ARGS[@]}" -- \
+    QMP_ARGS=()
+    if [ -n "${QMP_PORT:-}" ]; then
+        QMP_ARGS+=(--qmp-port "$QMP_PORT")
+    fi
+    "$PYTHON_BIN" "$SMOKE_SCRIPT" --timeout "$SMOKE_TIMEOUT" "${EXPECT_ARGS[@]}" "${QMP_ARGS[@]}" -- \
         "$QEMU_BINARY" "${QEMU_OPTS[@]}"
 }

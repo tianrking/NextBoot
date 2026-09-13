@@ -10,6 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from command_utils import shell_command
+
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 REPORT_SCRIPT = PROJECT_DIR / "scripts" / "hardware-report.sh"
@@ -51,7 +53,7 @@ def run_report(workdir: Path) -> tuple[Path, Path, str]:
 
     env = os.environ.copy()
     env["NEXTBOOT_OSTYPE"] = "linux"
-    command = [
+    command = shell_command(
         str(REPORT_SCRIPT),
         "--device",
         "fixture-usb-ssd",
@@ -79,7 +81,7 @@ def run_report(workdir: Path) -> tuple[Path, Path, str]:
         str(report),
         "--append-csv",
         str(matrix),
-    ]
+    )
     result = subprocess.run(
         command,
         cwd=PROJECT_DIR,
