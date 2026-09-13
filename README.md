@@ -88,7 +88,9 @@ default `C:\Program Files\qemu` location. QEMU reads the selected medium but
 discards guest writes on exit. The script saves a serial log at
 `target\qemu-physical\DiskN.serial.log`. This preflights UEFI startup, menu
 discovery, and the requested image listing; it fails if those log markers do
-not appear. It does not replace a final boot on the target motherboard firmware.
+not appear. By default it also attaches two temporary fixed disks, reproducing
+the common SD-card-plus-internal-disks topology that exercises the boot-media
+scan filter. It does not replace a final boot on the target motherboard firmware.
 
 Flashing writes a whole-disk image and erases the selected target device. Do
 not copy the `.img.xz`, `.img.zip`, or extracted `.img` file into an existing

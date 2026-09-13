@@ -11,6 +11,14 @@ param(
     # menu log before the preflight is considered successful.
     [string] $ExpectedImageName,
 
+    # Reproduce the common desktop topology: the NextBoot medium plus two
+    # separate fixed disks. This exercises the scanner's boot-media filter.
+    [ValidateRange(0, 8)]
+    [int] $SyntheticInternalDiskCount = 2,
+
+    [ValidateRange(16, 4096)]
+    [int] $SyntheticInternalDiskSizeMiB = 128,
+
     [string] $QemuPath = 'C:\Program Files\qemu\qemu-system-x86_64.exe',
 
     [string] $OvmfCodePath = 'C:\Program Files\qemu\share\edk2-x86_64-code.fd',
@@ -70,8 +78,27 @@ $arguments = @(
     '-serial', "file:$serialLog"
 )
 
+for ($index = 1; $index -le $SyntheticInternalDiskCount; $index++) {
+    $syntheticDisk = Join-Path $artifactRoot "synthetic-internal-$index.raw"
+    $stream = [IO.File]::Open($syntheticDisk, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+    try {
+        $stream.SetLength([Int64]$SyntheticInternalDiskSizeMiB * 1MB)
+    }
+    finally {
+        $stream.Dispose()
+    }
+    $driveId = "synthetic$index"
+    $arguments += @(
+        '-drive', "id=$driveId,file=$syntheticDisk,format=raw,if=none",
+        '-device', "virtio-blk-pci,drive=$driveId,serial=NEXTBOOTTEST$index"
+    )
+}
+
 Write-Host "Starting read-only QEMU snapshot test for Disk $DiskNumber ($($disk.FriendlyName), $([math]::Floor($disk.Size / 1GB)) GB)."
 Write-Host 'Close the QEMU window to finish. Guest writes are discarded because -snapshot is enabled.'
+if ($SyntheticInternalDiskCount -gt 0) {
+    Write-Host "Attached $SyntheticInternalDiskCount temporary fixed disks to exercise the boot-media scan filter."
+}
 & $QemuPath @arguments
 $exitCode = $LASTEXITCODE
 
@@ -86,6 +113,9 @@ if (Test-Path -LiteralPath $serialLog) {
         'Phase 2: Scanning for ISO files',
         'Phase 3: Displaying boot menu'
     )
+    if ($SyntheticInternalDiskCount -gt 0) {
+        $requiredMarkers += "Found $($SyntheticInternalDiskCount + 1) storage device(s)"
+    }
     if ($ExpectedImageName) {
         $requiredMarkers += "/ISO/$ExpectedImageName"
     }
