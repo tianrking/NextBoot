@@ -4,7 +4,7 @@
 
 [简体中文](README.zh-CN.md)
 
-**Release status:** `v0.1.0-rc.11` is a prerelease. It adds a Windows-native
+**Release status:** `v0.1.0-rc.12` is a prerelease. It adds a Windows-native
 mount and write/read check for the generated raw image, plus a Windows writer
 that verifies every byte after writing. If `NEXTDATA` appears as RAW, the write
 did not complete correctly: do not format it; write the image again with the
@@ -20,7 +20,7 @@ before choosing an image for use.
 [![Boot](https://img.shields.io/badge/boot-UEFI%20x64%20%7C%20IA32%20%7C%20AArch64-blue)](#architecture)
 [![Storage](https://img.shields.io/badge/storage-USB%20%7C%20SSD%20%7C%20SD%20%7C%20NVMe-2ea44f)](#compatibility-coverage)
 [![Data](https://img.shields.io/badge/data-exFAT%20%2F%20FAT32%20%2F%20NTFS%20%2F%20ext-orange)](#feature-coverage)
-[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.11)
+[![USB Boot Image](https://img.shields.io/badge/image-flashable%20USB%20%2F%20SSD-purple)](https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.12)
 
 NextBoot is a Rust UEFI boot medium for USB sticks, USB SSDs, SD cards, and
 fixed-disk style SSD/NVMe deployments. The release artifact is a compressed raw
@@ -34,22 +34,36 @@ writers remain usable when their write result is checked before adding boot imag
 ## Quick Start
 
 1. Download the universal image from the latest GitHub release:
-   `nextboot-v0.1.0-rc.11-universal-uefi.img.xz`.
+   `nextboot-v0.1.0-rc.12-universal-uefi.img.xz`.
    If your flashing tool only accepts raw `.img` files, download
-   `nextboot-v0.1.0-rc.11-universal-uefi.img.zip` and extract it.
-2. On Windows, download `nextboot-v0.1.0-rc.11-windows-writer.ps1`, open
+   `nextboot-v0.1.0-rc.12-universal-uefi.img.zip` and extract it.
+2. On Windows, download `nextboot-v0.1.0-rc.12-windows-writer.ps1`, open
    **Administrator PowerShell**, run `Get-Disk` to identify the target disk,
    then run:
 
    ```powershell
-   Unblock-File .\nextboot-v0.1.0-rc.11-windows-writer.ps1
-   .\nextboot-v0.1.0-rc.11-windows-writer.ps1 `
-     -ImagePath .\nextboot-v0.1.0-rc.11-universal-uefi.img -DiskNumber N
+   Unblock-File .\nextboot-v0.1.0-rc.12-windows-writer.ps1
+   .\nextboot-v0.1.0-rc.12-windows-writer.ps1 `
+     -ImagePath .\nextboot-v0.1.0-rc.12-universal-uefi.img -DiskNumber N
    ```
 
 The writer asks for the disk number one more time, writes the whole image,
 then reads the full written range and compares SHA-256 digests. It refuses the
 Windows system and boot disks.
+
+After the first UEFI boot, NEXTDATA grows and a whole-image digest is no longer
+expected to match. Verify that the immutable EFI loader is still the one from
+the release image with the read-only check below:
+
+```powershell
+.\nextboot-v0.1.0-rc.12-windows-writer.ps1 `
+  -ImagePath .\nextboot-v0.1.0-rc.12-universal-uefi.img -DiskNumber N `
+  -VerifyOnly -VerifyBootPartitionOnly
+```
+
+This compares only the EFI System Partition, which is unaffected by data
+partition growth or the ISO files users add.
+
 3. On macOS or Linux, or if choosing another Windows raw-image flasher, select
    the extracted image and an 8GB-or-larger USB stick, USB SSD, SD card, or
    external SSD, then flash/write it.
@@ -71,12 +85,12 @@ than 128 GiB, NextBoot can expand `NEXTDATA` on first boot.
 The customer-facing release is a single universal image:
 
 ```text
-nextboot-v0.1.0-rc.11-universal-uefi.img.xz
-nextboot-v0.1.0-rc.11-universal-uefi.img.zip
-nextboot-v0.1.0-rc.11-windows-writer.ps1
+nextboot-v0.1.0-rc.12-universal-uefi.img.xz
+nextboot-v0.1.0-rc.12-universal-uefi.img.zip
+nextboot-v0.1.0-rc.12-windows-writer.ps1
 ```
 
-Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.11>
+Latest release: <https://github.com/tianrking/NextBoot/releases/tag/v0.1.0-rc.12>
 
 It contains:
 

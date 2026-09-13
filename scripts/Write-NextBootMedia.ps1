@@ -11,6 +11,11 @@ param(
 
     [switch] $VerifyOnly,
 
+    # Verify only the immutable 32 MiB EFI System Partition.  This remains
+    # valid after NextBoot expands NEXTDATA on its first UEFI boot, whereas a
+    # full-image comparison intentionally no longer does.
+    [switch] $VerifyBootPartitionOnly,
+
     [switch] $ConfirmErase
 )
 
@@ -42,20 +47,19 @@ function Write-Exact([System.IO.FileStream] $Stream, [byte[]] $Buffer, [int] $Co
     $Stream.Write($Buffer, 0, $Count)
 }
 
-function Test-ByteRange([System.IO.FileStream] $Source, [System.IO.FileStream] $Target, [Int64] $Length) {
-    function Get-RangeDigest([System.IO.FileStream] $Stream, [Int64] $RangeLength) {
+function Get-RangeDigest([System.IO.FileStream] $Stream, [Int64] $RangeLength, [Int64] $StartOffset, [string] $Activity) {
         $chunkSize = 4MB
         $buffer = [byte[]]::new($chunkSize)
         $hash = [Security.Cryptography.IncrementalHash]::CreateHash('SHA256')
         try {
-            $Stream.Position = 0
+            $Stream.Position = $StartOffset
             $processed = [Int64]0
             while ($processed -lt $RangeLength) {
                 $count = [int][Math]::Min([Int64]$chunkSize, $RangeLength - $processed)
                 Read-Exact $Stream $buffer $count
                 $hash.AppendData($buffer, 0, $count)
                 $processed += $count
-                Write-Progress -Activity 'Verifying NextBoot media' -Status "$([Math]::Floor($processed / 1MB)) MiB / $([Math]::Floor($RangeLength / 1MB)) MiB" -PercentComplete ([int](50 * $processed / $RangeLength))
+                Write-Progress -Activity $Activity -Status "$([Math]::Floor($processed / 1MB)) MiB / $([Math]::Floor($RangeLength / 1MB)) MiB" -PercentComplete ([int](50 * $processed / $RangeLength))
             }
             return ([BitConverter]::ToString($hash.GetHashAndReset())).Replace('-', '')
         }
@@ -64,15 +68,16 @@ function Test-ByteRange([System.IO.FileStream] $Source, [System.IO.FileStream] $
         }
     }
 
-    $sourceDigest = Get-RangeDigest $Source $Length
-    $targetDigest = Get-RangeDigest $Target $Length
-    Write-Progress -Activity 'Verifying NextBoot media' -Completed
+function Test-ByteRange([System.IO.FileStream] $Source, [System.IO.FileStream] $Target, [Int64] $Length, [Int64] $StartOffset = 0, [string] $Description = 'NextBoot media') {
+    $sourceDigest = Get-RangeDigest $Source $Length $StartOffset "Verifying $Description (source)"
+    $targetDigest = Get-RangeDigest $Target $Length $StartOffset "Verifying $Description (target)"
+    Write-Progress -Activity "Verifying $Description (target)" -Completed
     if ($sourceDigest -ne $targetDigest) {
-        throw "Verification failed: full-range SHA-256 differs ($sourceDigest != $targetDigest)."
+        throw "Verification failed for ${Description}: SHA-256 differs ($sourceDigest != $targetDigest)."
     }
 }
 
-function Get-NextBootDataStart([System.IO.FileStream] $Source) {
+function Get-NextBootGptPartition([System.IO.FileStream] $Source, [string] $PartitionName) {
     $sector = [byte[]]::new(512)
     $Source.Position = 512
     Read-Exact $Source $sector 512
@@ -88,19 +93,22 @@ function Get-NextBootDataStart([System.IO.FileStream] $Source) {
         $Source.Position = [Int64]$entriesLba * 512 + [Int64]$index * $entrySize
         Read-Exact $Source $entry $entrySize
         $name = [Text.Encoding]::Unicode.GetString($entry, 56, 72).TrimEnd([char]0)
-        if ($name -eq 'NEXBOOT_DATA') {
-            return [BitConverter]::ToUInt64($entry, 32)
+        if ($name -eq $PartitionName) {
+            $firstLba = [BitConverter]::ToUInt64($entry, 32)
+            $lastLba = [BitConverter]::ToUInt64($entry, 40)
+            if ($lastLba -lt $firstLba) { throw "GPT partition $PartitionName has an invalid range." }
+            return [pscustomobject]@{ StartOffset = [Int64]$firstLba * 512; Length = ([Int64]($lastLba - $firstLba + 1)) * 512 }
         }
     }
-    throw 'The selected image has no GPT partition named NEXBOOT_DATA.'
+    throw "The selected image has no GPT partition named $PartitionName."
 }
 
 function Test-NextBootBootRecords([System.IO.FileStream] $Source, [System.IO.FileStream] $Target) {
-    $dataStart = Get-NextBootDataStart $Source
+    $dataStart = (Get-NextBootGptPartition $Source 'NEXBOOT_DATA').StartOffset
     $expected = [byte[]]::new(512)
     $actual = [byte[]]::new(512)
-    $Source.Position = [Int64]$dataStart * 512
-    $Target.Position = [Int64]$dataStart * 512
+    $Source.Position = $dataStart
+    $Target.Position = $dataStart
     Read-Exact $Source $expected 512
     Read-Exact $Target $actual 512
     if ([Text.Encoding]::ASCII.GetString($actual, 3, 8) -ne 'EXFAT   ' -or $actual[510] -ne 0x55 -or $actual[511] -ne 0xAA) {
@@ -109,6 +117,11 @@ function Test-NextBootBootRecords([System.IO.FileStream] $Source, [System.IO.Fil
     if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$expected, [byte[]]$actual)) {
         throw 'NEXTDATA exFAT boot record differs from the selected image.'
     }
+}
+
+function Test-NextBootBootPartition([System.IO.FileStream] $Source, [System.IO.FileStream] $Target) {
+    $esp = Get-NextBootGptPartition $Source 'NEXBOOT_EFI'
+    Test-ByteRange $Source $Target $esp.Length $esp.StartOffset 'NextBoot EFI boot partition'
 }
 
 $image = Get-Item -LiteralPath $ImagePath -ErrorAction Stop
@@ -121,12 +134,18 @@ $target = $null
 $wasOffline = $true
 $offlineManaged = $false
 try {
+    if ($VerifyBootPartitionOnly -and -not $VerifyOnly) { throw 'VerifyBootPartitionOnly requires VerifyOnly.' }
     if ($TargetPath) {
         if ($DiskNumber -ge 0) { throw 'Specify either TargetPath or DiskNumber, not both.' }
         $targetItem = Get-Item -LiteralPath $TargetPath -ErrorAction Stop
         if ($targetItem.PSIsContainer) { throw 'TargetPath must name a raw-image file, not a directory.' }
         if ([Int64]$targetItem.Length -lt $imageLength) { throw 'TargetPath is smaller than ImagePath.' }
         $target = [System.IO.File]::Open($targetItem.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        if ($VerifyBootPartitionOnly) {
+            Test-NextBootBootPartition $source $target
+            Write-Output "Verified raw target $($targetItem.Name): its immutable NextBoot EFI boot partition matches $($image.Name)."
+            return
+        }
         Test-NextBootBootRecords $source $target
         Test-ByteRange $source $target $imageLength
         Write-Output "Verified raw target $($targetItem.Name): the full range matches $($image.Name)."
@@ -142,6 +161,11 @@ try {
     $wasOffline = [bool]$disk.IsOffline
     if ($VerifyOnly) {
         $target = [System.IO.File]::Open($physicalPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        if ($VerifyBootPartitionOnly) {
+            Test-NextBootBootPartition $source $target
+            Write-Output "Verified Disk ${DiskNumber}: its immutable NextBoot EFI boot partition matches $($image.Name)."
+            return
+        }
         Test-NextBootBootRecords $source $target
         Test-ByteRange $source $target $imageLength
         Write-Output "Verified Disk ${DiskNumber}: the full written range matches $($image.Name), including the NEXTDATA exFAT boot record."
@@ -188,6 +212,7 @@ try {
     $target.Flush($true)
     Write-Progress -Activity 'Writing NextBoot media' -Completed
     Test-NextBootBootRecords $source $target
+    Test-NextBootBootPartition $source $target
     Test-ByteRange $source $target $imageLength
     Write-Output "Wrote and verified Disk $DiskNumber. Safely remove it, then open NEXTDATA and copy boot images into ISO."
 }
