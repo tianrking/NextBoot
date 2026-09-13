@@ -80,22 +80,22 @@ def main() -> None:
     if not raw.is_file():
         raise ValueError(f"missing image: {raw}")
     vhd = raw.with_suffix(raw.suffix + ".windows-mount-test.vhd")
+    verification = raw.with_suffix(raw.suffix + ".writer-verify.img")
     writer = Path(__file__).with_name("Write-NextBootMedia.ps1").resolve()
     if not writer.is_file():
         raise ValueError(f"missing Windows verified-writer script: {writer}")
-    wrap_fixed_vhd(raw, vhd)
+    if verification.exists():
+        raise ValueError(f"refusing to overwrite verification target: {verification}")
+    shutil.copyfile(raw, verification)
     attached = False
     try:
-        powershell(f"Mount-DiskImage -ImagePath '{vhd}' | Out-Null", vhd)
-        attached = True
-        # Verify raw bytes before opening the filesystem: Windows legitimately
-        # updates exFAT volume-state metadata when it mounts and writes the
-        # probe file below.
         writer_script = (
-            f"$disk=Get-DiskImage -ImagePath '{vhd}' | Get-Disk; "
-            f"& '{writer}' -ImagePath '{raw}' -DiskNumber $disk.Number -VerifyOnly"
+            f"& '{writer}' -ImagePath '{raw}' -TargetPath '{verification}' -VerifyOnly"
         )
         print(powershell(writer_script, vhd))
+        wrap_fixed_vhd(raw, vhd)
+        powershell(f"Mount-DiskImage -ImagePath '{vhd}' | Out-Null", vhd)
+        attached = True
         script = (
             f"$disk=Get-DiskImage -ImagePath '{vhd}' | Get-Disk; "
             "$volume=Get-Partition -DiskNumber $disk.Number | Get-Volume | "
@@ -118,6 +118,8 @@ def main() -> None:
                 f"$image=Get-DiskImage -ImagePath '{vhd}'; if ($image.Attached) {{ Dismount-DiskImage -ImagePath '{vhd}' }}",
                 vhd,
             )
+        vhd.unlink(missing_ok=True)
+        verification.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

@@ -4,9 +4,10 @@ param(
     [ValidateNotNullOrEmpty()]
     [string] $ImagePath,
 
-    [Parameter(Mandatory = $true)]
-    [ValidateRange(0, 999)]
-    [int] $DiskNumber,
+    [ValidateRange(-1, 999)]
+    [int] $DiskNumber = -1,
+
+    [string] $TargetPath,
 
     [switch] $VerifyOnly,
 
@@ -102,21 +103,34 @@ function Test-NextBootBootRecords([System.IO.FileStream] $Source, [System.IO.Fil
     }
 }
 
-Require-Administrator
 $image = Get-Item -LiteralPath $ImagePath -ErrorAction Stop
 if ($image.PSIsContainer) { throw 'ImagePath must name an extracted raw .img file, not a directory.' }
 $imageLength = [Int64]$image.Length
 if ($imageLength -lt 34MB) { throw 'ImagePath is too small to be a NextBoot raw image.' }
 
-$disk = Get-Disk -Number $DiskNumber -ErrorAction Stop
-if ($disk.IsBoot -or $disk.IsSystem) { throw "Refusing to access system or boot disk $DiskNumber." }
-if ([Int64]$disk.Size -lt $imageLength) { throw "Disk $DiskNumber is smaller than the image ($($disk.Size) bytes < $imageLength bytes)." }
-
-$physicalPath = Get-PhysicalDrivePath $DiskNumber
 $source = [System.IO.File]::Open($image.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
 $target = $null
-$wasOffline = [bool]$disk.IsOffline
+$wasOffline = $true
 try {
+    if ($TargetPath) {
+        if ($DiskNumber -ge 0) { throw 'Specify either TargetPath or DiskNumber, not both.' }
+        $targetItem = Get-Item -LiteralPath $TargetPath -ErrorAction Stop
+        if ($targetItem.PSIsContainer) { throw 'TargetPath must name a raw-image file, not a directory.' }
+        if ([Int64]$targetItem.Length -lt $imageLength) { throw 'TargetPath is smaller than ImagePath.' }
+        $target = [System.IO.File]::Open($targetItem.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        Test-NextBootBootRecords $source $target
+        Test-ByteRange $source $target $imageLength
+        Write-Output "Verified raw target $($targetItem.Name): the full range matches $($image.Name)."
+        return
+    }
+
+    if ($DiskNumber -lt 0) { throw 'Specify DiskNumber for a physical write or TargetPath for verification.' }
+    Require-Administrator
+    $disk = Get-Disk -Number $DiskNumber -ErrorAction Stop
+    if ($disk.IsBoot -or $disk.IsSystem) { throw "Refusing to access system or boot disk $DiskNumber." }
+    if ([Int64]$disk.Size -lt $imageLength) { throw "Disk $DiskNumber is smaller than the image ($($disk.Size) bytes < $imageLength bytes)." }
+    $physicalPath = Get-PhysicalDrivePath $DiskNumber
+    $wasOffline = [bool]$disk.IsOffline
     if ($VerifyOnly) {
         $target = [System.IO.File]::Open($physicalPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
         Test-NextBootBootRecords $source $target
