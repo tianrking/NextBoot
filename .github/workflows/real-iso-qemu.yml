@@ -16,8 +16,6 @@ on:
       - "crates/nextboot-boot/**"
       - "crates/nextboot-fs/**"
       - "crates/nextboot-linux/**"
-  schedule:
-    - cron: "43 19 * * 0"
   workflow_dispatch:
 
 concurrency:

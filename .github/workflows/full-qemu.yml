@@ -11,8 +11,6 @@ on:
       - 'rust-toolchain.toml'
       - 'docs/runtime-assets.json'
       - '.github/workflows/full-qemu.yml'
-  schedule:
-    - cron: "17 18 * * *"
   workflow_dispatch:
 
 concurrency:
